@@ -1,0 +1,36 @@
+#!/bin/sh
+# $Id
+
+default_geom=1152x864
+geom=${1-$default_geom}
+
+case $geom in
+  1600x1200 \
+   | 1280x1024 \
+   | 1280x960 \
+   | 1152x864 \
+   | 1024x768 \
+   | 800x600 \
+   | 640x480 ) : ;;
+  * )
+    exec 1>&2
+    echo "Use one of the following resolutions (default is $default_geom):"
+    echo "1600x1200 1280x1024 1280x960 1152x864 1024x768 800x600 640x480"
+    exit 1
+esac
+
+# The irregular display size accounts for the display used by the emulated
+# workstation running under vmware, plus the height of the menu bar
+# displayed by vmware itself.
+extra_w=8
+extra_h=32 # 64 if including toolbar
+
+eval geom=`echo $geom | sed -e 's/\([0-9]*\)x\([0-9]*\)/$((\1 + $extra_w))x$((\2 + $extra_h))/'`
+
+# The vncserver script will background itself
+exec vncserver :10 \
+               -geometry $geom \
+               -depth 24 \
+               -name 'vmware' \
+               -dontdisconnect \
+               ${1+"$@"}
