@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # $Id
 
 default_geom=1152x864
@@ -27,10 +27,41 @@ extra_h=32 # 64 if including toolbar
 
 eval geom=`echo $geom | sed -e 's/\([0-9]*\)x\([0-9]*\)/$((\1 + $extra_w))x$((\2 + $extra_h))/'`
 
+displaynum=${XVNCDISPLAY-10}
+displaynum=${displaynum#*:}
+
+# default
+javadir=/usr/share/vnc/classes
+for dir in /usr/share/vnc/classes /usr/local/share/vnc/classes ; do
+  if [ -d "$dir" ]; then
+    javadir=$dir
+    break
+  fi
+done
+
+# Figure out if we're running tightvnc or realvnc
+verstring=`Xvnc -version 2>&1 | grep '^Xvnc'`
+case $verstring in
+  *tight* )
+    set fnord -dontdisconnect \
+              -httpd "$javadir" \
+              -httpport $((5800 + $displaynum)) \
+              ${1+"$@"}
+    shift
+   ;;
+  *' version 4.'* )
+    set fnord -DisconnectClients=0 \
+              -ZlibLevel=3 \
+              -httpd "$javadir" \
+              -httpPort $((5800 + $displaynum)) \
+              ${1+"$@"}
+    shift
+   ;;
+esac
+
 # The vncserver script will background itself
-exec vncserver :10 \
+exec vncserver :$displaynum \
                -geometry $geom \
                -depth 24 \
                -name 'vmware' \
-               -dontdisconnect \
                ${1+"$@"}
