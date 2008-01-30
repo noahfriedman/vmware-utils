@@ -1,0 +1,18 @@
+#!/bin/bash
+# $Id$
+
+find /etc/vmware/vmnet* -name '*,v' -print \
+ | sort \
+ | while read v ; do
+     w=${v##*/}     # basename
+     w=${w%,v}      # strip off ,v suffix
+
+     wd=${v%/*}     # dirname
+     wd=${wd%/RCS}  # strip off RCS dir if any
+
+     rm -f $wd/$w \
+      && co -M $wd/$w \
+      && find $wd -name "$w.old.*" -printf "Removing %p\n" -delete
+   done
+
+# eof
