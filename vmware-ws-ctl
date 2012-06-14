@@ -1,0 +1,96 @@
+#!/bin/sh
+# $Id$
+
+docmd()
+{
+  echo + "$@" 1>&2
+  "$@"
+}
+
+system()
+{
+    case ${EUID-${UID-`id -u`}} in
+        0 ) : ;;
+        * ) exec sudo "$0" "$@" || exit $? ;;
+    esac
+
+    action=$1
+    for svc in vmware vmware-USBArbitrator vmware-workstation-server
+    do docmd systemctl $action $svc.service
+    done
+    exit $?
+}
+
+move_home()
+{
+    case $HOME in
+        */etc/misc ) : ;;
+        * ) HOME=$HOME/etc/misc ;;
+    esac
+    export HOME
+}
+
+set_vmguest_vmx()
+{
+    local vmroot=/export/vm/vmware
+    local vmdir
+
+    case $1 in
+        *-netbsd5    |  netbsd5    )  vmdir=x86-pc-netbsd5.0.2        ;;
+        *-nextstep3  |  nextstep3  )  vmdir=x86-pc-nextstep3.3p3      ;;
+        *-winxp      |  winxp      )  vmdir=x86-pc-winxp              ;;
+        *-win98      |  win98      )  vmdir=x86-pc-win98-2ed          ;;
+
+        *-f14        |  f14        )  vmdir=x86_64-pc-linux-fedora14  ;;
+        *-f12        |  f12        )  vmdir=x86_64-pc-linux-fedora12  ;;
+        *-centos6    |  centos6    )  vmdir=x86_64-pc-linux-centos6   ;;
+        *-suse91     |  suse91     )  vmdir=x86_64-pc-linux-suse91    ;;
+        *-osx106     |  osx106     )  vmdir=x86_64-pc-osx10.6         ;;
+        *-solaris10  |  solaris10  )  vmdir=x86_64-pc-solaris10       ;;
+        *-win7       |  win7       )  vmdir=x86_64-pc-win7            ;;
+        *-win7u      |  win7u      )  vmdir=x86_64-pc-win7u           ;;
+
+        * ) echo "$1: unknown vmguest" 1>&2 ; exit 1 ;;
+    esac
+
+    vmx=$vmroot/$vmdir/vm.vmx
+}
+
+vmcmd()
+{
+    local cmd=$1
+    local vmguest=$2
+    shift
+    shift
+
+    set_vmguest_vmx $vmguest
+    move_home
+    cd /
+
+    docmd vmrun $cmd $vmx "$@"
+}
+
+main()
+{
+    local cmd=$1
+    local vmguest=$2
+    shift
+    shift
+
+    case $vmguest in
+        system ) $vmguest $cmd ;;
+    esac
+
+    case $cmd in
+        start   ) vmcmd $cmd $vmguest ${1-nogui} ;;
+        stop    ) vmcmd $cmd $vmguest ${1-soft}  ;;
+        suspend ) vmcmd $cmd $vmguest ${1-hard}  ;;
+        reset   ) vmcmd $cmd $vmguest ${1-soft}  ;;
+
+        * ) echo "$cmd: unknown command" 1>&2 ; exit 1 ;;
+    esac
+}
+
+main "$@"
+
+# eof
