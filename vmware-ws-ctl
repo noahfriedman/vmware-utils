@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id$
+# $Id: vmware-ws-ctl,v 1.1 2012/06/14 23:50:19 friedman Exp $
 
 docmd()
 {
@@ -9,12 +9,13 @@ docmd()
 
 system()
 {
+    action=$1
+
     case ${EUID-${UID-`id -u`}} in
         0 ) : ;;
-        * ) exec sudo "$0" "$@" || exit $? ;;
+        * ) exec sudo "$0" "$action" system || exit $? ;;
     esac
 
-    action=$1
     for svc in vmware vmware-USBArbitrator vmware-workstation-server
     do docmd systemctl $action $svc.service
     done
