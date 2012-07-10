@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: vmware-ws-ctl,v 1.1 2012/06/14 23:50:19 friedman Exp $
+# $Id: vmware-ws-ctl,v 1.2 2012/06/19 22:45:40 friedman Exp $
 
 docmd()
 {
@@ -37,19 +37,22 @@ set_vmguest_vmx()
     local vmdir
 
     case $1 in
-        *-netbsd5    |  netbsd5    )  vmdir=x86-pc-netbsd5.0.2        ;;
-        *-nextstep3  |  nextstep3  )  vmdir=x86-pc-nextstep3.3p3      ;;
-        *-winxp      |  winxp      )  vmdir=x86-pc-winxp              ;;
-        *-win98      |  win98      )  vmdir=x86-pc-win98-2ed          ;;
+        *-netbsd5    |  netbsd5    )  vmdir=x86-pc-netbsd5.0.2           ;;
+        *-nextstep3  |  nextstep3  )  vmdir=x86-pc-nextstep3.3p3         ;;
+        *-winxp      |  winxp      )  vmdir=x86-pc-winxp                 ;;
+        *-win98      |  win98      )  vmdir=x86-pc-win98-2ed             ;;
 
-        *-f14        |  f14        )  vmdir=x86_64-pc-linux-fedora14  ;;
-        *-f12        |  f12        )  vmdir=x86_64-pc-linux-fedora12  ;;
-        *-centos6    |  centos6    )  vmdir=x86_64-pc-linux-centos6   ;;
-        *-suse91     |  suse91     )  vmdir=x86_64-pc-linux-suse91    ;;
-        *-osx106     |  osx106     )  vmdir=x86_64-pc-osx10.6         ;;
-        *-solaris10  |  solaris10  )  vmdir=x86_64-pc-solaris10       ;;
-        *-win7       |  win7       )  vmdir=x86_64-pc-win7            ;;
-        *-win7u      |  win7u      )  vmdir=x86_64-pc-win7u           ;;
+        *-f12        |  f12        )  vmdir=x86_64-pc-linux-fedora12     ;;
+        *-f14        |  f14        )  vmdir=x86_64-pc-linux-fedora14     ;;
+        *-centos6    |  centos6    )  vmdir=x86_64-pc-linux-centos6      ;;
+        *-suse91     |  suse91     )  vmdir=x86_64-pc-linux-suse91       ;;
+        *-ubuntu10*  |  ubuntu10*  )  vmdir=x86_64-pc-linux-ubuntu10lts  ;;
+
+        *-osx106     |  osx106     )  vmdir=x86_64-pc-osx10.6            ;;
+        *-solaris10  |  solaris10  )  vmdir=x86_64-pc-solaris10          ;;
+
+        *-win7       |  win7       )  vmdir=x86_64-pc-win7               ;;
+        *-win7u      |  win7u      )  vmdir=x86_64-pc-win7u              ;;
 
         * ) echo "$1: unknown vmguest" 1>&2 ; exit 1 ;;
     esac
