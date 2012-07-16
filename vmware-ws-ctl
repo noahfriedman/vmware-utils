@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: vmware-ws-ctl,v 1.2 2012/06/19 22:45:40 friedman Exp $
+# $Id: vmware-ws-ctl,v 1.3 2012/07/10 19:42:15 friedman Exp $
 
 docmd()
 {
@@ -33,31 +33,47 @@ move_home()
 
 set_vmguest_vmx()
 {
-    local vmroot=/export/vm/vmware
+    local os=$1
+    local vmroot=${VMROOT-/export/vm/vmware}
     local vmdir
+    local arch
 
-    case $1 in
-        *-netbsd5    |  netbsd5    )  vmdir=x86-pc-netbsd5.0.2           ;;
-        *-nextstep3  |  nextstep3  )  vmdir=x86-pc-nextstep3.3p3         ;;
-        *-winxp      |  winxp      )  vmdir=x86-pc-winxp                 ;;
-        *-win98      |  win98      )  vmdir=x86-pc-win98-2ed             ;;
-
-        *-f12        |  f12        )  vmdir=x86_64-pc-linux-fedora12     ;;
-        *-f14        |  f14        )  vmdir=x86_64-pc-linux-fedora14     ;;
-        *-centos6    |  centos6    )  vmdir=x86_64-pc-linux-centos6      ;;
-        *-suse91     |  suse91     )  vmdir=x86_64-pc-linux-suse91       ;;
-        *-ubuntu10*  |  ubuntu10*  )  vmdir=x86_64-pc-linux-ubuntu10lts  ;;
-
-        *-osx106     |  osx106     )  vmdir=x86_64-pc-osx10.6            ;;
-        *-solaris10  |  solaris10  )  vmdir=x86_64-pc-solaris10          ;;
-
-        *-win7       |  win7       )  vmdir=x86_64-pc-win7               ;;
-        *-win7u      |  win7u      )  vmdir=x86_64-pc-win7u              ;;
-
-        * ) echo "$1: unknown vmguest" 1>&2 ; exit 1 ;;
+    case $os in
+        f[1-9][0-9] | f[1-9][0-9]-* ) os=fedora${os#f} ;;
     esac
 
-    vmx=$vmroot/$vmdir/vm.vmx
+    case $os in
+        *-x64 ) arch=x86_64- os=${os%-x64} ;;
+        *-x86 ) arch=x86-    os=${os%-x86} ;;
+    esac
+
+    vmx=
+    for vmdir in $vmroot/$arch*$os* ; do
+        for f in $vmdir/*.vmx ; do
+            if [ -f "$f" ]; then
+                case $vmx in
+                   '' ) vmx=$f ;;
+                    * ) exec 1>&2
+                        echo "$progname: \"$1\": ambiguous vm name:"
+                        for f in $vmroot/$arch*$os*/*.vmx ; do
+                            f=${f#$vmroot/}
+                            f=${f%%/*}
+                            echo "$progname:		$f"
+                        done
+                        exit 1
+                        ;;
+                esac
+            fi
+        done
+    done
+
+    case $vmx in
+        '' ) echo "$progname: \"$1\": no match" 1>&2
+             exit 1 ;;
+    esac
+
+    echo $vmx
+    exit 0
 }
 
 vmcmd()
@@ -76,6 +92,26 @@ vmcmd()
 
 main()
 {
+    progname=${0##*/}
+
+    case $# in
+        0|1 ) exec 1>&2
+            echo "Usage:"
+            echo "	$progname [start|stop] system"
+            echo "	$progname start    vmguest {gui|*nogui*}"
+            echo "	$progname stop     vmguest {hard|*soft*}"
+            echo "	$progname suspend  vmguest {hard|*soft*}"
+            echo "	$progname reset    vmguest {hard|*soft*}"
+            echo "	$progname pause    vmguest"
+            echo "	$progname unpause  vmguest"
+            echo
+            echo "Asterisked flags are the default."
+            echo "Vmguest can be any unambiguous abbreviation."
+            echo "Appending -x86 or -x64 will resolve arch differences."
+            echo "Fedora systems can be abbreviated f14 -> fedora14"
+            exit 1 ;;
+    esac
+
     local cmd=$1
     local vmguest=$2
     shift
@@ -90,6 +126,8 @@ main()
         stop    ) vmcmd $cmd $vmguest ${1-soft}  ;;
         suspend ) vmcmd $cmd $vmguest ${1-hard}  ;;
         reset   ) vmcmd $cmd $vmguest ${1-soft}  ;;
+        pause   ) vmcmd $cmd $vmguest            ;;
+        unpause ) vmcmd $cmd $vmguest            ;;
 
         * ) echo "$cmd: unknown command" 1>&2 ; exit 1 ;;
     esac
