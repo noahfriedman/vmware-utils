@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: vmware-ws-ctl,v 1.3 2012/07/10 19:42:15 friedman Exp $
+# $Id: vmware-ws-ctl,v 1.4 2012/07/16 19:30:41 friedman Exp $
 
 docmd()
 {
@@ -13,11 +13,12 @@ system()
 
     case ${EUID-${UID-`id -u`}} in
         0 ) : ;;
-        * ) exec sudo "$0" "$action" system || exit $? ;;
+        * ) exec sudo "$0" system "$action" || exit $? ;;
     esac
 
     for svc in vmware vmware-USBArbitrator vmware-workstation-server
-    do docmd systemctl $action $svc.service
+    do
+        docmd systemctl "$action" $svc.service
     done
     exit $?
 }
@@ -33,10 +34,10 @@ move_home()
 
 set_vmguest_vmx()
 {
-    local os=$1
-    local vmroot=${VMROOT-/export/vm/vmware}
-    local vmdir
-    local arch
+    os=$1
+    vmroot=${VMROOT-/export/vm/vmware}
+    vmdir=
+    arch=
 
     case $os in
         f[1-9][0-9] | f[1-9][0-9]-* ) os=fedora${os#f} ;;
@@ -48,14 +49,22 @@ set_vmguest_vmx()
     esac
 
     vmx=
-    for vmdir in $vmroot/$arch*$os* ; do
-        for f in $vmdir/*.vmx ; do
+    for vmdir in "$vmroot/$arch"*"$os"* ; do
+        for f in "$vmdir"/*.vmx ; do
             if [ -f "$f" ]; then
                 case $vmx in
                    '' ) vmx=$f ;;
-                    * ) exec 1>&2
+                    * ) # If the next match is a proper superstring of the
+                        # previous match, then the previous match is
+                        # unambiguous because we have to have some way of
+                        # selecting that string exactly.
+                        case ${f%/*} in ${vmx%/*}* ) break ;; esac
+
+                        # But if they do not share a common prefix string,
+                        # they are ambiguous (e.g. x86 vs. x86_64).
+                        exec 1>&2
                         echo "$progname: \"$1\": ambiguous vm name:"
-                        for f in $vmroot/$arch*$os*/*.vmx ; do
+                        for f in "$vmroot/$arch"*"$os"*/*.vmx ; do
                             f=${f#$vmroot/}
                             f=${f%%/*}
                             echo "$progname:		$f"
@@ -71,23 +80,22 @@ set_vmguest_vmx()
         '' ) echo "$progname: \"$1\": no match" 1>&2
              exit 1 ;;
     esac
-
-    echo $vmx
-    exit 0
 }
 
 vmcmd()
 {
-    local cmd=$1
-    local vmguest=$2
-    shift
-    shift
+    local vmguest=$1
+    local     cmd=$2
+    shift; shift
 
-    set_vmguest_vmx $vmguest
+    set_vmguest_vmx "$vmguest"
     move_home
-    cd /
+    cd "${vmx%/*}"
 
-    docmd vmrun $cmd $vmx "$@"
+    pwd
+    exit 0
+
+    docmd vmrun "$cmd" "$vmx" "$@"
 }
 
 main()
@@ -97,13 +105,12 @@ main()
     case $# in
         0|1 ) exec 1>&2
             echo "Usage:"
-            echo "	$progname [start|stop] system"
-            echo "	$progname start    vmguest {gui|*nogui*}"
-            echo "	$progname stop     vmguest {hard|*soft*}"
-            echo "	$progname suspend  vmguest {hard|*soft*}"
-            echo "	$progname reset    vmguest {hard|*soft*}"
-            echo "	$progname pause    vmguest"
-            echo "	$progname unpause  vmguest"
+            echo "	$progname system [start|stop]"
+            echo "	$progname vmguest start   {gui|*nogui*}"
+            echo "	$progname vmguest stop    {hard|*soft*}"
+            echo "	$progname vmguest suspend {hard|*soft*}"
+            echo "	$progname vmguest reset   {hard|*soft*}"
+            echo "	$progname vmguest [any other vmrun command]"
             echo
             echo "Asterisked flags are the default."
             echo "Vmguest can be any unambiguous abbreviation."
@@ -112,24 +119,21 @@ main()
             exit 1 ;;
     esac
 
-    local cmd=$1
-    local vmguest=$2
-    shift
-    shift
+    local vmguest=$1
+    local     cmd=$2
+    local     opt=$3
+    shift; shift; shift
 
     case $vmguest in
-        system ) $vmguest $cmd ;;
+        system ) "$vmguest" "$cmd" ;;
     esac
 
     case $cmd in
-        start   ) vmcmd $cmd $vmguest ${1-nogui} ;;
-        stop    ) vmcmd $cmd $vmguest ${1-soft}  ;;
-        suspend ) vmcmd $cmd $vmguest ${1-hard}  ;;
-        reset   ) vmcmd $cmd $vmguest ${1-soft}  ;;
-        pause   ) vmcmd $cmd $vmguest            ;;
-        unpause ) vmcmd $cmd $vmguest            ;;
-
-        * ) echo "$cmd: unknown command" 1>&2 ; exit 1 ;;
+        start   ) vmcmd "$vmguest" "$cmd" "${opt-nogui}" "$@" ;;
+        stop    ) vmcmd "$vmguest" "$cmd" "${opt-soft}"  "$@" ;;
+        suspend ) vmcmd "$vmguest" "$cmd" "${opt-hard}"  "$@" ;;
+        reset   ) vmcmd "$vmguest" "$cmd" "${opt-soft}"  "$@" ;;
+        *       ) vmcmd "$vmguest" "$cmd" ${opt+"$opt"}  "$@" ;;
     esac
 }
 
