@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: vmware-ws-ctl,v 1.5 2012/07/16 20:06:10 friedman Exp $
+# $Id: vmware-ws-ctl,v 1.6 2012/07/16 20:10:02 friedman Exp $
 
 docmd()
 {
@@ -118,19 +118,18 @@ main()
 
     local vmguest=$1
     local     cmd=$2
-    local     opt=$3
-    shift; shift; shift
+    shift; shift
 
     case $vmguest in
         system ) "$vmguest" "$cmd" ;;
     esac
 
     case $cmd in
-        start   ) vmcmd "$vmguest" "$cmd" "${opt-nogui}" "$@" ;;
-        stop    ) vmcmd "$vmguest" "$cmd" "${opt-soft}"  "$@" ;;
-        suspend ) vmcmd "$vmguest" "$cmd" "${opt-hard}"  "$@" ;;
-        reset   ) vmcmd "$vmguest" "$cmd" "${opt-soft}"  "$@" ;;
-        *       ) vmcmd "$vmguest" "$cmd" ${opt+"$opt"}  "$@" ;;
+        start   ) vmcmd "$vmguest" "$cmd" "${1-nogui}" "$@" ;;
+        stop    ) vmcmd "$vmguest" "$cmd" "${1-soft}"  "$@" ;;
+        suspend ) vmcmd "$vmguest" "$cmd" "${1-hard}"  "$@" ;;
+        reset   ) vmcmd "$vmguest" "$cmd" "${1-soft}"  "$@" ;;
+        *       ) vmcmd "$vmguest" "$cmd"              "$@" ;;
     esac
 }
 
