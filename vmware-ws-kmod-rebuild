@@ -1,0 +1,129 @@
+#!/usr/bin/env perl
+# vmware-kmod-rebuild --- build vmware workstation kernel modules for linux
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2012-09-08
+# Public domain.
+
+# $Id$
+
+# Commentary:
+
+# This basically does what "vmware-modconfig --console --install-all" would
+# do, except that it doesn't stop/restart services and it's possible to
+# build modules for a different kernel version than the running one.
+
+# Code:
+
+$^W = 1;
+
+use strict;
+use Symbol;
+use POSIX;
+use XML::XPath;
+
+my $modules_xml = "/usr/lib/vmware/modules/modules.xml" ;
+my $config_file = "/etc/vmware/config" ;
+(my $progname = $0) =~ s=.*/==;
+
+my %uname;
+@uname{qw(sysname nodename release version machine)} = POSIX::uname ();
+
+
+sub file_contents
+{
+  local $_;
+  my $fh = gensym;
+  open ($fh, $_[0]) || die "open: $_[0]: $!\n";
+  sysread ($fh, $_, -s $fh, 0);  # -s returns size
+  return $_;
+}
+
+my $xsystem_errors_fatal = 1;
+my $xsystem_verbose      = 1;
+sub xsystem
+{
+  my $buf = "";
+
+  if ($xsystem_verbose)
+    {
+      my @args = @_;
+      map { $_ = "'$_'" if /\s/ } @args if @args > 1;
+      print STDERR "+ @args\n";
+    }
+
+  if (defined wantarray)
+    {
+      my $fh = gensym;
+      my $pid = open ($fh, "-|", @_);
+      my ($p, $o) = (0, 0);
+      $p += $o while ($o = sysread ($fh, $buf, 4096, $p));
+      waitpid $pid, 0;
+    }
+  else
+    {
+      system (@_);
+    }
+
+  if ($xsystem_errors_fatal && $?)
+    {
+      my $status = $? >> 8;
+      my $signal = $? & 0x7f;
+      my $exit = $status || ($signal + 128);
+      print STDERR "$progname: exit code $exit; aborting.\n";
+      exit ($exit);
+    }
+  chomp $buf;
+  return $buf;
+}
+
+
+sub get_config
+{
+  map { my ($key, $val) = split (/\s*=\s*/, $_, 2);
+        $val =~ s/^"(.*)"$/$1/;
+        $key => $val;
+      } split (/[\r\n]+/, file_contents ($_[0]));
+}
+
+sub get_modules
+{
+  my %config = get_config ($config_file);
+  my %module;
+
+  my $xp = XML::XPath->new ( filename => $modules_xml );
+  for my $mod ($xp->findnodes ('/modules/module'))
+    {
+      $module{$mod->getAttribute ('name')} = $mod->get_pos
+        if (           $mod->getAttribute ('required') eq "true"
+            || $config{$mod->getAttribute ('key')}     eq 'yes');
+    }
+  return sort { $module{$a} <=> $module{$b} } keys %module;
+}
+
+sub modconfig
+{
+  xsystem (qw(vmware-modconfig --console), @_);
+}
+
+sub main
+{
+  my $utsRelease = $_[0] || $uname{release};
+  my $headers    = modconfig (qw(--get-kernel-headers -k), $utsRelease);
+  my $gcc        = modconfig (qw(--get-gcc));
+
+  modconfig (qw(--validate-kernel-headers -k), $utsRelease, $headers);
+  modconfig (qw(--validate-gcc), $gcc);
+
+  for my $mod (get_modules ())
+    {
+      modconfig (qw(--build-mod -k), $utsRelease, $mod, $gcc, $headers);
+      print "Built $mod module\n";
+    }
+  # No need to run depmod after modules are installed.
+  exit (0);
+}
+
+main (@ARGV);
+
+1;
