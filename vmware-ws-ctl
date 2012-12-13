@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: vmware-ws-ctl,v 1.6 2012/07/16 20:10:02 friedman Exp $
+# $Id: vmware-ws-ctl,v 1.7 2012/07/16 20:27:39 friedman Exp $
 
 docmd()
 {
@@ -49,11 +49,14 @@ set_vmguest_vmx()
     esac
 
     vmx=
-    for vmdir in "$vmroot/$arch"*"$os"* ; do
+    for vmdir in "$vmroot/$os" "$vmroot/$arch"*"$os"* ; do
         for f in "$vmdir"/*.vmx ; do
             if [ -f "$f" ]; then
                 case $vmx in
-                   '' ) vmx=$f ;;
+                   '' ) vmx=$f
+                        case $f in
+                            */$os/*.vmx ) break 2 ;;
+                        esac ;;
                     * ) # If the next match is a proper superstring of the
                         # previous match, then the previous match is
                         # unambiguous because we have to have some way of
