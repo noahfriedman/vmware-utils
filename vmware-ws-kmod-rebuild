@@ -5,7 +5,7 @@
 # Created: 2012-09-08
 # Public domain.
 
-# $Id$
+# $Id: vmware-kmod-rebuild,v 1.1 2012/09/08 22:53:50 friedman Exp $
 
 # Commentary:
 
@@ -77,6 +77,25 @@ sub xsystem
   return $buf;
 }
 
+sub xsymlink
+{
+  my ($from, $to) = @_;
+
+  my $result = symlink ($from, $to);
+  return $result if $result;
+
+  # Don't complain if existing link is identical to old one
+  my $errno = $! + 0;
+  if ($errno == EEXIST && -l $to)
+    {
+      my $oldlink = readlink ($to);
+      return 1 if $oldlink eq $from;
+    }
+
+  $! = $errno; # reset, because $! has magic string context
+  die "symlink: $to: $!\n";
+}
+
 
 sub get_config
 {
@@ -109,6 +128,13 @@ sub modconfig
 sub main
 {
   my $utsRelease = $_[0] || $uname{release};
+
+  # Linux 3.7 moved the version.h header that modconfig needs.  Doh!
+  my $include = "/lib/modules/$utsRelease/build/include";
+  xsymlink ("../generated/uapi/linux/version.h", "$include/linux/version.h")
+    if (!  -e "$include/linux/version.h"
+        && -e "$include/generated/uapi/linux/version.h");
+
   my $headers    = modconfig (qw(--get-kernel-headers -k), $utsRelease);
   my $gcc        = modconfig (qw(--get-gcc));
 
@@ -120,7 +146,7 @@ sub main
       modconfig (qw(--build-mod -k), $utsRelease, $mod, $gcc, $headers);
       print "Built $mod module\n";
     }
-  # No need to run depmod after modules are installed.
+  xsystem (qw(depmod -a), $utsRelease);
   exit (0);
 }
 
