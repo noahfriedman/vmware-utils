@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: vmware-ws-ctl,v 1.7 2012/07/16 20:27:39 friedman Exp $
+# $Id: vmware-ws-ctl,v 1.8 2012/12/13 23:44:27 friedman Exp $
 
 docmd()
 {
@@ -98,6 +98,28 @@ vmcmd()
     docmd vmrun "$cmd" "$vmx" "$@"
 }
 
+dovnc()
+{
+    local vmguest=$1
+    shift
+
+    set_vmguest_vmx "$vmguest"
+    local port=`sed -ne '/RemoteDisplay.vnc.port *= *"\([0-9]*\)".*/s//\1/p' "$vmx"`
+
+    case $port in
+        '' ) echo "$progname: no vnc port in $vmx" 1>&2
+             exit 1 ;;
+    esac
+
+    local host
+    case $DISPLAY in
+        :* | localhost*:* ) : ;;
+        *  ) host=${VMWARE_WS_CTL_HOSTNAME-${HOSTNAME-`uname -n`}} ;;
+    esac
+
+    docmd ${VMWARE_WS_CTL_VNC_CLIENT-vnc} "$@" $host:$port
+}
+
 main()
 {
     progname=${0##*/}
@@ -111,6 +133,8 @@ main()
             echo "	$progname vmguest suspend {hard|*soft*}"
             echo "	$progname vmguest reset   {hard|*soft*}"
             echo "	$progname vmguest [any other vmrun command]"
+            echo
+            echo "	$progname vmguest vnc  [connects to vnc port]"
             echo
             echo "Asterisked flags are the default."
             echo "Vmguest can be any unambiguous abbreviation."
@@ -128,11 +152,12 @@ main()
     esac
 
     case $cmd in
-        start   ) vmcmd "$vmguest" "$cmd" "${1-nogui}" "$@" ;;
-        stop    ) vmcmd "$vmguest" "$cmd" "${1-soft}"  "$@" ;;
-        suspend ) vmcmd "$vmguest" "$cmd" "${1-hard}"  "$@" ;;
-        reset   ) vmcmd "$vmguest" "$cmd" "${1-soft}"  "$@" ;;
-        *       ) vmcmd "$vmguest" "$cmd"              "$@" ;;
+        start   ) vmcmd "$vmguest" "$cmd" ${1-nogui} "$@" ;;
+        stop    ) vmcmd "$vmguest" "$cmd" ${1-soft}  "$@" ;;
+        suspend ) vmcmd "$vmguest" "$cmd" ${1-hard}  "$@" ;;
+        reset   ) vmcmd "$vmguest" "$cmd" ${1-soft}  "$@" ;;
+        vnc     ) dovnc "$vmguest"                   "$@" ;;
+        *       ) vmcmd "$vmguest" "$cmd"            "$@" ;;
     esac
 }
 
