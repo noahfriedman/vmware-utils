@@ -5,7 +5,7 @@
 # Created: 2012-09-08
 # Public domain.
 
-# $Id: vmware-kmod-rebuild,v 1.1 2012/09/08 22:53:50 friedman Exp $
+# $Id: vmware-kmod-rebuild,v 1.2 2013/02/02 01:24:46 friedman Exp $
 
 # Commentary:
 
@@ -127,6 +127,10 @@ sub modconfig
 
 sub main
 {
+  # causes problems with vmis-installer trying to look up gconf
+  # accessibility settings.
+  delete $ENV{SUDO_USER};
+
   my $utsRelease = $_[0] || $uname{release};
 
   # Linux 3.7 moved the version.h header that modconfig needs.  Doh!
