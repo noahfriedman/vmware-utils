@@ -1,10 +1,19 @@
 #!/bin/sh
-# $Id: vmware-ws-ctl,v 1.8 2012/12/13 23:44:27 friedman Exp $
+# $Id: vmware-ws-ctl,v 1.9 2013/04/18 00:52:04 friedman Exp $
 
 docmd()
 {
   echo + "$@" 1>&2
   "$@"
+}
+
+revlist()
+{
+    i=$#
+    while [ $i -gt 0 ]; do
+        eval echo \$$i
+        i=$((i - 1))
+    done
 }
 
 system()
@@ -16,8 +25,17 @@ system()
         * ) exec sudo "$0" system "$action" || exit $? ;;
     esac
 
-    for svc in vmware vmware-USBArbitrator vmware-workstation-server
-    do
+    svcs='vmware
+          vmamqpd
+          vmware-USBArbitrator
+          vmware-workstation-server
+         '
+
+    case $action in
+        stop ) svcs=`revlist $svcs` ;;
+    esac
+
+    for svc in $svcs ; do
         docmd systemctl "$action" $svc.service
     done
     exit $?
