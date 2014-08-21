@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id$
+# $Id: vmware-finish-upgrade,v 1.1 2014/08/21 01:41:40 friedman Exp $
 
 docmd()
 {
@@ -26,8 +26,10 @@ main()
         docmd chkconfig $svc off
     done
 
-    hg-revert -v /etc/vmware/vmnet8/dhcpd/dhcpd.conf \
-                 /etc/vmware/vmnet8/nat/nat.conf
+    (   cd /etc &&
+            hg-revert -v vmware/vmnet8/dhcpd/dhcpd.conf \
+                         vmware/vmnet8/nat/nat.conf
+    )
 }
 
 main "$@"
