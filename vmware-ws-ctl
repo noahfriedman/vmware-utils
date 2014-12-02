@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: vmware-ws-ctl,v 1.9 2013/04/18 00:52:04 friedman Exp $
+# $Id: vmware-ws-ctl,v 1.10 2013/09/24 22:04:48 friedman Exp $
 
 docmd()
 {
@@ -29,6 +29,7 @@ system()
           vmamqpd
           vmware-USBArbitrator
           vmware-workstation-server
+          vmware-wsx-server
          '
 
     case $action in
@@ -36,6 +37,9 @@ system()
     esac
 
     for svc in $svcs ; do
+        test -f /etc/rc.d/init.d/$svc ||
+            test -f /etc/init.d/$svc  ||
+            continue
         docmd systemctl "$action" $svc.service
     done
     exit $?

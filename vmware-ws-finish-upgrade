@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: vmware-finish-upgrade,v 1.1 2014/08/21 01:41:40 friedman Exp $
+# $Id: vmware-finish-upgrade,v 1.2 2014/08/21 05:12:01 friedman Exp $
 
 docmd()
 {
@@ -20,9 +20,13 @@ main()
           vmamqpd
           vmware-USBArbitrator
           vmware-workstation-server
+          vmware-wsx-server
          '
 
     for svc in $svcs ; do
+        test -f /etc/rc.d/init.d/$svc ||
+            test -f /etc/init.d/$svc  ||
+            continue
         docmd chkconfig $svc off
     done
 
