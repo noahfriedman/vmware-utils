@@ -1,0 +1,10 @@
+#!/bin/sh
+
+exec qemu-img create               \
+     -f vmdk                       \
+     -o compat6                    \
+     -o adapter_type=lsilogic      \
+     -o subformat=monolithicSparse \
+     "$@"
+
+# eof
