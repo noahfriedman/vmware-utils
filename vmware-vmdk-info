@@ -1,0 +1,36 @@
+#!/bin/sh
+# $Id$
+
+# The dd and sed syntax here might only work for the GNU versions.
+
+vmdk()
+{
+    x=`dd if="$1" bs=4c count=1 status=none`
+    echo x="$x"
+
+    case `dd if="$1" bs=4c count=1 status=none` in
+        KDMV ) dd if="$1" bs=512c count=2 skip=1 status=none \
+                     | sed -e 's/\x00//g' ;;
+
+        '# Di' ) cat "$1" ;;
+
+        * ) echo "Not a vmdk image" ;;
+    esac
+}
+
+main()
+{
+    if [ $# -gt 1 ]; then
+        for vmdk in "$@"; do
+            echo "* $vmdk:"
+            vmdk "$vmdk" | sed -e 's/^/	/'
+            echo
+        done
+    else
+        vmdk "$1"
+    fi
+}
+
+main "$@"
+
+# eof
