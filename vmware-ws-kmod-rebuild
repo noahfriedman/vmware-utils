@@ -5,7 +5,7 @@
 # Created: 2012-09-08
 # Public domain.
 
-# $Id: vmware-kmod-rebuild,v 1.3 2013/08/21 19:23:39 friedman Exp $
+# $Id: vmware-kmod-rebuild,v 1.4 2014/02/13 23:27:32 friedman Exp $
 
 # Commentary:
 
@@ -151,7 +151,7 @@ sub main
         && -e "$include/generated/uapi/linux/version.h");
 
   my $headers    = modconfig (qw(--get-kernel-headers -k), $utsRelease);
-  my $gcc        = modconfig (qw(--get-gcc));
+  my $gcc        = $_[1] || modconfig (qw(--get-gcc));
 
   modconfig (qw(--validate-kernel-headers -k), $utsRelease, $headers);
   modconfig (qw(--validate-gcc), $gcc);
