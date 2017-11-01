@@ -1,0 +1,118 @@
+#!/usr/bin/env python
+# $Id$
+
+#from __future__    import print_function
+
+import argparse
+import atexit
+import getpass
+import os
+import ssl
+import sys
+import time
+import OpenSSL
+
+from pyVim   import connect as pyVconnect
+from pyVmomi import vim
+
+def get_args():
+    parser = argparse.ArgumentParser( description='Process args for powering on a Virtual Machine' )
+    parser.add_argument( '-s', '--host',         required=True,  action='store',  help='Remote host to connect to' )
+    parser.add_argument( '-o', '--port', type=int, default=443,  action='store',  help='Port to connect on' )
+    parser.add_argument( '-u', '--user',         required=True,  action='store',  help='User name to use when connecting to host' )
+    parser.add_argument( '-p', '--password',     required=False, action='store',  help='Password to use when connecting to host' )
+    parser.add_argument( '-v', '--vmname',       required=True,  action='store',  help='Names of the Virtual Machines to power on' )
+    args = parser.parse_args()
+
+    if args.password:
+        pass
+    elif os.getenv( 'VMPASSWD' ):
+        args.password = os.getenv( 'VMPASSWD' )
+    else:
+          if prompt == None:
+              prompt = 'Enter password for %(user)s@%(host)s: ' % vars( args )
+          args.password = getpass.getpass( prompt )
+
+    return args
+
+
+def get_obj( content, vimtype, name ):
+    try:
+        name = unicode( name, 'utf-8' )
+    except TypeError:
+        pass
+
+    obj = None
+    container = content.viewManager.CreateContainerView( content.rootFolder, vimtype, True )
+    for c in container.view:
+        if name:
+            if c.name == name:
+                return c
+        else:
+            return c
+    return obj
+
+def get_attr( obj, name ):
+    for elt in obj:
+        if getattr( elt, 'key' ) == name:
+            return getattr( elt, 'value' )
+
+
+def print_uri_vmrc( vmrc ):
+    print "vmrc://clone:%(session)s@%(vc_fqdn)s/?moid=%(vmoid)s" % vars( vmrc )
+
+def print_uri_html5( vmrc ):
+    vmrc.host = 'vcenter-html5-client-testing'
+    vmrc.port = '9443'
+    vmrc.path = "/ui/webconsole.html"
+
+    print "https://" + vmrc.host + ":" + vmrc.port + vmrc.path \
+          +          "?vmId=" + vmrc.vmoid      \
+          +        "&vmName=" + vmrc.vmname     \
+          +    "&serverGuid=" + vmrc.serverGUID \
+          +          "&host=" + vmrc.vc_fqdn    \
+          + "&sessionTicket=" + vmrc.session    \
+          +    "&thumbprint=" + vmrc.fprint
+
+def main():
+    args = get_args()
+    vmrc = args
+
+    try:
+       context = None
+       if hasattr( ssl, '_create_unverified_context' ):
+          context = ssl._create_unverified_context()
+       si = pyVconnect.SmartConnect( host = args.host,
+                                     user = args.user,
+                                     pwd  = args.password,
+                                     port = int( args.port ),
+                                     sslContext = context )
+    except Exception as e:
+        print 'Could not connect to vCenter host'
+        print repr( e )
+        sys.exit( 1 )
+    atexit.register( pyVconnect.Disconnect, si )
+
+    content = si.RetrieveContent()
+    vmrc.serverGUID = content.about.instanceUuid
+
+    vmrc.vc_fqdn = get_attr( content.setting.setting, 'VirtualCenter.FQDN' )
+
+    vm = get_obj( content, [vim.VirtualMachine], args.vmname )
+    vmrc.vmoid = str(vm._moId)
+
+    vmrc.session = content.sessionManager.AcquireCloneTicket()
+    vc_cert      = ssl.get_server_certificate( (args.host, int( args.port )) )
+    vc_pem       = OpenSSL.crypto.load_certificate( OpenSSL.crypto.FILETYPE_PEM, vc_cert )
+    vmrc.fprint  = vc_pem.digest( 'sha1' )
+
+    print_uri_vmrc( vmrc )
+    print ""
+    print_uri_html5( vmrc )
+
+    # The tickets are only good until session is disconnected.
+    #time.sleep( 60 )
+
+
+if __name__ == "__main__":
+    main()
