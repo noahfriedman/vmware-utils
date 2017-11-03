@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-info,v 1.2 2017/11/03 05:39:41 friedman Exp $
+# $Id: vsphere-vm-info,v 1.3 2017/11/03 05:39:54 friedman Exp $
 
 from __future__    import print_function
 
@@ -80,7 +80,7 @@ def fold_text( text, maxlen=75, indent=0 ):
     text = text.expandtabs( 8 )
 
     text      = re.sub( "\r", '', text )        # CRLF -> LF
-    paragraph = re.split( "\n\n+", text, flags=re.M ) # Split into separate chunks.
+    paragraph = re.split( "\n\n", text, flags=re.M ) # Split into separate chunks.
 
     re_ll = re.compile('(.{1,%s})(?:\s+|$)' % maxlen, flags=re.M )
     filled = []
@@ -89,14 +89,16 @@ def fold_text( text, maxlen=75, indent=0 ):
             filled.append( para )
             continue
 
-        # Remove all newlines, replacing any prior trailing whitespace on the
-        # previous line and leading whitespace on the next line with a single
-        # space.  This may be a no-op, since in my testing the input was
-        # already always a single line.
-        para = re.sub( "\\s*\n\\s*", ' ', para, flags=re.M )
+        # Remove all newlines, replacing trailing/leading
+        # whitespace with a single space.
+        #para = re.sub( "\\s*\n\\s*", ' ', para, flags=re.M )
+        # Only unfill if line is >= 42 chars
+        para = re.sub( "(?<=\S{42})\\s*\n\\s*", ' ', para, flags=re.M )
+
         # split into lines no longer than maxlen but only at whitespace.
         para = re.sub( re_ll, "\\1\n", para )
-        para = re.sub( "\n+$", '',      para, flags=re.M ) # but remove final newline
+        # but remove final newline
+        para = re.sub( "\n+$", '', para, flags=re.M )
         filled.append( para )
 
     text = str.join( "\n\n", filled ) # rejoin paragraphs at the end.
@@ -259,7 +261,7 @@ def print_vm( vm, sep="" ):
 
     try:
         annot = vm.config.annotation
-        annot = fold_text( annot, maxlen=64, indent=8 )
+        annot = fold_text( annot, maxlen=70, indent=8 )
         if annot.find ("\n") >= 0:
             annot = "\n        " + annot
         p( 'Annotation', annot )
