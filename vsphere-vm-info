@@ -1,0 +1,316 @@
+#!/usr/bin/env python
+# $Id$
+
+from __future__    import print_function
+
+import argparse
+import atexit
+import os
+import getpass
+import ssl
+import sys
+import re
+
+from pyVim         import connect as pyVconnect
+from pyVmomi       import vim
+
+##########
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument( '-s', '--host',            required=True,   help='Remote host to connect to' )
+    parser.add_argument( '-o', '--port', type=int,   default=443,    help='Port to connect on' )
+    parser.add_argument( '-u', '--user',             default=os.environ['LOGNAME'], help='User name to use when connecting to host' )
+    parser.add_argument( '-p', '--password',                         help='Password to use when connecting to host' )
+    parser.add_argument( '-a', '--all',        action='store_true',  help='Retrieve all known VMs' )
+    parser.add_argument( 'vm', nargs='*',                            help='optional vm names, default display all' )
+    args = parser.parse_args()
+
+    if not args.all and not args.vm:
+        print("Specify VM names or -a (--all)")
+        sys.exit (1)
+
+    if args.password:
+        pass
+    elif os.getenv( 'VMPASSWD' ):
+        args.password = os.getenv( 'VMPASSWD' )
+    else:
+          if prompt == None:
+              prompt = 'Enter password for %(user)s@%(host)s: ' % vars( args )
+          args.password = getpass.getpass( prompt )
+
+    return args
+
+##########
+def get_obj( content, vimtype, name=None ):
+    try:              name = unicode( name, 'utf-8' )
+    except TypeError: pass
+
+    cvM = content.viewManager
+    container = cvM.CreateContainerView( content.rootFolder, vimtype, True )
+    if name is None:
+        return container.view
+
+    for obj in container.view:
+        if obj.name == name:
+            return obj
+
+    return None
+
+##########
+def get_attr( obj, name ):
+    for elt in obj:
+        if getattr( elt, 'key' ) == name:
+            return getattr( elt, 'value' )
+
+##########
+def get_attr_dict( obj ):
+    attrs = dict()
+    for elt in obj:
+        key = getattr( elt, 'key' )
+        val = getattr( elt, 'value' )
+        attrs[key] = val
+    return attrs
+
+##########
+# This doesn't just use the textwrap class because we do a few special
+# things here, such as avoiding filling command examples
+def fold_text( text, maxlen=75, indent=0 ):
+    text = text.expandtabs( 8 )
+
+    text      = re.sub( "\r", '', text )        # CRLF -> LF
+    paragraph = re.split( "\n\n+", text, flags=re.M ) # Split into separate chunks.
+
+    re_ll = re.compile('(.{1,%s})(?:\s+|$)' % maxlen, flags=re.M )
+    filled = []
+    for para in paragraph:
+        if re.match( '^\s*[#$]', para):
+            filled.append( para )
+            continue
+
+        # Remove all newlines, replacing any prior trailing whitespace on the
+        # previous line and leading whitespace on the next line with a single
+        # space.  This may be a no-op, since in my testing the input was
+        # already always a single line.
+        para = re.sub( "\\s*\n\\s*", ' ', para, flags=re.M )
+        # split into lines no longer than maxlen but only at whitespace.
+        para = re.sub( re_ll, "\\1\n", para )
+        para = re.sub( "\n+$", '',      para, flags=re.M ) # but remove final newline
+        filled.append( para )
+
+    text = str.join( "\n\n", filled ) # rejoin paragraphs at the end.
+    if indent:
+        repl = "\n" + (' ' * indent)
+        text = re.sub( "\n", repl, text, flags=re.M )
+
+    return text
+
+
+##########
+def scale_size( size, fmtsize=1024 ):
+    # x & (x-1) == 0 iff x == 2^n
+    # if x == 2^n, only nth bit in x is set.
+    # subtracting 1 flips all bits via a borrow; the logical AND is zero.
+    # If x != 2^n, x-1 will flip all bits up to and including the first 1, but
+    # will not negate the entire value and an AND will not produce zero.
+    def pow2p( n ):
+        return (n & (n - 1) == 0)
+
+    suffix = ('', 'K', 'M', 'G', 'T', 'P', 'E')
+    idx = 0
+
+    ispow2 = pow2p (size)
+    if not pow2p (size) or not pow2p (fmtsize):
+        size = float( size )
+
+    while size > fmtsize:
+        size = size / fmtsize
+        idx += 1
+
+    if ispow2 and fmtsize == 1024:
+        fmtstr = "%d %s%s"
+        if size < 10: # Prefer "4096M" to "4G"
+            size *= fmtsize
+            idx -= 1
+    elif size < 100 and idx > 0:
+        fmtstr = "%.2f %s%s"
+    else:
+        fmtstr = "%d %s%s"
+
+    if pow2p( fmtsize ): unit = "iB"
+    else:                unit =  "B"
+
+    return fmtstr % (size, suffix[idx], unit)
+
+
+##########
+def storage_size( storage ):
+    comb = storage.committed + storage.uncommitted
+    return scale_size( comb )
+
+
+##########
+def print_vm( vm, sep="" ):
+#     print(vm.config)
+#     print("--------------------------------")
+#     print(vm.config.extraConfig)
+#     print("--------------------------------")
+#     print(vm.summary)
+#     print("--------------------------------")
+
+    def p( *parm ):
+        if parm[1] is None: return
+        print( '%-14s : %s' % (parm[0], str.join( " ", map( str, parm[1:] ) )))
+
+    def pl( text, n ):   # pluralize text based on n
+        if int( n ) != 1 and int( n ) != -1:
+            text += 's'
+        return text
+
+    vm_conf = vm.config
+    hw_conf = vm_conf.hardware
+
+    extraConfig = get_attr_dict( vm_conf.extraConfig )
+
+    numCPU = hw_conf.numCPU
+    coreargs = [pl( 'core', numCPU )]
+    try:
+        nsockets = numCPU / hw_conf.numCoresPerSocket
+        coreargs.append( pl('%d socket' % nsockets, nsockets ))
+    except:
+        print("problem with", vm.config.name)
+
+    if vm_conf.cpuHotAddEnabled:    coreargs.append( 'hot add enabled' )
+    if vm_conf.cpuHotRemoveEnabled: coreargs.append( 'hot remove enabled' )
+
+    memargs = [scale_size( hw_conf.memoryMB * 1024 * 1024)]
+    if vm_conf.memoryHotAddEnabled: memargs.append( 'hot add enabled' )
+
+    #vm.config.template (bool)
+
+    p( 'VM Name',     vm.config.name )
+    p( 'VM UUID',     vm.config.uuid )
+    p( 'Guest type',  vm.config.guestFullName )
+    p( 'HW version',  str.replace( vm.config.version, 'vmx-', '' ))
+    p( 'CPU',         numCPU, str.join( ", ", coreargs ) )
+    p( 'Memory',      str.join( ", ", memargs ))
+    p( 'NICs',        vm.summary.config.numEthernetCards )
+    p( 'Disks',       vm.summary.config.numVirtualDisks )
+    p( 'Storage',     storage_size( vm.summary.storage ))
+    p( 'Path',        vm.config.files.vmPathName )
+
+    p( 'Hypervisor',  vm.summary.runtime.host.name )
+    p( 'Boot delay',  vm.config.bootOptions.bootDelay, "ms" )
+    p( 'State',       vm.summary.runtime.powerState )
+    if vm.summary.runtime.powerState == "poweredOn":
+        p( 'Boot time', vm.summary.runtime.bootTime )
+        if vm.summary.guest != None:
+            for pair in (('Guest hostname', vm.summary.guest.hostName),
+                         ('Guest IP',       vm.summary.guest.ipAddress)):
+                val = pair[1]
+                if val != None and val != "":
+                    p( pair[0], val )
+
+    #    vm.config.tools
+    #       afterPowerOn = true,
+    #       afterResume = true,
+    #       beforeGuestStandby = true,
+    #       beforeGuestShutdown = true,
+    #       beforeGuestReboot = <unset>,
+    #       toolsUpgradePolicy = 'manual',
+    #       syncTimeWithHost = true,
+
+#    flags = (vim.vm.FlagInfo) {
+#       dynamicType = <unset>,
+#       dynamicProperty = (vmodl.DynamicProperty) [],
+#       disableAcceleration = false,
+#       enableLogging = true,
+#       useToe = false,
+#       runWithDebugInfo = false,
+#       monitorType = 'release',
+#       htSharing = 'any',
+#       snapshotDisabled = false,
+#       snapshotLocked = false,
+#       diskUuidEnabled = false,
+#       virtualMmuUsage = 'automatic',
+#       virtualExecUsage = 'hvAuto',
+#       snapshotPowerOffBehavior = 'powerOff',
+#       recordReplayEnabled = false,
+#       faultToleranceType = 'unset',
+#       cbrcCacheEnabled = <unset>
+#    },
+
+#    defaultPowerOps = (vim.vm.DefaultPowerOpInfo) {
+#       dynamicType = <unset>,
+#       dynamicProperty = (vmodl.DynamicProperty) [],
+#       powerOffType = 'soft',
+#       suspendType = 'hard',
+#       resetType = 'soft',
+#       defaultPowerOffType = 'soft',
+#       defaultSuspendType = 'hard',
+#       defaultResetType = 'soft',
+#       standbyAction = 'checkpoint'
+#    },
+
+    # This is a custom key I insert into our VMs
+    try: p( 'Guest json', extraConfig['guestinfo.json'] )
+    except: pass
+
+    #p( 'Config modtime', vm.config.changeVersion )
+
+    try:
+        annot = vm.config.annotation
+        annot = fold_text( annot, maxlen=64, indent=8 )
+        if annot.find ("\n") >= 0:
+            annot = "\n        " + annot
+        p( 'Annotation', annot )
+    except: pass
+
+    try: p( 'Question', vm.summary.runtime.question.text )
+    except: pass
+
+    print( sep )
+
+
+##########
+def main():
+    args = get_args()
+
+    try:
+       context = None
+       if hasattr( ssl, '_create_unverified_context' ):
+          context = ssl._create_unverified_context()
+       si = pyVconnect.SmartConnect( host = args.host,
+                                     user = args.user,
+                                     pwd  = args.password,
+                                     port = int( args.port ),
+                                     sslContext = context )
+    except Exception as e:
+        print( 'Could not connect to vCenter host' )
+        print( repr( e ) )
+        sys.exit( 1 )
+    atexit.register( pyVconnect.Disconnect, si )
+
+    content = si.RetrieveContent()
+    vmList  = get_obj( content, [vim.VirtualMachine] )
+
+    sep = '-' * 78
+    if args.vm:
+        for vm in vmList:
+            if vm.name in args.vm:
+                args.vm.remove( vm.name )
+                if not args.vm:
+                    sep = ""
+                print_vm( vm, sep )
+                if not args.vm:
+                    break
+    else:
+        for vm in vmList:
+            print_vm( vm, sep )
+
+
+##########
+
+if __name__ == "__main__":
+    main()
+
+# eof
