@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id$
+# $Id: vsphere-vm-info,v 1.1 2017/11/03 05:23:45 friedman Exp $
 
 from __future__    import print_function
 
@@ -16,10 +16,12 @@ from pyVmomi       import vim
 
 ##########
 def get_args():
+    env = os.environ
+
     parser = argparse.ArgumentParser()
-    parser.add_argument( '-s', '--host',            required=True,   help='Remote host to connect to' )
-    parser.add_argument( '-o', '--port', type=int,   default=443,    help='Port to connect on' )
-    parser.add_argument( '-u', '--user',             default=os.environ['LOGNAME'], help='User name to use when connecting to host' )
+    parser.add_argument( '-s', '--host',           required=True,   help='Remote host to connect to' )
+    parser.add_argument( '-o', '--port', type=int,  default=443,    help='Port to connect on' )
+    parser.add_argument( '-u', '--user',             default=env['LOGNAME'], help='User name to use when connecting to host' )
     parser.add_argument( '-p', '--password',                         help='Password to use when connecting to host' )
     parser.add_argument( '-a', '--all',        action='store_true',  help='Retrieve all known VMs' )
     parser.add_argument( 'vm', nargs='*',                            help='optional vm names, default display all' )
@@ -150,12 +152,12 @@ def storage_size( storage ):
 
 ##########
 def print_vm( vm, sep="" ):
-#     print(vm.config)
-#     print("--------------------------------")
-#     print(vm.config.extraConfig)
-#     print("--------------------------------")
-#     print(vm.summary)
-#     print("--------------------------------")
+    print(vm.config)
+    print("--------------------------------")
+    print(vm.config.extraConfig)
+    print("--------------------------------")
+    print(vm.summary)
+    print("--------------------------------")
 
     def p( *parm ):
         if parm[1] is None: return
@@ -173,21 +175,19 @@ def print_vm( vm, sep="" ):
 
     numCPU = hw_conf.numCPU
     coreargs = [pl( 'core', numCPU )]
-    try:
+    if hw_conf.numCoresPerSocket:
         nsockets = numCPU / hw_conf.numCoresPerSocket
         coreargs.append( pl('%d socket' % nsockets, nsockets ))
-    except:
-        print("problem with", vm.config.name)
-
     if vm_conf.cpuHotAddEnabled:    coreargs.append( 'hot add enabled' )
     if vm_conf.cpuHotRemoveEnabled: coreargs.append( 'hot remove enabled' )
 
     memargs = [scale_size( hw_conf.memoryMB * 1024 * 1024)]
     if vm_conf.memoryHotAddEnabled: memargs.append( 'hot add enabled' )
 
-    #vm.config.template (bool)
-
-    p( 'VM Name',     vm.config.name )
+    if vm_conf.template:
+        p( 'VM Name', vm.config.name, '    [TEMPLATE]' )
+    else:
+        p( 'VM Name', vm.config.name )
     p( 'VM UUID',     vm.config.uuid )
     p( 'Guest type',  vm.config.guestFullName )
     p( 'HW version',  str.replace( vm.config.version, 'vmx-', '' ))
