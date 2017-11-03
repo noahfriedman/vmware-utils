@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id$
+# $Id: vsphere-console-uri,v 1.1 2017/11/01 01:31:33 friedman Exp $
 
 #from __future__    import print_function
 
@@ -16,12 +16,12 @@ from pyVim   import connect as pyVconnect
 from pyVmomi import vim
 
 def get_args():
-    parser = argparse.ArgumentParser( description='Process args for powering on a Virtual Machine' )
-    parser.add_argument( '-s', '--host',         required=True,  action='store',  help='Remote host to connect to' )
-    parser.add_argument( '-o', '--port', type=int, default=443,  action='store',  help='Port to connect on' )
-    parser.add_argument( '-u', '--user',         required=True,  action='store',  help='User name to use when connecting to host' )
-    parser.add_argument( '-p', '--password',     required=False, action='store',  help='Password to use when connecting to host' )
-    parser.add_argument( '-v', '--vmname',       required=True,  action='store',  help='Names of the Virtual Machines to power on' )
+    parser = argparse.ArgumentParser()
+    parser.add_argument( '-s', '--host',          required=True,  help='Remote host to connect to' )
+    parser.add_argument( '-o', '--port', type=int, default=443,   help='Port to connect on' )
+    parser.add_argument( '-u', '--user',           default=os.environ['LOGNAME'], help='User name to use when connecting to host' )
+    parser.add_argument( '-p', '--password',      required=False, help='Password to use when connecting to host' )
+    parser.add_argument( '-v', '--vmname',        required=True,  help='Name of the Virtual Machine to connect to' )
     args = parser.parse_args()
 
     if args.password:
@@ -36,21 +36,23 @@ def get_args():
     return args
 
 
-def get_obj( content, vimtype, name ):
+def get_obj( content, vimtype, name=None):
     try:
         name = unicode( name, 'utf-8' )
     except TypeError:
         pass
 
-    obj = None
-    container = content.viewManager.CreateContainerView( content.rootFolder, vimtype, True )
-    for c in container.view:
-        if name:
-            if c.name == name:
-                return c
-        else:
-            return c
-    return obj
+    cvM = content.viewManager
+    container = cvM.CreateContainerView( content.rootFolder, vimtype, True )
+    if name is None:
+        return container.view
+
+    for obj in container.view:
+        if obj.name == name:
+            return obj
+
+    return None
+
 
 def get_attr( obj, name ):
     for elt in obj:
@@ -111,7 +113,7 @@ def main():
     print_uri_html5( vmrc )
 
     # The tickets are only good until session is disconnected.
-    #time.sleep( 60 )
+    time.sleep( 60 )
 
 
 if __name__ == "__main__":
