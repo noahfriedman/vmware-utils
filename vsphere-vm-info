@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-info,v 1.1 2017/11/03 05:23:45 friedman Exp $
+# $Id: vsphere-vm-info,v 1.2 2017/11/03 05:39:41 friedman Exp $
 
 from __future__    import print_function
 
@@ -152,12 +152,12 @@ def storage_size( storage ):
 
 ##########
 def print_vm( vm, sep="" ):
-    print(vm.config)
-    print("--------------------------------")
-    print(vm.config.extraConfig)
-    print("--------------------------------")
-    print(vm.summary)
-    print("--------------------------------")
+    #print(vm.config)
+    #print("--------------------------------")
+    #print(vm.config.extraConfig)
+    #print("--------------------------------")
+    #print(vm.summary)
+    #print("--------------------------------")
 
     def p( *parm ):
         if parm[1] is None: return
