@@ -1,0 +1,6 @@
+#!/bin/sh
+# $Id$
+
+exec ovftool --compress=9 --shaAlgorithm=SHA1 "$@"
+
+# eof
