@@ -1,36 +1,529 @@
-#!/bin/sh
+#!/usr/bin/env perl
+# vmware-vmdk-info --- display information about vmware virtual disks
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2017-12-25
+# Public domain
+
 # $Id$
 
-# The dd and sed syntax here might only work for the GNU versions.
+# Commentary:
+# Code:
 
-vmdk()
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use lib "$ENV{HOME}/lib/perl";
+
+package VMDK::SparseExtentHeader;
+
+use strict;
+use warnings qw(all);
+
+use base qw(NF::AttributeHandler);
+
+# Does not include padding at the end
+my @field = (qw(magicNumber
+                version
+                flags
+                capacity
+                grainsize
+                descriptorOffset
+                descriptorSize
+                numGTEsPerGT
+                rgdOffset
+                gdOffset
+                overHead
+                uncleanShutdown
+                singleEndLineChar
+                nonEndLineChar
+                doubleEndLineChar1
+                doubleEndLineChar2
+                compressAlgorithm));
+
+our %AH_attributes = (_tbl => undef,
+                      map { $_ => undef } @field);
+
+my $tmpl_be = "L>3 Q>4 L> Q>3 C a a a a l> C433";  # big-endian
+my $tmpl_le = "L<3 Q<4 L< Q<3 C a a a a l< C433";
+
+sub new
 {
-    x=`dd if="$1" bs=4c count=1 status=none`
-    echo x="$x"
+  my ($type, $data) = (shift, shift);
+  my $class = ref ($type) || $type;
+  my $self = $class->SUPER::new (@_);
 
-    case `dd if="$1" bs=4c count=1 status=none` in
-        KDMV ) dd if="$1" bs=512c count=2 skip=1 status=none \
-                     | sed -e 's/\x00//g' ;;
-
-        '# Di' ) cat "$1" ;;
-
-        * ) echo "Not a vmdk image" ;;
-    esac
+  $self->parse ($data);
+  return $self;
 }
 
-main()
+sub parse
 {
-    if [ $# -gt 1 ]; then
-        for vmdk in "$@"; do
-            echo "* $vmdk:"
-            vmdk "$vmdk" | sed -e 's/^/	/'
-            echo
-        done
-    else
-        vmdk "$1"
-    fi
+  my ($self, $raw) = @_;
+
+  my %d;
+  @d{@field} = (substr ($raw, 0, 4) eq 'VMDK'
+                ? unpack ($tmpl_be, $raw)
+                : unpack ($tmpl_le, $raw));
+
+  $self->_tbl (\%d);
+  while (my ($key, $val) = each %d)
+    {
+      $self->$key ($val);
+    }
+  return $self;
 }
 
-main "$@"
+
+package VMDK::Descriptor;
 
-# eof
+use strict;
+use warnings qw(all);
+
+use base qw(NF::AttributeHandler);
+
+our %AH_attributes
+  = ( version            => undef,
+      CID                => undef,
+      parentCID          => undef,
+      createType         => undef,
+      extents            => undef,
+      ddb                => undef,
+
+      encoding           => undef,
+      isNativeSnapshot   => undef,
+      parentFileNameHint => undef,
+
+      _tbl               => undef,
+    );
+
+sub new
+{
+  my ($type, $data) = (shift, shift);
+  my $class = ref ($type) || $type;
+  my $self = $class->SUPER::new (@_);
+
+  $self->parse ($data);
+}
+
+sub parse
+{
+  my ($self, $raw) = @_;
+
+  my %ddb;
+  my %kvp;
+  my @extent;
+  for my $l (split (/[\r\n]+/, $raw))
+    {
+      if ($l =~ /^([^#]+?)\s*=\s*"?(.*?)"?\s*$/)
+        {
+          my ($key, $val) = ($1, $2);
+          if ($key =~ /^ddb\.(.*)/)
+            {
+              my $sddb = \%ddb;
+              my @k = split (/\./, $1);
+              for (my $i = 0; $i < $#k; $i++)
+                {
+                  $sddb->{$k[$i]} ||= {};
+                  $sddb = $sddb->{$k[$i]};
+                }
+              $sddb->{$k[$#k]} = $val;
+            }
+          elsif ($key =~ /^(?:parent)?CID$/)
+            { $kvp{$key} = hex ($val) }
+          else
+            { $kvp{$key} = $val }
+        }
+      elsif ($l =~ /^(\S+)\s+(\d+)\s+(\S+)\s+"(\S+)"\s*(\d+)?/)
+        {
+          my %ext = ( access   => $1,
+                      sectors  => $2,
+                      type     => $3,
+                      filename => $4,
+                      offset   => $5,
+                    );
+          push @extent, \%ext;
+        }
+    }
+
+  $self->_tbl (\%kvp);
+  $self->extents (\@extent);
+  $self->ddb  (\%ddb);
+  while (my ($key, $val) = each %kvp)
+    {
+      $self->$key ($val);
+    }
+  return $self;
+}
+
+
+package VMDK;
+
+use strict;
+use warnings qw(all);
+
+use Symbol;
+use Fcntl qw(:DEFAULT :seek);
+
+use base qw(NF::AttributeHandler);
+
+our %AH_attributes
+  = ( filename    => undef,
+      fh          => undef,
+
+      _descriptor => undef,
+      _header     => undef,
+    );
+
+sub new
+{
+  my ($type, $filename) = (shift, shift);
+  my $class = ref ($type) || $type;
+  my $self = $class->SUPER::new (@_);
+
+  die "open: $filename: $!\n"
+    unless (sysopen (my $fh, $filename, O_RDONLY|O_BINARY));
+
+  $self->filename ($filename);
+  $self->fh ($fh);
+  $self->descriptor;
+
+  return $self;
+}
+
+sub raw_sector
+{
+  my ($self, $sector, $count) = @_;
+  $count = 1 unless defined $count && $count > 1;
+
+  my $fh = $self->fh;
+  my $off_orig = sysseek ($fh, 0, SEEK_CUR);
+  my $off_sect = $sector * 512;
+
+  return unless defined sysseek ($fh, $off_sect, SEEK_SET);
+  sysread ($fh, my $buf, $count * 512);
+  sysseek ($fh, $off_orig, SEEK_SET);
+
+  return $buf;
+}
+
+sub descriptor
+{
+  my $self = shift;
+
+  my $desc = $self->_descriptor;
+  return $desc if defined $desc;
+
+  my $buf = $self->raw_sector (0);
+  if ($buf =~ /^(?:VMDK|KDMV)/s)
+    {
+      my $hdr = $self->header ($buf);
+      return unless $hdr;
+
+      my $start = $hdr->descriptorOffset;
+      my $count = $hdr->descriptorSize;
+      $buf = $self->raw_sector ($start, $count);
+    }
+  elsif ($buf =~ /^# Disk DescriptorFile/s)
+    {
+      # Read in rest of file.
+      my $fh = $self->fh;
+      my $octets = (-s $fh) - length $buf;
+      sysread ($fh, $buf, $octets, length $buf);
+    }
+  else
+    { return }
+
+  my $dclass = qualify ('Descriptor', ref $self);
+  $desc = $dclass->new ($buf);
+  return unless $desc;
+
+  $self->_descriptor ($desc);
+}
+
+sub header
+{
+  my $self = shift;
+
+  my $hdr = $self->_header;
+  return $hdr if defined $hdr;
+
+  my $buf = defined $_[0] ? shift : $self->raw_sector (0);
+  return unless $buf =~ /^(?:VMDK|KDMV)/s;
+
+  my $hclass = qualify ('SparseExtentHeader', ref $self);
+  $hdr = $hclass->new ($buf);
+  return unless $hdr;
+
+  $self->_header ($hdr);
+}
+
+
+package main;
+
+use NF::PrintObject qw(:all);
+
+sub main
+{
+  my $vmdk = VMDK->new ($_[0]);
+  my %d;
+
+  my $desc = $vmdk->descriptor;
+  if ($desc)
+    {
+      %d = %{$desc->_tbl};
+      $d{extents} = $desc->extents;
+      $d{ddb}     = $desc->ddb;
+    }
+
+  my $hdr  = $vmdk->header;
+  $d{header} = $hdr->_tbl if $hdr;
+
+  print object_pp (\%d), "\n";
+}
+
+main (@ARGV);
+
+__END__
+
+
+######
+## Hosted Sparse Extent Header
+######
+
+# The following example shows the content of a sparse extent's header from
+# a VMware hosted product, such as VMware Workstation, VMware Player,
+# VMware ACE, VMware Server, or VMware GSX Server:
+#
+#	typedef uint64 SectorType;
+#	typedef uint8 Bool;
+#
+#	typedef struct SparseExtentHeader {
+#		uint32      magicNumber;	// L  (<= unpack template char)
+#		uint32      version;		// L
+#		uint32      flags;		// L
+#		SectorType  capacity;		// Q
+#		SectorType  grainSize;		// Q
+#		SectorType  descriptorOffset;	// Q
+#		SectorType  descriptorSize;	// Q
+#		uint32      numGTEsPerGT;	// L
+#		SectorType  rgdOffset;		// Q
+#		SectorType  gdOffset;		// Q
+#		SectorType  overHead;		// Q
+#		Bool        uncleanShutdown;	// C
+#		char        singleEndLineChar;	// c
+#		char        nonEndLineChar;	// c
+#		char        doubleEndLineChar1;	// c
+#		char        doubleEndLineChar2;	// c
+#		uint16      compressAlgorithm;	// L
+#		uint8       pad[433];		// C
+#	} SparseExtentHeader;  // 4096 bits, 512 bytes
+#
+# This structure needs to be packed. If you use gcc to compile your
+# application, you must use the keyword __attribute__((__packed__)).
+#
+#    * All the quantities defined as SectorType are in sector units.
+#    * magicNumber is initialized with
+#
+#		#define SPARSE_MAGICNUMBER 0x564d444b /* 'V' 'M' 'D' 'K' */
+#
+#      This magic number is used to verify the validity of each sparse
+#      extent when the extent is opened.
+#
+#    * version
+#      The value of this entry should be 1.
+#
+#    * flags contains the following bits of information in the current
+#      version of the sparse format:
+#
+#		* bit  0: valid new line detection test.
+#
+#		* bit  1: redundant grain table will be used.
+#
+#		* bit 16: the grains are compressed.
+#                 The type of compression is described by compressAlgorithm.
+#
+#		* bit 17: there are markers in the virtual disk to identify
+#		  every block of metadata or data and the markers for the
+#		  virtual machine data contain a LBA
+#
+#    * grainSize is the size of a grain in sectors.
+#      It must be a power of 2 and must be greater than 8 (4KB).
+#
+#    * capacity is the capacity of this extent in sectors.
+#      It should be a multiple of the grain size.
+#
+#    * descriptorOffset is the offset of the embedded descriptor in the
+#      extent. It is expressed in sectors. If the descriptor is not embedded,
+#      all the extents in the link have the descriptor offset field set to 0.
+#
+#    * descriptorSize is valid only if descriptorOffset is non-zero.
+#      It is expressed in sectors.
+#
+#    * numGTEsPerGT is the number of entries in a grain table.
+#      The value of this entry for VMware virtual disks is 512.
+#
+#    * rgdOffset points to the redundant level 0 of metadata.
+#      It is expressed in sectors.
+#
+#    * gdOffset points to the level 0 of metadata. It is expressed in sectors.
+#
+#    * overHead is the number of sectors occupied by the metadata.
+#
+#    * uncleanShutdown is set to FALSE when VMware software closes an
+#      extent. After an extent has been opened, VMware software checks for the
+#      value of uncleanShutdown. If it is TRUE, the disk is automatically
+#      checked for consistency. uncleanShutdown is set to TRUE after this
+#      check has been performed. Thus, if the software crashes before the
+#      extent is closed, this boolean is found to be set to TRUE the next time
+#      the virtual machine is powered on.
+#
+#    * Four entries are used to detect when an extent file has been
+#      corrupted by transferring it using FTP in text mode. The entries
+#      should be initialized with the following values:
+#
+#		singleEndLineChar  = '\n';
+#		nonEndLineChar     = ' ';
+#		doubleEndLineChar1 = '\r';
+#		doubleEndLineChar2 = '\n';
+#
+#    * compressAlgorithm describes the type of compression used to compress
+#      every grain in the virtual disk. If bit 16 of the field flags is not
+#      set, compressAlgorithm is COMPRESSION_NONE.
+#
+#		#define COMPRESSION_NONE    0
+#		#define COMPRESSION_DEFLATE 1
+#
+#      The deflate algorithm is described in RFC 1951.
+
+
+######
+## Descriptor table
+######
+
+# The first section of the descriptor is the header. It provides the following
+# information about the virtual disk:
+#
+#    · version
+#
+#      The number following version is the version number of the descriptor.
+#      The default value is 1.
+#
+#    · CID
+#
+#      This line shows the content ID. It is a random 32-bit value updated the
+#      first time the content of the virtual disk is modified after the
+#      virtual disk is opened.
+#
+#      Every link header contains both a content ID and a parent content ID
+#      (described below).
+#
+#      If a link has a parent the parent content ID is the content ID of the
+#      parent link.
+#
+#      The purpose of the content ID is to check the following:
+#
+#          · In the case of a base disk with a delta link, that the parent
+#            link has not changed since the time the delta link was
+#            created. If the parent link has changed, the delta link must be
+#            invalidated.
+#
+#          · That the bottom-most link was not modified between the time the
+#            virtual machine was suspended and the time it was resumed or
+#            between the time you took a snapshot of the virtual machine and
+#            the time you reverted to the snapshot.
+#
+#    · parentCID
+#
+#      This line shows the content ID of the parent link -- the previous link
+#      in the chain -- if there is one.  If the link does not have any parent
+#      (in other words, if the link is a base disk), the parent's content ID
+#      is set to the following value:
+#
+#		#define CID_NOPARENT           (~0x0)
+#
+#    · createType
+#
+#      This line describes the type of the virtual disk. It can be one of the
+#      following:
+#
+#		monolithicSparse		fullDevice
+#		vmfsSparse			vmfsRaw
+#		monolithicFlat			partitionedDevice
+#		vmfs				vmfsRawDeviceMap
+#		twoGbMaxExtentSparse		vmfsPassthroughRawDeviceMap
+#		twoGbMaxExtentFlat		streamOptimized
+#
+#      The first six terms (left column) are used to describe various types of
+#      virtual disks.  Substrings within these names mean the following:
+#
+#      monolithic: virtual disk is contained in a single file.
+#
+#      twoGbMaxExtent: virtual disk consists of a collection of smaller files.
+#
+#      sparse: virtual disks starts small and grow to accommodate data.
+#
+#      flat: all space needed is allocated at the time they are created.
+#
+#      Terms that include 'vmfs' indicate that the disk is an ESX Server disk.
+#
+#      The terms 'fullDevice', 'vmfsRaw', and 'partitionedDevice' are used
+#      when the virtual machine is configured to make direct use of a physical
+#      disk -- either a full disk or partitions on a disk -- rather than store
+#      data in files managed by the host operating system.
+#
+#      The terms 'vmfsRawDeviceMap' and 'vmfsPassthroughRawDeviceMap' are used
+#      in headers for disks that use ESX Server raw device mapping.
+#
+#      The term 'streamOptimized' is used to describe disks that have been
+#      optimized for streaming.
+#
+#    · parentFileNameHint
+#
+#      This line, present only if the link is a delta link, contains the path
+#      to the parent of the delta link.
+
+# The extent descriptions provide the following key information:
+#
+#    * Access: RW | RDONLY | NOACCESS
+#
+#    * Size: sectors of 512 bytes
+#
+#    * Type: FLAT | SPARSE | ZERO | VMFS | VMFSSPARSE | VMFSRDM | VMFSRAW
+#
+#    * Filename: path to extent (relative to location of descriptor)
+#
+#      Note: If the type of the virtual disk, shown in the header, is
+#      fullDevice or partitionedDevice, then the filename should point to an
+#      IDE or SCSI block device. If the type of the virtual disk is vmfsRaw,
+#      the filename should point to a file in /vmfs/ devices/disks/.
+#
+#    * Offset: the offset value is specified only for flat extents and
+#      corresponds to the offset in the file or device where the guest
+#      operating system's data is located.  For preallocated virtual disks,
+#      this number is zero.  For device-backed virtual disks (physical or raw
+#      disks), it may be non-zero.
+
+# Additional information about the virtual disk is stored in the disk database
+# section of the descriptor.  Each line corresponds to one entry.  Each entry
+# is formatted as follows:
+#
+#		ddb.<nameOfEntry> = "<value of entry>"
+#
+# When the virtual disk is created, the disk database is populated with
+# entries whose names are self-explanatory and show the following information:
+#
+#    · The adapter type: ide | sata | buslogic | lsilogic | legacyESX
+#
+#      The buslogic and lsilogic values are for SCSI disks and show which
+#      virtual SCSI adapter is configured for the virtual machine.
+#
+#      The legacyESX value is for older ESX Server virtual machines when the
+#      adapter type used in creating the virtual machine is not known.
+#
+#    · The geometry -- cylinders, heads, and sectors -- are initialized with
+#      the geometry of the disk, which depends on the adapter type.
+#
+# There is one descriptor, and thus one disk database, for each link in a
+# chain.  Searches for disk database information begin in the descriptor for
+# the bottom link of the chain and work their way up the chain until the
+# information is found.
