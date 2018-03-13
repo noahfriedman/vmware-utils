@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id$
+# $Id: vsphere-clone,v 1.1 2018/03/10 02:39:10 friedman Exp $
 
 import argparse
 import atexit
@@ -105,6 +105,11 @@ def get_datastore( vm, datastore_name ):
 
     ds = get_obj( vm.content, [vim.Datastore], datastore_name )
     return ds
+
+def get_cluster( vm, cluster_name ):
+    cr = get_obj( content, [vim.ComputeResource], cluster_name )
+    return cr
+
 
 ##########
 def vmclone( template, opt, content ):
