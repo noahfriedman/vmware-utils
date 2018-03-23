@@ -1,17 +1,8 @@
 #!/usr/bin/env python
-# $Id$
+# $Id: vsphere-power-cmd,v 1.1 2018/03/23 00:54:31 friedman Exp $
 
 from __future__ import print_function
-
-import argparse
-import atexit
-import getpass
-import os
-import sys
-import ssl
-
-from pyVim   import connect as pyVconnect
-from pyVmomi import vim, vmodl
+from vspherelib import *
 
 cmds = { 'on'          : 'PowerOn',
          'off'         : 'PowerOff',
@@ -24,144 +15,27 @@ cmds = { 'on'          : 'PowerOn',
          'suspend'     : 'Suspend',
          'resume'      : 'PowerOn', }
 
-##########
-def printerr( *args, **kwargs ):
-    sep  = kwargs.get( 'sep',  ': ' )
-    end  = kwargs.get( 'end',  "\n" )
-    file = kwargs.get( 'file', sys.stderr )
-    print( *args, sep=sep, end=end, file=sys.stderr )
 
-##########
 def get_args():
-    env = os.environ
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument( '-s', '--host',     required=True,           help='Remote esxi/vcenter host to connect to' )
-    parser.add_argument( '-o', '--port',     default=443, type=int,   help='Port to connect on' )
-    parser.add_argument( '-u', '--user',     default=env['LOGNAME'],  help='User name for host connection' )
-    parser.add_argument( '-p', '--password',                          help='Server user password' )
+    parser = get_args_setup()
     parser.add_argument( '-c', '--command', required=True, choices=cmds, help='Command to perform on virtual machines')
-    parser.add_argument( 'vm', nargs='*',                             help='Names of the virtual machines to frob' )
+    parser.add_argument( 'vm', nargs='*', help='optional vm names, default display all' )
 
     args = parser.parse_args()
 
     if not args.vm:
-        printerr( 'No virtual machine specified for shutdown' )
+        printerr( 'Specify VM name(s)' )
         sys.exit (1)
 
-    if args.password:
-        pass
-    elif os.getenv( 'VMPASSWD' ):
-        args.password = os.getenv( 'VMPASSWD' )
-    else:
-        prompt = 'Enter password for %(user)s@%(host)s: ' % vars( args )
-        args.password = getpass.getpass( prompt )
-
+    parser.checkpass( args )
     return args
-
-##########
-def connect( args ):
-    try:
-        context = None
-        if hasattr( ssl, '_create_unverified_context' ):
-            context = ssl._create_unverified_context()
-
-        si = pyVconnect.SmartConnect( host = args.host,
-                                      user = args.user,
-                                      pwd  = args.password,
-                                      port = int( args.port ),
-                                      sslContext = context )
-
-    except Exception as e:
-        printerr( args.host, 'Could not connect to ESXi/vCenter server' )
-        printerr( repr( e ) )
-        sys.exit( 1 )
-
-    atexit.register( pyVconnect.Disconnect, si )
-    return si
-
-
-##########
-def taskwait( tasklist, si ):
-    spc = si.content.propertyCollector
-    vpc = vmodl.query.PropertyCollector
-
-    objSpecs   = [vpc.ObjectSpec( obj=task ) for task in tasklist]
-    propSpec   =  vpc.PropertySpec( type=vim.Task, pathSet=[], all=True )
-    filterSpec =  vpc.FilterSpec( objectSet=objSpecs, propSet=[propSpec] )
-    filter     =  spc.CreateFilter( filterSpec, True )
-
-    succ     = 1
-    taskleft = [task.info.key for task in tasklist]
-    try:
-        version, state = None, None
-
-        while len( taskleft ):
-            update = spc.WaitForUpdates( version )
-
-            for filterSet in update.filterSet:
-                for objSet in filterSet.objectSet:
-                    info = objSet.obj.info
-
-                    for change in objSet.changeSet:
-                        if change.name == 'info':
-                            state = change.val.state
-                        elif change.name == 'info.state':
-                            state = change.val
-                        else:
-                            continue
-
-                        if state == vim.TaskInfo.State.success:
-                            taskleft.remove( info.key )
-                            print( info.entityName, 'Success', sep=': ' )
-                        elif state == vim.TaskInfo.State.error:
-                            taskleft.remove( info.key )
-                            succ = 0
-                            printerr( info.entityName, info.error.msg )
-            version = update.version
-    finally:
-        if filter:
-            filter.Destroy()
-    return succ
-
-
-##########
-def filter_spec( container, props ):
-    vpc        = vmodl.query.PropertyCollector
-    travSpec   = vpc.TraversalSpec( name='traverseEntities',
-                                    path='view',
-                                    skip=False,
-                                    type=type( container ) )
-    objSpec    = [vpc.ObjectSpec( obj=container, skip=True, selectSet=[travSpec] )]
-    propSpec   = vpc.PropertySpec( type=type( container.view[0] ), pathSet=props, all=not props )
-    filterSpec = vpc.FilterSpec( objectSet=objSpec, propSet=[propSpec] )
-    return filterSpec
-
-
-##########
-def get_obj( si, vimtype, name=None, root=None, recur=True ):
-    if root is None:
-        root = si.content.rootFolder
-    cvM = si.content.viewManager
-    container = cvM.CreateContainerView( container=root, type=vimtype, recursive=recur )
-    result = None
-    if name is None:
-        result = container.view
-    else:
-        spc = si.content.propertyCollector
-        filterSpec = filter_spec( container, ['name'] )
-        res = spc.RetrieveContents( [filterSpec] )
-        if res:
-            result = [o.obj for o in res if o.propSet[0].val in name]
-    container.Destroy()
-    return result
 
 
 def main():
     args = get_args()
-    si   = connect( args )
+    si   = hconnect( args )
 
-    vmlist = get_obj( si, [vim.VirtualMachine], args.vm )
+    vmlist = get_obj( si, [vim.VirtualMachine], { 'name' : args.vm } )
     if not vmlist:
         return
 
@@ -178,9 +52,11 @@ def main():
             printerr( 'Caught Exception', str( e ))
 
     if tasklist:
-        succ = taskwait( tasklist, si )
+        succ = taskwait( si, tasklist )
         if not succ:
             sys.exit( 1 )
 
 if __name__ == '__main__':
     main()
+
+# eof
