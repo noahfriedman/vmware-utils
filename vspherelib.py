@@ -1,4 +1,4 @@
-# $Id: vspherelib.py,v 1.1 2018/03/23 07:59:19 friedman Exp $
+# $Id: vspherelib.py,v 1.2 2018/03/23 10:20:19 friedman Exp $
 
 from __future__ import print_function
 
@@ -34,6 +34,7 @@ def get_args_setup():
     parser.checkpass = getpass
 
     return parser
+
 
 def vmlist_sort_by_args( vmlist, args ):
     vmorder = dict()
@@ -149,6 +150,50 @@ def get_propset( propset, name ):
 
 def get_seq_type( obj, typeref ):
     return filter( lambda elt: issubclass( type( elt ), typeref ), obj)
+
+
+def taskwait( si, tasklist, printsucc=True ):
+    spc = si.content.propertyCollector
+    vpc = vmodl.query.PropertyCollector
+
+    objSpecs   = [vpc.ObjectSpec( obj=task ) for task in tasklist]
+    propSpec   =  vpc.PropertySpec( type=vim.Task, pathSet=[], all=True )
+    filterSpec =  vpc.FilterSpec( objectSet=objSpecs, propSet=[propSpec] )
+    filter     =  spc.CreateFilter( filterSpec, True )
+
+    succ     = 1
+    taskleft = [task.info.key for task in tasklist]
+    try:
+        version, state = None, None
+
+        while len( taskleft ):
+            update = spc.WaitForUpdates( version )
+
+            for filterSet in update.filterSet:
+                for objSet in filterSet.objectSet:
+                    info = objSet.obj.info
+
+                    for change in objSet.changeSet:
+                        if change.name == 'info':
+                            state = change.val.state
+                        elif change.name == 'info.state':
+                            state = change.val
+                        else:
+                            continue
+
+                        if state == vim.TaskInfo.State.success:
+                            taskleft.remove( info.key )
+                            if printsucc:
+                                print( info.entityName, 'Success', sep=': ' )
+                        elif state == vim.TaskInfo.State.error:
+                            taskleft.remove( info.key )
+                            succ = 0
+                            printerr( info.entityName, info.error.msg )
+            version = update.version
+    finally:
+        if filter:
+            filter.Destroy()
+    return succ
 
 
 # This doesn't just use the textwrap class because we do a few special
