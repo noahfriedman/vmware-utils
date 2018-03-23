@@ -1,4 +1,4 @@
-# $Id$
+# $Id: vspherelib.py,v 1.1 2018/03/23 07:59:19 friedman Exp $
 
 from __future__ import print_function
 
@@ -34,6 +34,17 @@ def get_args_setup():
     parser.checkpass = getpass
 
     return parser
+
+def vmlist_sort_by_args( vmlist, args ):
+    vmorder = dict()
+    i = 0
+    for name in args.vm:
+        vmorder[name] = i
+        i += 1
+    cmpfn = lambda a,b: cmp( vmorder[a.name], vmorder[b.name] )
+    if type(vmlist[0]) is vmodl.query.PropertyCollector.ObjectContent:
+        cmpfn = lambda a,b: cmp( vmorder[a.obj.name], vmorder[b.obj.name] )
+    vmlist.sort( cmp=cmpfn )
 
 
 def hconnect( args ):

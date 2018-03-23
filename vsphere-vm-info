@@ -1,208 +1,82 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-info,v 1.5 2017/11/03 06:02:39 friedman Exp $
+# $Id: vsphere-vm-info,v 1.6 2018/03/13 06:20:07 friedman Exp $
 
-from __future__    import print_function
+from __future__ import print_function
 
-import argparse
-import atexit
-import os
-import getpass
-import ssl
-import sys
-import re
+from vspherelib import *
 
-from pyVim         import connect as pyVconnect
-from pyVmomi       import vim
-
-##########
 def get_args():
-    env = os.environ
+    parser = get_args_setup()
+    parser.add_argument( '-a', '--all', action='store_true', help='Retrieve all known VMs' )
+    parser.add_argument( 'vm', nargs='*',                    help='optional vm names, default display all' )
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument( '-s', '--host',           required=True,   help='Remote host to connect to' )
-    parser.add_argument( '-o', '--port', type=int,  default=443,    help='Port to connect on' )
-    parser.add_argument( '-u', '--user',             default=env['LOGNAME'], help='User name to use when connecting to host' )
-    parser.add_argument( '-p', '--password',                         help='Password to use when connecting to host' )
-    parser.add_argument( '-a', '--all',        action='store_true',  help='Retrieve all known VMs' )
-    parser.add_argument( 'vm', nargs='*',                            help='optional vm names, default display all' )
     args = parser.parse_args()
 
     if not args.all and not args.vm:
-        print("Specify VM names or -a (--all)")
+        printerr( 'Specify VM names or -a (--all)' )
         sys.exit (1)
 
-    if args.password:
-        pass
-    elif os.getenv( 'VMPASSWD' ):
-        args.password = os.getenv( 'VMPASSWD' )
-    else:
-        prompt = 'Enter password for %(user)s@%(host)s: ' % vars( args )
-        args.password = getpass.getpass( prompt )
-
+    parser.checkpass( args )
     return args
 
-##########
-def get_obj( content, vimtype, name=None ):
-    try:              name = unicode( name, 'utf-8' )
-    except TypeError: pass
+def get_network_groupmap( si ):
+    tbl = {}
+    nets = get_obj_props( si, [vim.dvs.DistributedVirtualPortgroup], ['config'] )
+    configs = map( lambda n: n.propSet[0].val, nets )
+    for conf in configs:
+        tbl[conf.key] = conf.name
+    return tbl
 
-    cvM = content.viewManager
-    container = cvM.CreateContainerView( content.rootFolder, vimtype, True )
-    if name is None:
-        return container.view
+groupmap = None
+def get_network_label( si, nic ):
+    if hasattr( nic.backing, 'deviceName' ):
+        return nic.backing.deviceName
 
-    for obj in container.view:
-        if obj.name == name:
-            return obj
+    global groupmap
+    if not groupmap:
+        groupmap = get_network_groupmap( si )
 
-    return None
-
-##########
-def get_attr( obj, name ):
-    for elt in obj:
-        if getattr( elt, 'key' ) == name:
-            return getattr( elt, 'value' )
-
-##########
-def get_attr_dict( obj ):
-    attrs = dict()
-    for elt in obj:
-        key = getattr( elt, 'key' )
-        val = getattr( elt, 'value' )
-        attrs[key] = val
-    return attrs
-
-##########
-def get_network_label( content, nic ):
-    key = None
     if issubclass( type( nic.backing ),
                    vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo ):
         key = nic.backing.port.portgroupKey
-        for net in get_obj( content, [vim.Network] ):
-            if (hasattr( net.summary, 'network' )
-                and hasattr( net.summary.network, 'config' )
-                and net.summary.network.config.key == key):
-                return net.summary.name
-    return "unknown"
+        return getattr( groupmap, key, key )
+
+    return 'unknown'
 
 def get_vmnic_cidrs( vmnic ):
-    cidr = list()
+    if not vmnic.ipConfig:
+        return
+    cidr = []
     for ip in vmnic.ipConfig.ipAddress:
         cidr.append( ip.ipAddress + "/" + str( ip.prefixLength ) )
     return cidr
 
-##########
-def get_seq_type( obj, typeref ):
-    return filter( lambda elt: issubclass( type( elt ), typeref ), obj)
 
-##########
-def get_vm_folder( content, vm ):
-    folders  = get_obj( content, [vim.Folder] )
-    last = None
-    for folder in folders:
-        vmList = get_seq_type ( folder.childEntity, vim.VirtualMachine )
-        if vm in vmList:
-            last = folder
-            break
-    if not last:
-        return None
-    vmFolder = get_obj( content, [vim.Datacenter] )[0].vmFolder
-    folder = last
-    path = list()
-    while folder != vmFolder:
+def get_vm_folder( si, vm ):
+    if not vm.parent:
+        return
+    vmFolders = [d.vmFolder for d in get_obj( si, [vim.Datacenter] )]
+    path = []
+    folder = vm.parent
+    while folder not in vmFolders:
         path.append( folder.name )
         folder = folder.parent
-    path.append( vmFolder.parent.name )
+    path.append( folder.parent.name )
     path.reverse()
     return str.join( '/', path )
 
-
-##########
-# This doesn't just use the textwrap class because we do a few special
-# things here, such as avoiding filling command examples
-def fold_text( text, maxlen=75, indent=0 ):
-    text = text.expandtabs( 8 )
-
-    text      = re.sub( "\r", '', text )        # CRLF -> LF
-    paragraph = re.split( "\n\n", text, flags=re.M ) # Split into separate chunks.
-
-    re_ll = re.compile('(.{1,%s})(?:\s+|$)' % maxlen, flags=re.M )
-    filled = []
-    for para in paragraph:
-        if re.match( '^\s*[#$]', para):
-            filled.append( para )
-            continue
-
-        # Remove all newlines, replacing trailing/leading
-        # whitespace with a single space.
-        #para = re.sub( "\\s*\n\\s*", ' ', para, flags=re.M )
-        # Only unfill if line is >= 42 chars
-        para = re.sub( "(?<=\S{42})\\s*\n\\s*", ' ', para, flags=re.M )
-
-        # split into lines no longer than maxlen but only at whitespace.
-        para = re.sub( re_ll, "\\1\n", para )
-        # but remove final newline
-        para = re.sub( "\n+$", '', para, flags=re.M )
-        filled.append( para )
-
-    text = str.join( "\n\n", filled ) # rejoin paragraphs at the end.
-    if indent:
-        repl = "\n" + (' ' * indent)
-        text = re.sub( "\n", repl, text, flags=re.M )
-
-    return text
-
-
-##########
-def scale_size( size, fmtsize=1024 ):
-    # x & (x-1) == 0 iff x == 2^n
-    # if x == 2^n, only nth bit in x is set.
-    # subtracting 1 flips all bits via a borrow; the logical AND is zero.
-    # If x != 2^n, x-1 will flip all bits up to and including the first 1, but
-    # will not negate the entire value and an AND will not produce zero.
-    def pow2p( n ):
-        return (n & (n - 1) == 0)
-
-    suffix = ('', 'K', 'M', 'G', 'T', 'P', 'E')
-    idx = 0
-
-    ispow2 = pow2p (size)
-    if not pow2p (size) or not pow2p (fmtsize):
-        size = float( size )
-
-    while size > fmtsize:
-        size = size / fmtsize
-        idx += 1
-
-    if ispow2 and fmtsize == 1024:
-        fmtstr = "%d %s%s"
-        if size < 10: # Prefer "4096M" to "4G"
-            size *= fmtsize
-            idx -= 1
-    elif size < 100 and idx > 0:
-        fmtstr = "%.2f %s%s"
-    else:
-        fmtstr = "%d %s%s"
-
-    if pow2p( fmtsize ): unit = "iB"
-    else:                unit =  "B"
-
-    return fmtstr % (size, suffix[idx], unit)
-
-
-##########
+
 def storage_size( storage ):
     comb = storage.committed + storage.uncommitted
     return scale_size( comb )
 
-##########
 def plural( text, n ):
     if int( n ) != 1 and int( n ) != -1:
         text += 's'
     return text
 
-##########
-def print_vm( content, vm, sep="" ):
+
+def print_vm( si, vm, sep="" ):
     stdindent =  -17
     indentL    = stdindent - 3
     indentS    = " " * abs( indentL )
@@ -246,7 +120,6 @@ def print_vm( content, vm, sep="" ):
             try:    pi( farindentL, a, dic.__dict__[ b ] )
             except: pass
 
-
     vm_conf = vm.config
     hw_conf = vm_conf.hardware
 
@@ -263,7 +136,7 @@ def print_vm( content, vm, sep="" ):
     memargs = [scale_size( hw_conf.memoryMB * 1024 * 1024)]
     if vm_conf.memoryHotAddEnabled: memargs.append( 'hot add enabled' )
 
-    folder = get_vm_folder( content, vm )
+    folder = get_vm_folder( si, vm )
 
     if vm_conf.template:
         p( 'VM Name', vm.config.name, '    [TEMPLATE]' )
@@ -335,7 +208,8 @@ def print_vm( content, vm, sep="" ):
         nics = get_seq_type( hw_conf.device, vim.vm.device.VirtualEthernetCard )
         for nic in nics:
             devtype = type(nic)._wsdlName.replace('Virtual','').lower()
-            netlabel = get_network_label( content, nic )
+            netlabel = get_network_label( si, nic )
+
             pf( nic.deviceInfo.label, devtype+' on "'+netlabel+'"' , nic,
                 ( 'macAddress',
                   'wakeOnLanEnabled', ) )
@@ -344,11 +218,13 @@ def print_vm( content, vm, sep="" ):
             pi( farindentL, 'allowGuestControl', nic.connectable.allowGuestControl )
             if vm.summary.runtime.powerState == "poweredOn":
                 gnic = filter( lambda g: g.macAddress == nic.macAddress, vm.guest.net )
-                cidr = get_vmnic_cidrs( gnic[0] )
-                spc  = " " * (abs( farindentL ) + abs( indentL ) + 2)
-                pi( farindentL, 'IP Addresses', cidr[0] )
-                for ip in cidr[1:]:
-                    print( spc, ip )
+                if len( gnic ):
+                    cidr = get_vmnic_cidrs( gnic[0] )
+                    if cidr and len(cidr) > 0:
+                        spc  = " " * (abs( farindentL ) + abs( indentL ) + 2)
+                        pi( farindentL, 'IP Addresses', cidr[0] )
+                        for ip in cidr[1:]:
+                            print( spc, ip )
 
     # This is a custom key I insert into our VMs
     try:
@@ -362,7 +238,8 @@ def print_vm( content, vm, sep="" ):
         annot = fold_text( annot, maxlen=70, indent=abs( indentL ) )
         if annot.find ("\n") >= 0:
             annot = "\n" + indentS + annot
-        p( 'Annotation', annot )
+        if annot != "":
+            p( 'Annotation', annot )
     except: pass
 
     try:
@@ -372,46 +249,29 @@ def print_vm( content, vm, sep="" ):
     print( sep )
 
 
-##########
 def main():
     args = get_args()
-
-    try:
-       context = None
-       if hasattr( ssl, '_create_unverified_context' ):
-          context = ssl._create_unverified_context()
-       si = pyVconnect.SmartConnect( host = args.host,
-                                     user = args.user,
-                                     pwd  = args.password,
-                                     port = int( args.port ),
-                                     sslContext = context )
-    except Exception as e:
-        print( 'Could not connect to vCenter host' )
-        print( repr( e ) )
-        sys.exit( 1 )
-    atexit.register( pyVconnect.Disconnect, si )
-
-    content = si.RetrieveContent()
-    vmList  = get_obj( content, [vim.VirtualMachine] )
+    si   = hconnect( args )
 
     sep = '-' * 78
     if args.vm:
-        for vm in vmList:
-            if vm.name in args.vm:
-                args.vm.remove( vm.name )
-                if not args.vm:
-                    sep = ""
-                print_vm( content, vm, sep )
-                if not args.vm:
-                    break
+        vmlist = get_obj( si, [vim.VirtualMachine], { 'name' : args.vm } )
+        vmlist_sort_by_args( vmlist, args )
+        for vm in vmlist:
+            args.vm.remove( vm.name )
+            if not args.vm:
+                sep = ""
+            print_vm( si, vm, sep )
     else:
-        for vm in vmList:
-            print_vm( content, vm, sep )
+        vmlist = get_obj( si, [vim.VirtualMachine] )
+        vmlist.sort( cmp=lambda a,b: cmp( a.name, b.name ))
+        for vm in vmlist:
+            print_vm( si, vm, sep )
 
 
 ##########
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
 
 # eof
