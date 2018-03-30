@@ -1,0 +1,81 @@
+#!/usr/bin/env python
+# $Id$
+
+from __future__ import print_function
+
+from vspherelib import *
+
+def get_args():
+    parser = get_args_setup()
+    args = parser.parse_args()
+    parser.checkpass( args )
+    return args
+
+def get_propset_dict( obj ):
+    elt = {}
+    for prop in obj.propSet:
+        name = prop.name.replace( 'summary.', '' )
+        elt[name] = prop.val
+    return elt
+
+props = ['summary.name',
+         'summary.capacity',
+         'summary.freeSpace',
+         'summary.uncommitted']
+
+def cmpdsname(a, b):
+    aL = a['name'].split( '-' )
+    bL = b['name'].split( '-' )
+    i = 0
+    m = re.compile( '^([0-9]+)[MGT]B$' )
+    while i < len( aL ) and i < len( bL ):
+        ae = aL[i]
+        be = bL[i]
+        am = m.match( ae )
+        bm = m.match( be )
+        if am and bm:
+            i += 1
+            continue
+
+        res = (ae > be) - (be > ae)
+        if res != 0:
+            return res
+
+        i += 1
+    res = (len( aL ) > len( bL )) - (len( bL ) > len( aL ))
+    return res
+
+def main():
+    args = get_args()
+    si   = hconnect( args )
+
+    datastores = get_obj_props( si, [vim.Datastore], props )
+    ds = [get_propset_dict( elt ) for elt in datastores]
+
+    for elt in sorted( ds, cmp=cmpdsname ):
+        name = elt['name']
+        size = int( elt['capacity'] )
+        free = int( elt['freeSpace'] )
+        ucom = int( elt['uncommitted'] )
+
+        fmt = ' '.join(( '{0:40}',
+                         '{1[0]:>5} {1[1]:>3} total,',
+                         '{2[0]:>5} {2[1]:>3} ({3:2d}%) free,',
+                         '{4[0]:>5} {4[1]:>3} ({5:3d}%) uncommitted' ))
+        s = fmt.format( name,
+                        scale_size( size ).split( ' ' ),
+
+                        scale_size( free ).split( ' ' ),
+                        100 * free / size,
+
+                        scale_size( ucom ).split( ' '),
+                        100 * ucom / size )
+        print( s )
+
+
+##########
+
+if __name__ == '__main__':
+    main()
+
+# eof
