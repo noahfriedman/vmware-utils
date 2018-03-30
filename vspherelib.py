@@ -1,4 +1,4 @@
-# $Id: vspherelib.py,v 1.2 2018/03/23 10:20:19 friedman Exp $
+# $Id: vspherelib.py,v 1.3 2018/03/23 20:16:13 friedman Exp $
 
 from __future__ import print_function
 
@@ -240,6 +240,9 @@ def scale_size( size, fmtsize=1024 ):
     def pow2p( n ):
         return (n & (n - 1) == 0)
 
+    if size == 0:
+        return "0 B"
+
     suffix = ('', 'K', 'M', 'G', 'T', 'P', 'E')
     idx = 0
 
@@ -259,6 +262,7 @@ def scale_size( size, fmtsize=1024 ):
     elif size < 100 and idx > 0:
         fmtstr = "%.2f %s%s"
     else:
+        size = round( size )
         fmtstr = "%d %s%s"
 
     if pow2p( fmtsize ): unit = "iB"
