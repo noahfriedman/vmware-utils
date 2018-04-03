@@ -1,0 +1,65 @@
+#!/usr/bin/env python
+# $Id$
+
+from __future__ import print_function
+
+from vspherelib import *
+
+import OpenSSL
+import time
+
+def get_args():
+    parser = get_args_setup()
+    parser.add_argument( 'vm', nargs='*', help='vm names' )
+    args = parser.parse_args()
+
+    if not args.vm:
+        printerr( 'Specify VM name(s)' )
+        sys.exit (1)
+
+    parser.checkpass( args )
+    return args
+
+
+def uri_vmrc( vmrc ):
+    return 'vmrc://clone:%(session)s@%(vc_fqdn)s/?moid=%(vmoid)s' % vars( vmrc )
+
+def spawn(*args):
+    pid = os.fork()
+    if pid == 0: # child
+        os.chdir( os.getenv( 'HOME' ) )
+        os.execlp( args[0], *args )
+    else:
+        return pid
+
+def main():
+    args = get_args()
+    si   = hconnect( args )
+    content = si.content
+
+    vmrc = args
+    vmrc.serverGUID = content.about.instanceUuid
+    vmrc.session = content.sessionManager.AcquireCloneTicket()
+    vmrc.vc_fqdn = get_attr( content.setting.setting, 'VirtualCenter.FQDN' )
+
+    vc_cert      = ssl.get_server_certificate( (args.host, int( args.port )) )
+    vc_pem       = OpenSSL.crypto.load_certificate( OpenSSL.crypto.FILETYPE_PEM, vc_cert )
+    vmrc.fprint  = vc_pem.digest( 'sha1' )
+
+    vmlist = get_obj( si, [vim.VirtualMachine], { 'name' : args.vm } )
+    for vm in vmlist:
+        vmrc.vmname = vm.name
+        vmrc.vmoid  = str( vm._moId )
+        uri = uri_vmrc( vmrc )
+        pid = spawn( 'vmware', '--new-window', uri )
+
+    # Background ourselves for a while to keep session tickets active, then exit.
+    pid = os.fork()
+    if pid == 0:
+        time.sleep( 30 )
+        sys.exit( 0 )
+    else:
+        os._exit( 0 )
+
+if __name__ == '__main__':
+    main()
