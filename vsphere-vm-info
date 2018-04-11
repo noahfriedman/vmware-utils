@@ -1,14 +1,23 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-info,v 1.7 2018/03/23 10:20:19 friedman Exp $
+# vsphere-vm-info --- retrieve information about registered vm by name
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2017-11-02
+# Public domain
+
+# $Id: vsphere-vm-info,v 1.8 2018/04/11 04:56:09 friedman Exp $
+
+# Commentary:
+# Code:
 
 from __future__ import print_function
-
 from vspherelib import *
 
 def get_args():
     parser = get_args_setup()
-    parser.add_argument( '-a', '--all', action='store_true', help='Retrieve all known VMs' )
-    parser.add_argument( 'vm', nargs='*',                    help='optional vm names, default display all' )
+    parser.add_argument( '-a', '--all',     action='store_true', help='Retrieve all known VMs' )
+    parser.add_argument( '-v', '--verbose', action='store_true', help='Display extended info' )
+    parser.add_argument( 'vm', nargs='*',                        help='VM names, if not all' )
 
     args = parser.parse_args()
     if not args.all and not args.vm:
@@ -52,7 +61,6 @@ def get_vmnic_cidrs( vmnic ):
         cidr.append( ip.ipAddress + "/" + str( ip.prefixLength ) )
     return cidr
 
-
 def get_vm_folder( si, vm ):
     if not vm.parent:
         return
@@ -77,7 +85,7 @@ def plural( text, n ):
     return text
 
 
-def print_vm( si, vm, sep="" ):
+def print_vm( si, vm, args, sep="" ):
     stdindent =  -17
     indentL    = stdindent - 3
     indentS    = " " * abs( indentL )
@@ -145,12 +153,15 @@ def print_vm( si, vm, sep="" ):
         p( 'VM Name', vm.config.name )
     p( 'VM Id',       'vim.VirtualMachine:' + vm._moId )
     p( 'VM UUID',     vm.config.uuid )
+    if args.verbose:
+        p( 'Instance Id', vm.config.instanceUuid )
+        p( 'Location Id', vm.config.locationId )
+        p( 'Config modtime', vm.config.changeVersion )
     p( 'VMX',         vm.config.files.vmPathName )
     p( 'Folder',      folder )
-    #p( 'Instance Id', vm.config.instanceUuid )
-    #p( 'Location Id', vm.config.locationId )
     if vm.resourcePool:
         p( 'Resource Pool', vm.resourcePool.name )
+
     p( 'Guest type',  vm.guest.guestFullName )
     p( 'HW version',  str.replace( vm.config.version, 'vmx-', '' ))
     p( 'CPU',         numCPU, str.join( ", ", coreargs ) )
@@ -167,7 +178,7 @@ def print_vm( si, vm, sep="" ):
     if vm.summary.runtime.powerState == "poweredOn":
         p( 'Boot time', vm.summary.runtime.bootTime )
 
-    if True:
+    if args.verbose:
         pf2( 'Tools ', vm.config.tools,
              ( ('Power On' , 'afterPowerOn'),
                ('Resume'   , 'afterResume'),
@@ -177,7 +188,7 @@ def print_vm( si, vm, sep="" ):
                ('Upgrade'  , 'toolsUpgradePolicy'),
                ('syncTime' , 'syncTimeWithHost'), ))
 
-    if True:
+    if args.verbose:
         pf( 'Flags', '', vm.config.flags,
             sorted( ( 'disableAcceleration',
                       'enableLogging',
@@ -195,7 +206,7 @@ def print_vm( si, vm, sep="" ):
                       'faultToleranceType',
                       'cbrcCacheEnabled', )))
 
-    if False:
+    if args.verbose:
         pf( 'Power Ops', '', vm.config.defaultPowerOps,
             sorted( ( 'powerOffType',
                       'suspendType',
@@ -211,12 +222,15 @@ def print_vm( si, vm, sep="" ):
             devtype = type(nic)._wsdlName.replace('Virtual','').lower()
             netlabel = get_network_label( si, nic )
 
+
+
             pf( nic.deviceInfo.label, devtype+' on "'+netlabel+'"' , nic,
-                ( 'macAddress',
-                  'wakeOnLanEnabled', ) )
-            pi( farindentL, 'startConnected',    nic.connectable.startConnected )
-            pi( farindentL, 'connected',         nic.connectable.connected )
-            pi( farindentL, 'allowGuestControl', nic.connectable.allowGuestControl )
+                ( 'macAddress', ) )
+            if args.verbose:
+                pi( farindentL, 'wakeOnLanEnabled',  nic.wakeOnLanEnabled )
+                pi( farindentL, 'startConnected',    nic.connectable.startConnected )
+                pi( farindentL, 'connected',         nic.connectable.connected )
+                pi( farindentL, 'allowGuestControl', nic.connectable.allowGuestControl )
             if vm.summary.runtime.powerState == "poweredOn":
                 gnic = filter( lambda g: g.macAddress == nic.macAddress, vm.guest.net )
                 if len( gnic ):
@@ -228,11 +242,10 @@ def print_vm( si, vm, sep="" ):
                             print( spc, ip )
 
     # This is a custom key I insert into our VMs
-    try:
-        p( 'Guest json', extraConfig['guestinfo.json'] )
-    except: pass
-
-    #p( 'Config modtime', vm.config.changeVersion )
+    if args.verbose:
+        try:
+            p( 'Guest json', extraConfig['guestinfo.json'] )
+        except: pass
 
     try:
         annot = vm.config.annotation
@@ -262,12 +275,12 @@ def main():
             args.vm.remove( vm.name )
             if not args.vm:
                 sep = ""
-            print_vm( si, vm, sep )
+            print_vm( si, vm, args, sep=sep )
     else:
         vmlist = get_obj( si, [vim.VirtualMachine] )
-        vmlist.sort( cmp=lambda a,b: cmp( a.name, b.name ))
+        vmlist.sort( cmp=lambda a, b: cmp( a.name, b.name ))
         for vm in vmlist:
-            print_vm( si, vm, sep )
+            print_vm( si, vm, args, sep=sep )
 
 
 ##########
