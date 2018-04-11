@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-console-uri,v 1.2 2017/11/03 05:27:08 friedman Exp $
+# $Id: vsphere-console-uri,v 1.3 2018/03/23 20:00:21 friedman Exp $
 
 from __future__ import print_function
 
@@ -10,15 +10,13 @@ import time
 
 def get_args():
     parser = get_args_setup()
-    parser.add_argument( 'vm', nargs='*',                    help='optional vm names, default display all' )
+    parser.add_argument( 'vm', nargs='*', help='optional vm names, default display all' )
 
     args = parser.parse_args()
-
     if not args.vm:
         printerr( 'Specify VM name' )
         sys.exit (1)
 
-    parser.checkpass( args )
     return args
 
 

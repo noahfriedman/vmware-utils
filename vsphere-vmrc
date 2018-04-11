@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id$
+# $Id: vsphere-vmrc,v 1.1 2018/04/03 23:38:42 friedman Exp $
 
 from __future__ import print_function
 
@@ -12,12 +12,10 @@ def get_args():
     parser = get_args_setup()
     parser.add_argument( 'vm', nargs='*', help='vm names' )
     args = parser.parse_args()
-
     if not args.vm:
         printerr( 'Specify VM name(s)' )
         sys.exit (1)
 
-    parser.checkpass( args )
     return args
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-info,v 1.6 2018/03/13 06:20:07 friedman Exp $
+# $Id: vsphere-vm-info,v 1.7 2018/03/23 10:20:19 friedman Exp $
 
 from __future__ import print_function
 
@@ -11,12 +11,10 @@ def get_args():
     parser.add_argument( 'vm', nargs='*',                    help='optional vm names, default display all' )
 
     args = parser.parse_args()
-
     if not args.all and not args.vm:
         printerr( 'Specify VM names or -a (--all)' )
         sys.exit (1)
 
-    parser.checkpass( args )
     return args
 
 def get_network_groupmap( si ):
@@ -39,7 +37,10 @@ def get_network_label( si, nic ):
     if issubclass( type( nic.backing ),
                    vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo ):
         key = nic.backing.port.portgroupKey
-        return getattr( groupmap, key, key )
+        if key in groupmap:
+            return groupmap[key]
+        else:
+            return key
 
     return 'unknown'
 

@@ -1,4 +1,4 @@
-# $Id: vspherelib.py,v 1.3 2018/03/23 20:16:13 friedman Exp $
+# $Id: vspherelib.py,v 1.4 2018/03/30 07:04:33 friedman Exp $
 
 from __future__ import print_function
 
@@ -14,27 +14,62 @@ from pyVim   import connect as pyVconnect
 from pyVmomi import vim, vmodl
 
 
-def get_args_setup():
-    env = os.environ
+class _Option(): pass
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument( '-s', '--host',     required=True,           help='Remote esxi/vcenter host to connect to' )
-    parser.add_argument( '-o', '--port',     default=443, type=int,   help='Port to connect on' )
-    parser.add_argument( '-u', '--user',     default=env['LOGNAME'],  help='User name for host connection' )
-    parser.add_argument( '-p', '--password',                          help='Server user password' )
+class MyArgumentParser( argparse.ArgumentParser ):
+    searchpath = ['XDG_CONFIG_HOME', 'HOME']
+    rcname     = '/.vspherelibrc.py'
 
-    def getpass( args ):
+    def __init__( self ):
+        super( self.__class__, self ).__init__()
+        opt = self.loadrc()
+        self.add_argument( '-s', '--host',     default=opt.host,           help='Remote esxi/vcenter host to connect to' )
+        self.add_argument( '-o', '--port',     default=opt.port, type=int, help='Port to connect on' )
+        self.add_argument( '-u', '--user',     default=opt.user,           help='User name for host connection' )
+        self.add_argument( '-p', '--password', default=opt.password,       help='Server user password' )
+
+    def loadrc( self ):
+        opt = _Option()
+        opt.host     = None
+        opt.port     = 443
+        opt.user     = os.getenv( 'LOGNAME' )
+        opt.password = None
+
+        if os.getenv( 'VSPHERELIBRC' ):
+            try:
+                execfile( os.getenv( 'VSPHERELIBRC' ) )
+            except IOError:
+                pass
+            return opt
+        else:
+            for env in self.searchpath:
+                if env in os.environ:
+                    try:
+                        execfile( os.environ[env] + self.rcname )
+                    except IOError:
+                        continue
+                    return opt
+
+    def parse_args( self ):
+        args = super( self.__class__, self ).parse_args()
+
+        if not args.host:
+            printerr( 'Server host is required' )
+            sys.exit (1)
+
         if args.password:
-            return
+            return args
         elif os.getenv( 'VMPASSWD' ):
             args.password = os.getenv( 'VMPASSWD' )
         else:
             prompt = 'Enter password for %(user)s@%(host)s: ' % vars( args )
             args.password = getpass.getpass( prompt )
-    parser.checkpass = getpass
 
-    return parser
+        return args
 
+
+def get_args_setup():
+    return MyArgumentParser()
 
 def vmlist_sort_by_args( vmlist, args ):
     vmorder = dict()

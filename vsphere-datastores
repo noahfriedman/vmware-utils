@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-datastores,v 1.1 2018/03/30 07:03:36 friedman Exp $
+# $Id: vsphere-datastores,v 1.2 2018/03/30 07:09:55 friedman Exp $
 
 from __future__ import print_function
 
@@ -8,7 +8,6 @@ from vspherelib import *
 def get_args():
     parser = get_args_setup()
     args = parser.parse_args()
-    parser.checkpass( args )
     return args
 
 def get_propset_dict( obj ):
