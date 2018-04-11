@@ -1,4 +1,13 @@
-# $Id: vspherelib.py,v 1.4 2018/03/30 07:04:33 friedman Exp $
+# vspherelib.py --- convenience functions for vsphere client applications
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2017-10-31
+# Public domain
+
+# $Id: vspherelib.py,v 1.5 2018/04/11 04:56:09 friedman Exp $
+
+# Commentary:
+# Code:
 
 from __future__ import print_function
 
@@ -18,7 +27,7 @@ class _Option(): pass
 
 class MyArgumentParser( argparse.ArgumentParser ):
     searchpath = ['XDG_CONFIG_HOME', 'HOME']
-    rcname     = '/.vspherelibrc.py'
+    rcname     = '.vspherelibrc.py'
 
     def __init__( self ):
         super( self.__class__, self ).__init__()
@@ -28,6 +37,9 @@ class MyArgumentParser( argparse.ArgumentParser ):
         self.add_argument( '-u', '--user',     default=opt.user,           help='User name for host connection' )
         self.add_argument( '-p', '--password', default=opt.password,       help='Server user password' )
 
+    # The rc file can manipulate this 'opt' variable; for example it could
+    # provide a default for the host via:
+    # 	opt.host = 'vcenter1.mydomain.com'
     def loadrc( self ):
         opt = _Option()
         opt.host     = None
@@ -45,7 +57,7 @@ class MyArgumentParser( argparse.ArgumentParser ):
             for env in self.searchpath:
                 if env in os.environ:
                     try:
-                        execfile( os.environ[env] + self.rcname )
+                        execfile( os.environ[env] + "/" + self.rcname )
                     except IOError:
                         continue
                     return opt
@@ -55,7 +67,7 @@ class MyArgumentParser( argparse.ArgumentParser ):
 
         if not args.host:
             printerr( 'Server host is required' )
-            sys.exit (1)
+            sys.exit( 1 )
 
         if args.password:
             return args
@@ -75,12 +87,12 @@ def vmlist_sort_by_args( vmlist, args ):
     vmorder = dict()
     i = 0
     for name in args.vm:
-        vmorder[name] = i
+        vmorder[ name ] = i
         i += 1
-    cmpfn = lambda a,b: cmp( vmorder[a.name], vmorder[b.name] )
-    if type(vmlist[0]) is vmodl.query.PropertyCollector.ObjectContent:
-        cmpfn = lambda a,b: cmp( vmorder[a.obj.name], vmorder[b.obj.name] )
-    vmlist.sort( cmp=cmpfn )
+    cmp_fn = lambda a, b: cmp( vmorder[ a.name ], vmorder[ b.name ] )
+    if type( vmlist[ 0 ] ) is vmodl.query.PropertyCollector.ObjectContent:
+        cmp_fn = lambda a, b: cmp( vmorder[ a.obj.name ], vmorder[ b.obj.name ] )
+    vmlist.sort( cmp=cmp_fn )
 
 
 def hconnect( args ):
@@ -105,18 +117,18 @@ def hconnect( args ):
 
 
 def filter_spec( container, props ):
-    if type(props) is dict:
+    if type( props ) is dict:
         props = props.keys()
-    elif type(props) is str:
-        props = [props]
+    elif type( props ) is str:
+        props = [ props ]
 
     vpc        = vmodl.query.PropertyCollector
     travSpec   = vpc.TraversalSpec( name='traverseEntities',
                                     path='view',
                                     skip=False,
                                     type=type( container ) )
-    objSpec    = [vpc.ObjectSpec( obj=container, skip=True, selectSet=[travSpec] )]
-    propSpec   = vpc.PropertySpec( type=type( container.view[0] ),
+    objSpec    = [ vpc.ObjectSpec( obj=container, skip=True, selectSet=[ travSpec ] ) ]
+    propSpec   = vpc.PropertySpec( type=type( container.view[ 0 ] ),
                                    pathSet=props,
                                    all=not props and not len( props ))
     filterSpec = vpc.FilterSpec( objectSet=objSpec, propSet=[propSpec] )
@@ -134,7 +146,7 @@ def get_obj_props( si, vimtype, props=None, root=None, recur=True ):
     else:
         spc = si.content.propertyCollector
         filterSpec = filter_spec( container, props )
-        res = spc.RetrieveContents( [filterSpec] )
+        res = spc.RetrieveContents( [ filterSpec ] )
         if res:
             if type( props ) is dict:
                 match = []
@@ -155,7 +167,7 @@ def get_obj( *args, **kwargs):
     result = get_obj_props( *args, **kwargs )
     if result:
         if kwargs.get( 'props' ) or len(args) > 2:
-            return [elt.obj for elt in result]
+            return [ elt.obj for elt in result ]
         else:
             return result
 
@@ -171,7 +183,7 @@ def get_attr_dict( obj ):
     for elt in obj:
         key = getattr( elt, 'key' )
         val = getattr( elt, 'value' )
-        attrs[key] = val
+        attrs[ key ] = val
     return attrs
 
 
@@ -180,7 +192,7 @@ def get_propset( propset, name ):
         propset = propset.propSet
     search = filter( lambda elt: elt.name == name, propset )
     if search and len( search ) > 0:
-        return search[0].val
+        return search[ 0 ].val
 
 
 def get_seq_type( obj, typeref ):
@@ -191,13 +203,13 @@ def taskwait( si, tasklist, printsucc=True ):
     spc = si.content.propertyCollector
     vpc = vmodl.query.PropertyCollector
 
-    objSpecs   = [vpc.ObjectSpec( obj=task ) for task in tasklist]
+    objSpecs   = [ vpc.ObjectSpec( obj=task ) for task in tasklist ]
     propSpec   =  vpc.PropertySpec( type=vim.Task, pathSet=[], all=True )
-    filterSpec =  vpc.FilterSpec( objectSet=objSpecs, propSet=[propSpec] )
+    filterSpec =  vpc.FilterSpec( objectSet=objSpecs, propSet=[ propSpec ] )
     filter     =  spc.CreateFilter( filterSpec, True )
 
     succ     = 1
-    taskleft = [task.info.key for task in tasklist]
+    taskleft = [ task.info.key for task in tasklist ]
     try:
         version, state = None, None
 
