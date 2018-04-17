@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.6 2018/04/11 19:23:51 friedman Exp $
+# $Id: vspherelib.py,v 1.7 2018/04/17 03:06:29 friedman Exp $
 
 # Commentary:
 # Code:
@@ -202,11 +202,10 @@ def get_obj_props( si, vimtype, props=None, root=None, recursive=True ):
 
 def get_obj( *args, **kwargs):
     result = get_obj_props( *args, **kwargs )
-    if result:
-        if kwargs.get( 'props' ) or len( args ) > 2:
-            return result
-        else:
-            return [ elt[ 'obj' ] for elt in result ]
+    if kwargs.get( 'props' ) or len( args ) > 2:
+        return [ elt[ 'obj' ] for elt in result ]
+    else:
+        return result
 
 
 def get_attr( obj, name ):
@@ -297,7 +296,7 @@ def vmlist_find( si, *names ):
     sortord = list( args )
     found = []
 
-    vmlist = get_obj( si, [vim.VirtualMachine], { 'name' : args } )
+    vmlist = get_obj_props( si, [vim.VirtualMachine], { 'name' : args } )
     if vmlist:
         for vm in vmlist:
             found.append( vm[ 'obj' ] )
@@ -338,7 +337,7 @@ def vmlist_sort_by_args( vmlist, args ):
 def get_vm_folder_path( si, vm ):
     if not vm.parent:
         return
-    vmFolders = [d[ 'vmFolder' ] for d in get_obj( si, [vim.Datacenter], [ 'vmFolder' ] )]
+    vmFolders = [d[ 'vmFolder' ] for d in get_obj_props( si, [vim.Datacenter], [ 'vmFolder' ] )]
     path = []
     folder = vm.parent
     while folder not in vmFolders:
