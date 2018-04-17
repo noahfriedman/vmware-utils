@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.8 2018/04/11 04:56:09 friedman Exp $
+# $Id: vsphere-vm-info,v 1.9 2018/04/11 19:46:02 friedman Exp $
 
 # Commentary:
 # Code:
@@ -26,54 +26,6 @@ def get_args():
 
     return args
 
-def get_network_groupmap( si ):
-    tbl = {}
-    nets = get_obj_props( si, [vim.dvs.DistributedVirtualPortgroup], ['config'] )
-    configs = map( lambda n: n.propSet[0].val, nets )
-    for conf in configs:
-        tbl[conf.key] = conf.name
-    return tbl
-
-groupmap = None
-def get_network_label( si, nic ):
-    if hasattr( nic.backing, 'deviceName' ):
-        return nic.backing.deviceName
-
-    global groupmap
-    if not groupmap:
-        groupmap = get_network_groupmap( si )
-
-    if issubclass( type( nic.backing ),
-                   vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo ):
-        key = nic.backing.port.portgroupKey
-        if key in groupmap:
-            return groupmap[key]
-        else:
-            return key
-
-    return 'unknown'
-
-def get_vmnic_cidrs( vmnic ):
-    if not vmnic.ipConfig:
-        return
-    cidr = []
-    for ip in vmnic.ipConfig.ipAddress:
-        cidr.append( ip.ipAddress + "/" + str( ip.prefixLength ) )
-    return cidr
-
-def get_vm_folder( si, vm ):
-    if not vm.parent:
-        return
-    vmFolders = [d.vmFolder for d in get_obj( si, [vim.Datacenter] )]
-    path = []
-    folder = vm.parent
-    while folder not in vmFolders:
-        path.append( folder.name )
-        folder = folder.parent
-    path.append( folder.parent.name )
-    path.reverse()
-    return str.join( '/', path )
-
 
 def storage_size( storage ):
     comb = storage.committed + storage.uncommitted
@@ -83,7 +35,6 @@ def plural( text, n ):
     if int( n ) != 1 and int( n ) != -1:
         text += 's'
     return text
-
 
 def print_vm( si, vm, args, sep="" ):
     stdindent =  -17
@@ -145,12 +96,16 @@ def print_vm( si, vm, args, sep="" ):
     memargs = [scale_size( hw_conf.memoryMB * 1024 * 1024)]
     if vm_conf.memoryHotAddEnabled: memargs.append( 'hot add enabled' )
 
-    folder = get_vm_folder( si, vm )
+    folder = get_vm_folder_path( si, vm )
 
     if vm_conf.template:
         p( 'VM Name', vm.config.name, '    [TEMPLATE]' )
     else:
         p( 'VM Name', vm.config.name )
+        hn = vm.guest.hostName
+        if hn and hn != vm.config.name:
+            p( 'VM Guest Name', hn )
+
     p( 'VM Id',       'vim.VirtualMachine:' + vm._moId )
     p( 'VM UUID',     vm.config.uuid )
     if args.verbose:
@@ -221,16 +176,15 @@ def print_vm( si, vm, args, sep="" ):
         for nic in nics:
             devtype = type(nic)._wsdlName.replace('Virtual','').lower()
             netlabel = get_network_label( si, nic )
-
-
-
             pf( nic.deviceInfo.label, devtype+' on "'+netlabel+'"' , nic,
                 ( 'macAddress', ) )
+
             if args.verbose:
                 pi( farindentL, 'wakeOnLanEnabled',  nic.wakeOnLanEnabled )
                 pi( farindentL, 'startConnected',    nic.connectable.startConnected )
                 pi( farindentL, 'connected',         nic.connectable.connected )
                 pi( farindentL, 'allowGuestControl', nic.connectable.allowGuestControl )
+
             if vm.summary.runtime.powerState == "poweredOn":
                 gnic = filter( lambda g: g.macAddress == nic.macAddress, vm.guest.net )
                 if len( gnic ):
@@ -269,10 +223,9 @@ def main():
 
     sep = '-' * 78
     if args.vm:
-        vmlist = get_obj( si, [vim.VirtualMachine], { 'name' : args.vm } )
-        vmlist_sort_by_args( vmlist, args )
+        vmlist = vmlist_find( si, args.vm )
         for vm in vmlist:
-            args.vm.remove( vm.name )
+            args.vm.pop()
             if not args.vm:
                 sep = ""
             print_vm( si, vm, args, sep=sep )
