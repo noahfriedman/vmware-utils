@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.5 2018/04/11 04:56:09 friedman Exp $
+# $Id: vspherelib.py,v 1.6 2018/04/11 19:23:51 friedman Exp $
 
 # Commentary:
 # Code:
@@ -18,14 +18,30 @@ import os
 import sys
 import ssl
 import re
+import time
 
 from pyVim   import connect as pyVconnect
 from pyVmomi import vim, vmodl
 
 
-class _Option(): pass
+class _timer:
+    enabled = os.getenv( 'VSPHERELIB_DEBUG' ) is not None
 
+    def __init__( self, label ):
+        if not self.enabled: return
+        self.label = label
+        self.start = time.clock()
+
+    def report( self ):
+        if not self.enabled: return
+        end   = time.clock()
+        total = end - self.start
+        print( '{0}: {1}s'.format( self.label, total ))
+
+
 class MyArgumentParser( argparse.ArgumentParser ):
+    class _Option(): pass  # just a container
+
     searchpath = ['XDG_CONFIG_HOME', 'HOME']
     rcname     = '.vspherelibrc.py'
 
@@ -41,7 +57,7 @@ class MyArgumentParser( argparse.ArgumentParser ):
     # provide a default for the host via:
     # 	opt.host = 'vcenter1.mydomain.com'
     def loadrc( self ):
-        opt = _Option()
+        opt          = self._Option()
         opt.host     = None
         opt.port     = 443
         opt.user     = os.getenv( 'LOGNAME' )
@@ -79,23 +95,12 @@ class MyArgumentParser( argparse.ArgumentParser ):
 
         return args
 
-
 def get_args_setup():
     return MyArgumentParser()
 
-def vmlist_sort_by_args( vmlist, args ):
-    vmorder = dict()
-    i = 0
-    for name in args.vm:
-        vmorder[ name ] = i
-        i += 1
-    cmp_fn = lambda a, b: cmp( vmorder[ a.name ], vmorder[ b.name ] )
-    if type( vmlist[ 0 ] ) is vmodl.query.PropertyCollector.ObjectContent:
-        cmp_fn = lambda a, b: cmp( vmorder[ a.obj.name ], vmorder[ b.obj.name ] )
-    vmlist.sort( cmp=cmp_fn )
-
 
 def hconnect( args ):
+    timer = _timer( 'hconnect' )
     try:
         context = None
         if hasattr( ssl, '_create_unverified_context' ):
@@ -112,11 +117,12 @@ def hconnect( args ):
         printerr( repr( e ) )
         sys.exit( 1 )
 
+    timer.report()
     atexit.register( pyVconnect.Disconnect, si )
     return si
 
 
-def filter_spec( container, props ):
+def create_filter_spec( container, props ):
     if type( props ) is dict:
         props = props.keys()
     elif type( props ) is str:
@@ -127,49 +133,80 @@ def filter_spec( container, props ):
                                     path='view',
                                     skip=False,
                                     type=type( container ) )
-    objSpec    = [ vpc.ObjectSpec( obj=container, skip=True, selectSet=[ travSpec ] ) ]
+    objSpec    = vpc.ObjectSpec( obj=container, skip=True, selectSet=[ travSpec ] )
     propSpec   = vpc.PropertySpec( type=type( container.view[ 0 ] ),
                                    pathSet=props,
-                                   all=not props and not len( props ))
-    filterSpec = vpc.FilterSpec( objectSet=objSpec, propSet=[propSpec] )
+                                   all=not props or not len( props ))
+    filterSpec = vpc.FilterSpec( objectSet=[ objSpec ], propSet=[ propSpec ] )
     return filterSpec
 
 
-def get_obj_props( si, vimtype, props=None, root=None, recur=True ):
+def create_container_view( si, type, root=None, recursive=True ):
     if root is None:
         root = si.content.rootFolder
-    cvM = si.content.viewManager
-    container = cvM.CreateContainerView( container=root, type=vimtype, recursive=recur )
+    return si.content.viewManager.CreateContainerView(
+        container = root,
+        type      = type,
+        recursive = recursive )
+
+
+def create_list_view( si, *objs ):
+    return si.content.viewManager.CreateListView( obj=objs )
+
+
+def get_obj_props( si, vimtype, props=None, root=None, recursive=True ):
+    container    = None
+    gc_container = False
+    if any( map( lambda c: issubclass( type( vimtype ), c),
+                 ( vim.view.ListView, vim.view.ContainerView ))):
+        container = vimtype
+    else:
+        container = create_container_view(
+            si, vimtype, root=root, recursive=recursive )
+        gc_container = True
+
     result = None
     if props is None:
         result = container.view
     else:
         spc = si.content.propertyCollector
-        filterSpec = filter_spec( container, props )
+        filterSpec = create_filter_spec( container, props )
+        #opt = vmodl.query.PropertyCollector.RetrieveOptions()
+        # Would need to loop here.
+        #pres = spc.RetrievePropertiesEx( specSet=[ filterSpec ], options=opt )
+        timer = _timer( 'RetrieveContents' )
         res = spc.RetrieveContents( [ filterSpec ] )
+        timer.report()
         if res:
-            if type( props ) is dict:
-                match = []
-                for r in res:
+            match = []
+            for r in res:
+                if type( props ) is dict:
                     for prop in r.propSet:
                         want = props.get( prop.name )
                         if want and prop.val in want:
                             match.append( r )
-                if len( match ) > 0:
-                    result = match
-            else:
-                result = res
-    container.Destroy()
+                            break
+                else:
+                    match.append( r )
+            if len( match ) > 0:
+                result = []
+                for m in match:
+                    elt = get_propset_dict( m.propSet )
+                    elt[ 'obj' ] = m.obj
+                    result.append( elt )
+
+    if gc_container:
+        container.Destroy()
     return result
 
 
 def get_obj( *args, **kwargs):
     result = get_obj_props( *args, **kwargs )
     if result:
-        if kwargs.get( 'props' ) or len(args) > 2:
-            return [ elt.obj for elt in result ]
-        else:
+        if kwargs.get( 'props' ) or len( args ) > 2:
             return result
+        else:
+            return [ elt[ 'obj' ] for elt in result ]
 
 
 def get_attr( obj, name ):
@@ -193,6 +230,14 @@ def get_propset( propset, name ):
     search = filter( lambda elt: elt.name == name, propset )
     if search and len( search ) > 0:
         return search[ 0 ].val
+
+def get_propset_dict( propset ):
+    if type( propset ) is vmodl.query.PropertyCollector.ObjectContent:
+        propset = propset.propSet
+    _dict = dict()
+    for prop in propset:
+        _dict[ prop.name ] = prop.val
+    return _dict
 
 
 def get_seq_type( obj, typeref ):
@@ -241,6 +286,105 @@ def taskwait( si, tasklist, printsucc=True ):
         if filter:
             filter.Destroy()
     return succ
+
+
+def vmlist_find( si, *names ):
+    args = None # make copy of names since we alter
+    if type( names[0] ) is not str:
+        args = list( names[0] )
+    else:
+        args = list( names )
+    sortord = list( args )
+    found = []
+
+    vmlist = get_obj( si, [vim.VirtualMachine], { 'name' : args } )
+    if vmlist:
+        for vm in vmlist:
+            found.append( vm[ 'obj' ] )
+            args.remove( vm[ 'name' ] )
+
+    if len( args ) > 0:
+        search = si.content.searchIndex
+        for vmname in args:
+            i = sortord.index( vmname )
+            sortord.pop( i )
+
+            res = search.FindByDnsName( vmSearch=True, dnsName=vmname )
+            if res:
+                found.append( res )
+                sortord.insert( i, res.name )
+            else:
+                res = search.FindByIp( vmSearch=True, ip=vmname )
+                if res:
+                    found.append( res )
+                    sortord.insert( i, res.name )
+
+    vmlist_sort_by_args( found, sortord )
+    return found
+
+
+def vmlist_sort_by_args( vmlist, args ):
+    vmorder = dict()
+    i = 0
+    for name in args:
+        vmorder[ name ] = i
+        i += 1
+    cmp_fn = lambda a, b: cmp( vmorder[ a.name ], vmorder[ b.name ] )
+    if type( vmlist[ 0 ] ) is vmodl.query.PropertyCollector.ObjectContent:
+        cmp_fn = lambda a, b: cmp( vmorder[ a.obj.name ], vmorder[ b.obj.name ] )
+    vmlist.sort( cmp=cmp_fn )
+
+
+def get_vm_folder_path( si, vm ):
+    if not vm.parent:
+        return
+    vmFolders = [d[ 'vmFolder' ] for d in get_obj( si, [vim.Datacenter], [ 'vmFolder' ] )]
+    path = []
+    folder = vm.parent
+    while folder not in vmFolders:
+        path.append( folder.name )
+        folder = folder.parent
+    path.append( folder.parent.name )
+    path.reverse()
+    return str.join( '/', path )
+
+
+def get_network_groupmap( si ):
+    tbl = {}
+    nets = get_obj_props( si, [vim.dvs.DistributedVirtualPortgroup], ['config'] )
+    for elt in nets:
+        conf = elt[ 'config' ]
+        tbl[ conf.key ] = conf.name
+    return tbl
+
+_groupmap = None
+def get_network_label( si, nic ):
+    if hasattr( nic.backing, 'deviceName' ):
+        return nic.backing.deviceName
+
+    global _groupmap
+    if not _groupmap:
+        _groupmap = get_network_groupmap( si )
+
+    if issubclass( type( nic.backing ),
+                   vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo ):
+        key = nic.backing.port.portgroupKey
+        if key in _groupmap:
+            return _groupmap[ key ]
+        else:
+            return key
+    return 'unknown'
+
+
+# a vmnic is any vim.vm.device.VirtualEthernetCard type element
+# from vm.config.hardware.device
+def get_vmnic_cidrs( vmnic ):
+    if not vmnic.ipConfig:
+        return
+    cidr = []
+    for ip in vmnic.ipConfig.ipAddress:
+        cidr.append( ip.ipAddress + "/" + str( ip.prefixLength ) )
+    return cidr
 
 
 # This doesn't just use the textwrap class because we do a few special
