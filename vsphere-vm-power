@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-power-cmd,v 1.2 2018/03/23 20:12:39 friedman Exp $
+# $Id: vsphere-power-cmd,v 1.3 2018/04/11 04:56:09 friedman Exp $
 
 from __future__ import print_function
 from vspherelib import *
@@ -37,7 +37,7 @@ def main():
     if not vmlist:
         return
 
-    op = getattr( type( vmlist[0] ), cmds[args.command] )
+    op = getattr( type( vmlist[ 0 ] ), cmds[args.command] )
     tasklist = []
     for vm in vmlist:
         try:
