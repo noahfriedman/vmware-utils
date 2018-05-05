@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.9 2018/04/11 19:46:02 friedman Exp $
+# $Id: vsphere-vm-info,v 1.10 2018/04/17 02:50:57 friedman Exp $
 
 # Commentary:
 # Code:
@@ -83,7 +83,7 @@ def print_vm( si, vm, args, sep="" ):
     vm_conf = vm.config
     hw_conf = vm_conf.hardware
 
-    extraConfig = get_attr_dict( vm_conf.extraConfig )
+    extraConfig = attr_to_dict( vm_conf.extraConfig )
 
     numCPU = hw_conf.numCPU
     coreargs = [plural( 'core', numCPU )]
