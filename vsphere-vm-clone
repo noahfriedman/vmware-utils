@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-clone,v 1.2 2018/03/13 06:22:25 friedman Exp $
+# $Id: vsphere-clone,v 1.3 2018/04/11 04:55:43 friedman Exp $
 
 from __future__ import print_function
 from vspherelib import *
@@ -15,10 +15,10 @@ def get_args():
     parser = get_args_setup()
     parser.add_argument(       '--template',  required=True, help='Name of template or vm to clone from' )
     parser.add_argument( '-v', '--vm-name',   required=True, help='Name for new vm' )
-    parser.add_argument( '--vm-folder',       required=True, help='(optional) Path of vSphere folder for vm to appear' )
-    parser.add_argument( '--resource-pool',                  help='Resource pool for vm' )
+    parser.add_argument( '--vm-folder',       required=True, help='Path of vSphere folder for vm to appear' )
+    parser.add_argument( '--pool',                           help='Resource pool for vm' )
     parser.add_argument( '--datacenter',                     help='Name of the datacenter to use' )
-    parser.add_argument( '--datastore',       required=True, help='Name of datastore for vm storage' )
+    parser.add_argument( '--datastore',                      help='Name of datastore for vm storage' )
     parser.add_argument( '--cluster',                        help='Name of the cluster or hypervisor host for new vm' )
 
     args = parser.parse_args()
@@ -26,77 +26,82 @@ def get_args():
 
 
 ##########
-def get_folder( vm, path ):
-    dc         = get_obj( vm.si, [vim.Datacenter] )
-    rootFolder = dc[0].vmFolder
-    folder     = rootFolder
 
-    for subdir in path.split( "/" ):
-        folder = get_obj( vm.si, [vim.Folder], { 'name' : subdir }, root=folder, recur=False )
-        if not folder:
-            return rootFolder
+# If name is null but there is only one object of that type anyway, just return that.
+def _get_single_vim( si, vimtype, label, name ):
+    def err( *msg ):
+        printerr( *msg )
+        printerr( 'Available %ss:' % (label) )
+        res = get_obj( si, vimtype )
+        names = [elt.name for elt in res]
+        for n in sorted( names ):
+            printerr( "\t" + n )
+        exit( 1 )
+    res = None
+    if name:
+        res = get_obj( si, vimtype, { 'name' : name } )
+        if res is None:
+            err( name, '%s not found.' % (label) )
+        if len( res ) > 1:
+            err( name, 'name is not unique.' )
+    else:
+        res = get_obj( si, vimtype )
+        if res is None:
+            raise LookupError, "No %ss found!" % ( label )
+        if len( res ) > 1:
+            err( 'More than one %s exists; specify %s to use.' % ( label, label ))
+    return res[0]
 
-    return folder
 
-##########
-def get_datastore( vm, datastore_name ):
-    if not datastore_name:
-        datastore_name = vm.template.datastore[0].info.name
-    ds = get_obj( vm.si, [vim.Datastore], { 'name' : datastore_name } )
-    return ds
+def get_datacenter( si, name ):
+    return _get_single_vim( si, [vim.Datacenter], 'datacenter', name )
 
-def get_cluster( vm, cluster_name ):
-    cr = get_obj( vm.si, [vim.ComputeResource], { 'name' : cluster_name } )
-    return cr
+def get_datastore( si, name ):
+    return _get_single_vim( si, [vim.Datastore], 'datastore', name )
+
+def get_cluster( si, name ):
+    return _get_single_vim( si, [vim.ComputeResource], 'cluster', name )
+
+def get_pool( si, name ):
+    return _get_single_vim( si, [vim.ResourcePool], 'resource pool', name )
 
 
 ##########
 def vmclone( si, template, opt ):
     vm = Stuff()
-    vm.opt        = opt
-    vm.si         = si
-    vm.template   = template
 
-    vm.datacenter = get_obj( si, [vim.Datacenter], { 'name' : opt.datacenter } )
-    vm.datastore  = get_datastore( vm, opt.datastore )
-    vm.folder     = get_folder(    vm, opt.vm_folder )
-    vm.cluster    = get_cluster(   vm, opt.cluster)
+    datacenter = get_datacenter( si, opt.datacenter )
+    datastore  = get_datastore(  si, opt.datastore )
+    folder     = path_to_folder( si, opt.vm_folder )
+    cluster    = get_cluster(    si, opt.cluster)
 
-    #     if resource_pool:
-    #         resource_pool = get_obj(content, [vim.ResourcePool], resource_pool)
-    #     else:
-    #         resource_pool = cluster.resourcePool
-
-    vmconf = vim.vm.ConfigSpec()
-
-    # FIXME
-    computeResource = get_obj( si, [vim.ComputeResource], { 'name' : 'gala.perforce.com' } )
-    resource_pool   = computeResource.resourcePool
-    host            = computeResource.host[0]
+    if opt.pool:
+        pool = get_pool( si, opt.pool )
+    else:
+        pool = vm.cluster.resourcePool
 
     relospec           = vim.vm.RelocateSpec()
     relospec.datastore = datastore
-    relospec.pool      = resource_pool
-    relospec.host      = host
+    relospec.pool      = pool
 
     clonespec          = vim.vm.CloneSpec()
     clonespec.location = relospec
     clonespec.powerOn  = False
 
-    task = template.Clone( folder=destfolder, name=opt.vm_name, spec=clonespec )
+    task = template.Clone( folder=folder, name=opt.vm_name, spec=clonespec )
     return task
 
 
 ##########
 def main():
-    args     = get_args()
-    si       = hconnect( args )
+    args = get_args()
+    si   = hconnect( args )
 
     template = get_obj( si, [vim.VirtualMachine], { 'name' : args.template } )
-
     if template:
         task = vmclone( si, template[0], args )
-        taskswait( si, task )
+        if task:
+            taskwait( si, task )
     else:
         print( 'template not found' )
 
