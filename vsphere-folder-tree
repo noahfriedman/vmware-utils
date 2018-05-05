@@ -1,0 +1,19 @@
+#!/usr/bin/env python
+# $Id$
+
+from __future__ import print_function
+from vspherelib import *
+
+def main():
+    args = get_args_setup().parse_args()
+    si   = hconnect( args )
+
+    ptbl = path_to_folder_map( si )
+    for p in sorted( ptbl.keys() ):
+        p = p[1:]
+        if p.count( '/' ):
+            p = re.sub( '[^/]*/', '    ', p )
+        print( p )
+
+if __name__ == '__main__':
+    main()
