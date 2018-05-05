@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.7 2018/04/17 03:06:29 friedman Exp $
+# $Id: vspherelib.py,v 1.8 2018/04/17 03:31:22 friedman Exp $
 
 # Commentary:
 # Code:
@@ -134,10 +134,11 @@ def create_filter_spec( container, props ):
                                     skip=False,
                                     type=type( container ) )
     objSpec    = vpc.ObjectSpec( obj=container, skip=True, selectSet=[ travSpec ] )
-    propSpec   = vpc.PropertySpec( type=type( container.view[ 0 ] ),
-                                   pathSet=props,
-                                   all=not props or not len( props ))
-    filterSpec = vpc.FilterSpec( objectSet=[ objSpec ], propSet=[ propSpec ] )
+    propSet    = [ vpc.PropertySpec( type=t,
+                                     pathSet=props,
+                                     all=not props or not len( props ) )
+                   for t in set( type(v) for v in container.view ) ]
+    filterSpec = vpc.FilterSpec( objectSet=[ objSpec ], propSet=propSet )
     return filterSpec
 
 
@@ -148,7 +149,6 @@ def create_container_view( si, type, root=None, recursive=True ):
         container = root,
         type      = type,
         recursive = recursive )
-
 
 def create_list_view( si, *objs ):
     return si.content.viewManager.CreateListView( obj=objs )
@@ -171,27 +171,31 @@ def get_obj_props( si, vimtype, props=None, root=None, recursive=True ):
     else:
         spc = si.content.propertyCollector
         filterSpec = create_filter_spec( container, props )
-        #opt = vmodl.query.PropertyCollector.RetrieveOptions()
-        # Would need to loop here.
+        # Would need to loop with this.
+        #opt  = vmodl.query.PropertyCollector.RetrieveOptions()
         #pres = spc.RetrievePropertiesEx( specSet=[ filterSpec ], options=opt )
         timer = _timer( 'RetrieveContents' )
         res = spc.RetrieveContents( [ filterSpec ] )
         timer.report()
         if res:
-            match = []
-            for r in res:
-                if type( props ) is dict:
-                    for prop in r.propSet:
-                        want = props.get( prop.name )
-                        if want and prop.val in want:
+            match = res
+            if type( props ) is dict:
+                match = []
+                for r in res:
+                    for rprop in r.propSet:
+                        want = props.get( rprop.name )
+                        if want is None:
+                            continue
+                        if ( (type( want ) is str  and rprop.val == want )
+                             or
+                             (type( want ) is list and rprop.val in want ) ):
                             match.append( r )
                             break
-                else:
-                    match.append( r )
+
             if len( match ) > 0:
                 result = []
                 for m in match:
-                    elt = get_propset_dict( m.propSet )
+                    elt = propset_to_dict( m.propSet )
                     elt[ 'obj' ] = m.obj
                     result.append( elt )
 
@@ -202,19 +206,21 @@ def get_obj_props( si, vimtype, props=None, root=None, recursive=True ):
 
 def get_obj( *args, **kwargs):
     result = get_obj_props( *args, **kwargs )
+    if not result:
+        return
     if kwargs.get( 'props' ) or len( args ) > 2:
         return [ elt[ 'obj' ] for elt in result ]
     else:
         return result
 
 
-def get_attr( obj, name ):
+def attr_get( obj, name ):
     for elt in obj:
         if getattr( elt, 'key' ) == name:
             return getattr( elt, 'value' )
 
 
-def get_attr_dict( obj ):
+def attr_to_dict( obj ):
     attrs = dict()
     for elt in obj:
         key = getattr( elt, 'key' )
@@ -223,14 +229,14 @@ def get_attr_dict( obj ):
     return attrs
 
 
-def get_propset( propset, name ):
+def propset_get( propset, name ):
     if type( propset ) is vmodl.query.PropertyCollector.ObjectContent:
         propset = propset.propSet
     search = filter( lambda elt: elt.name == name, propset )
     if search and len( search ) > 0:
         return search[ 0 ].val
 
-def get_propset_dict( propset ):
+def propset_to_dict( propset ):
     if type( propset ) is vmodl.query.PropertyCollector.ObjectContent:
         propset = propset.propSet
     _dict = dict()
@@ -287,6 +293,8 @@ def taskwait( si, tasklist, printsucc=True ):
     return succ
 
 
+# TODO: for hosts which still can't be found from the searchindex,
+# try a substring match on all host names.
 def vmlist_find( si, *names ):
     args = None # make copy of names since we alter
     if type( names[0] ) is not str:
@@ -334,20 +342,66 @@ def vmlist_sort_by_args( vmlist, args ):
     vmlist.sort( cmp=cmp_fn )
 
 
+# Generate a complete map of full paths to corresponding vsphere folder objects
+def path_to_folder_map( si ):
+    mtbl = {}
+    for elt in get_obj_props( si, [vim.Folder, vim.Datacenter], ['name', 'parent'] ):
+        moId = repr( elt[ 'obj' ] )
+        mtbl[ moId ] = [ repr( elt[ 'parent' ] ), elt[ 'name' ], elt ]
+
+    rootFolder  = si.content.rootFolder
+    vmFolderH   = { repr( elt.vmFolder ) : elt.vmFolder for elt in rootFolder.childEntity }
+
+    ptbl = {}
+    for moId in mtbl.keys():
+        name = []
+        mobj = mtbl[ moId ][ 2 ][ 'obj' ]
+        while mtbl.has_key( moId ):
+            if vmFolderH.has_key( moId ):
+                par = mtbl[ moId ][0]
+                name.insert( 0, mtbl[ par ][ 1 ])
+                break
+
+            elt   = mtbl[ moId ]
+            moId  = elt[ 0 ]
+            name.insert( 0, elt[ 1 ] )
+
+        if len(name) > 0:
+            name.insert( 0, '' )
+            name = str.join('/', name )
+            ptbl[ name ] = mobj
+
+    return ptbl
+
+_folder_to_path_map = None
+_path_to_folder_map = None
+def _init_path_folder_maps( si ):
+    global _path_to_folder_map
+    global _folder_to_path_map
+    p2f = path_to_folder_map( si )
+    f2p = { p2f[k] : k for k in p2f }
+    _path_to_folder_map = p2f
+    _folder_to_path_map = f2p
+
+# Return the path name of the folder object
+def folder_to_path( si, folder ):
+    global _folder_to_path_map
+    if not _folder_to_path_map:
+        _init_path_folder_maps ( si )
+    return _folder_to_path_map[ folder ]
+
+# Return the folder object located at path
+def path_to_folder( si, path ):
+    global _path_to_folder_map
+    if not _path_to_folder_map:
+        _init_path_folder_maps ( si )
+    return _path_to_folder_map[ path ]
+
+# legacy: get path of folder in which vm resides
 def get_vm_folder_path( si, vm ):
-    if not vm.parent:
-        return
-    vmFolders = [d[ 'vmFolder' ] for d in get_obj_props( si, [vim.Datacenter], [ 'vmFolder' ] )]
-    path = []
-    folder = vm.parent
-    while folder not in vmFolders:
-        path.append( folder.name )
-        folder = folder.parent
-    path.append( folder.parent.name )
-    path.reverse()
-    return str.join( '/', path )
+    return folder_to_path( si, vm.parent )
 
-
+
 def get_network_groupmap( si ):
     tbl = {}
     nets = get_obj_props( si, [vim.dvs.DistributedVirtualPortgroup], ['config'] )
