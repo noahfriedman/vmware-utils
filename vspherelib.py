@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.8 2018/04/17 03:31:22 friedman Exp $
+# $Id: vspherelib.py,v 1.9 2018/05/05 02:52:20 friedman Exp $
 
 # Commentary:
 # Code:
@@ -331,6 +331,8 @@ def vmlist_find( si, *names ):
 
 
 def vmlist_sort_by_args( vmlist, args ):
+    if not vmlist or len(vmlist) < 1:
+        return
     vmorder = dict()
     i = 0
     for name in args:
