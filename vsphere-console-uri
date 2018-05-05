@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-console-uri,v 1.3 2018/03/23 20:00:21 friedman Exp $
+# $Id: vsphere-console-uri,v 1.4 2018/04/11 04:56:09 friedman Exp $
 
 from __future__ import print_function
 
@@ -45,7 +45,7 @@ def main():
     vmrc = args
     vmrc.serverGUID = content.about.instanceUuid
     vmrc.session = content.sessionManager.AcquireCloneTicket()
-    vmrc.vc_fqdn = get_attr( content.setting.setting, 'VirtualCenter.FQDN' )
+    vmrc.vc_fqdn = attr_get( content.setting.setting, 'VirtualCenter.FQDN' )
 
     vc_cert      = ssl.get_server_certificate( (args.host, int( args.port )) )
     vc_pem       = OpenSSL.crypto.load_certificate( OpenSSL.crypto.FILETYPE_PEM, vc_cert )
