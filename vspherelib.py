@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.9 2018/05/05 02:52:20 friedman Exp $
+# $Id: vspherelib.py,v 1.10 2018/05/05 05:00:30 friedman Exp $
 
 # Commentary:
 # Code:
@@ -252,6 +252,11 @@ def get_seq_type( obj, typeref ):
 def taskwait( si, tasklist, printsucc=True ):
     spc = si.content.propertyCollector
     vpc = vmodl.query.PropertyCollector
+
+    try:
+        isiterable = iter( tasklist )
+    except TypeError:
+        tasklist = [ tasklist ]
 
     objSpecs   = [ vpc.ObjectSpec( obj=task ) for task in tasklist ]
     propSpec   =  vpc.PropertySpec( type=vim.Task, pathSet=[], all=True )
@@ -523,5 +528,39 @@ def printerr( *args, **kwargs ):
     file = kwargs.get( 'file', sys.stderr )
     print( *args, sep=sep, end=end, file=sys.stderr )
 
+def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
+    if response is None:
+        response = { 'y' : True,  'n' : False }
+    c = " ({} or {}) "
+    if default is None:
+        choice = c.format( yes, no )
+    elif default is False or default == no:
+        choice = c.format( yes, no.upper() )
+        default = False
+    elif default is True or default == yes:
+        choice = c.format( yes.upper(), no )
+        default = True
+    prompt = prompt + choice
+
+    try:
+        while True:
+            print( prompt, end='' )
+            ans = raw_input().lower()
+            if ans in response:
+                return response[ans]
+            elif ans == '' and default is not None:
+                return default
+            print( 'Please answer {} or {}.'.format( yes, no ) )
+    except KeyboardInterrupt:
+        print( '\n\x57\x65\x6c\x6c\x20\x66\x75\x63\x6b',
+               '\x79\x6f\x75\x20\x74\x68\x65\x6e\x2e\n' )
+        sys.exit( 130 ) # WIFSIGNALED(128) + SIGINT(2)
+
+def yes_or_no_p( prompt, default=None ):
+    return y_or_n_p( prompt,
+                     yes='yes',
+                     no='no',
+                     response={ 'yes' : True, 'no' : False },
+                     default=default )
 
 # eof
