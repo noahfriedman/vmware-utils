@@ -1,0 +1,53 @@
+#!/usr/bin/env python
+# $Id$
+
+from __future__ import print_function
+from vspherelib import *
+
+import os
+import sys
+
+def get_args():
+    parser = get_args_setup()
+    parser.add_argument( 'vm', nargs='*', help='VM names' )
+    args = parser.parse_args()
+    if not args.vm:
+        printerr( 'Specify VM names' )
+        sys.exit (1)
+
+    return args
+
+def power_off( si, vm ):
+    if vm.runtime.powerState == 'poweredOn':
+        print( 'Powering off {}... '.format (vm.name), end='' )
+        task = vm.PowerOff()
+        succ = taskwait( si, task, printsucc=False )
+        if not succ:
+            return False
+        print( 'success' )
+    return True
+
+def nuke( si, vm ):
+    print( '{}: Unregistering vm and deleting data... '.format( vm.name ), end='' )
+    task = vm.Destroy()
+    succ = taskwait( si, task, printsucc=False )
+    if not succ:
+        return False
+    print( 'success' )
+    return True
+
+def main():
+    args = get_args()
+    si   = hconnect( args )
+
+    vmlist = vmlist_find( si, args.vm )
+    for vm in vmlist:
+        if yes_or_no_p( 'Really destroy {}?'.format(vm.name), default=False ):
+            power_off( si, vm ) and nuke( si, vm )
+        else:
+            print( "I could tell you weren't really serious." )
+
+if __name__ == "__main__":
+    main()
+
+# eof
