@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.10 2018/05/05 05:00:30 friedman Exp $
+# $Id: vspherelib.py,v 1.11 2018/05/08 21:32:26 friedman Exp $
 
 # Commentary:
 # Code:
@@ -249,7 +249,16 @@ def get_seq_type( obj, typeref ):
     return filter( lambda elt: issubclass( type( elt ), typeref ), obj)
 
 
-def taskwait( si, tasklist, printsucc=True ):
+def taskwait( si, tasklist, printsucc=True, callback=None ):
+    class our(): pass
+    our.callback = callback
+
+    def diag_callback( *args ):
+        print( args, file=sys.stderr )
+        # Perhaps we can do something more useful here depending on the
+        # type of error.  For now, just stop further callbacks
+        our.callback = None
+
     spc = si.content.propertyCollector
     vpc = vmodl.query.PropertyCollector
 
@@ -276,6 +285,13 @@ def taskwait( si, tasklist, printsucc=True ):
                     info = objSet.obj.info
 
                     for change in objSet.changeSet:
+                        if our.callback:
+                            try:
+                                our.callback( change, objSet, filterSet, update )
+                            except Exception as err:
+                                printerr( 'Callback error', err )
+                                diag_callback( change, objSet, filterSet, update )
+
                         if change.name == 'info':
                             state = change.val.state
                         elif change.name == 'info.state':
