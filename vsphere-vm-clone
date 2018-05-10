@@ -1,10 +1,9 @@
 #!/usr/bin/env python
-# $Id: vsphere-clone,v 1.3 2018/04/11 04:55:43 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.4 2018/05/05 02:53:22 friedman Exp $
 
 from __future__ import print_function
 from vspherelib import *
 
-import os
 import sys
 
 ##########
@@ -28,42 +27,54 @@ def get_args():
 ##########
 
 # If name is null but there is only one object of that type anyway, just return that.
-def _get_single_vim( si, vimtype, label, name ):
+def _get_single( si, mot, label, name ):
     def err( *msg ):
         printerr( *msg )
-        printerr( 'Available %ss:' % (label) )
-        res = get_obj( si, vimtype )
+        printerr( 'Available {0}s:'.format( label ) )
+
+        if type( mot ) is vim.ManagedObject.Array:
+            res = mot  # mot: Managed Object Type
+        else:
+            res = get_obj( si, mot )
         names = [elt.name for elt in res]
         for n in sorted( names ):
             printerr( "\t" + n )
         exit( 1 )
-    res = None
+
     if name:
-        res = get_obj( si, vimtype, { 'name' : name } )
-        if res is None:
-            err( name, '%s not found.' % (label) )
+        if type( mot ) is vim.ManagedObject.Array:
+            res = filter( lambda o: o.name == name, mot )
+        else:
+            res = get_obj( si, mot, { 'name' : name } )
+
+        if res is None or len( res ) < 1:
+            err( name, '{0} not found or not available.'.format( label ) )
         if len( res ) > 1:
             err( name, 'name is not unique.' )
     else:
-        res = get_obj( si, vimtype )
-        if res is None:
-            raise LookupError, "No %ss found!" % ( label )
+        if type( mot ) is vim.ManagedObject.Array:
+            res = mot
+        else:
+            res = get_obj( si, mot )
+
+        if res is None or len( res ) < 1:
+            err( 'No {0}s found!'.format( label ) )
         if len( res ) > 1:
-            err( 'More than one %s exists; specify %s to use.' % ( label, label ))
+            err( 'More than one {0}s exists; specify {0}s to use.'.format( label ) )
     return res[0]
 
 
-def get_datacenter( si, name ):
-    return _get_single_vim( si, [vim.Datacenter], 'datacenter', name )
+def get_datacenter( si, name, mot=[vim.Datacenter] ):
+    return _get_single( si, mot, 'datacenter', name )
 
-def get_datastore( si, name ):
-    return _get_single_vim( si, [vim.Datastore], 'datastore', name )
+def get_cluster( si, name, mot=[vim.ComputeResource] ):
+    return _get_single( si, mot, 'cluster', name )
 
-def get_cluster( si, name ):
-    return _get_single_vim( si, [vim.ComputeResource], 'cluster', name )
+def get_datastore( si, name, mot=[vim.Datastore] ):
+    return _get_single( si, mot, 'datastore', name )
 
-def get_pool( si, name ):
-    return _get_single_vim( si, [vim.ResourcePool], 'resource pool', name )
+def get_pool( si, name, mot=[vim.ResourcePool] ):
+    return _get_single( si, mot, 'resource pool', name )
 
 
 ##########
@@ -71,14 +82,14 @@ def vmclone( si, template, opt ):
     vm = Stuff()
 
     datacenter = get_datacenter( si, opt.datacenter )
-    datastore  = get_datastore(  si, opt.datastore )
     folder     = path_to_folder( si, opt.vm_folder )
-    cluster    = get_cluster(    si, opt.cluster)
+    cluster    = get_cluster(    si, opt.cluster )
+    datastore  = get_datastore(  si, opt.datastore, cluster.datastore )
 
     if opt.pool:
-        pool = get_pool( si, opt.pool )
+        pool = get_pool( si, opt.pool, cluster.resourcePool.resourcePool )
     else:
-        pool = vm.cluster.resourcePool
+        pool = cluster.resourcePool
 
     relospec           = vim.vm.RelocateSpec()
     relospec.datastore = datastore
@@ -91,6 +102,48 @@ def vmclone( si, template, opt ):
     task = template.Clone( folder=folder, name=opt.vm_name, spec=clonespec )
     return task
 
+##########
+class myCallback():
+    def __init__( self, si, target="", msg=None ):
+        self.si     = si
+        self.msg    = msg
+        self.newmsg = ""
+        self.target = target
+        self.pct    = 0
+
+    def callback( self, *param ):
+        def status( fmt = "\r{0}: {1} ... {2}% " ):
+            s = fmt.format( self.target, self.msg, self.pct )
+            print( s, end='' )
+            sys.stdout.flush()
+
+        change = param[ 0 ]
+        key = change.name
+        val = change.val
+        if key == 'info':
+            if val.description:
+                self.newmsg = val.description.message
+                self.pct    = val.progress
+            else:
+                return
+        elif key == 'info.description':
+            if val:
+                self.newmsg = val.message
+        elif key == 'info.progress':
+            self.pct = change.val
+        elif key == 'info.state' and val == 'success':
+            self.pct = 100  # doesn't always get this far
+            status()
+            print( "\n{0}: {1}\n".format( self.target, val ) )
+            sys.stdout.flush()
+            return
+
+        if self.newmsg != self.msg:
+            if self.msg:
+                print()
+            self.msg = self.newmsg
+        status()
+
 
 ##########
 def main():
@@ -101,7 +154,9 @@ def main():
     if template:
         task = vmclone( si, template[0], args )
         if task:
-            taskwait( si, task )
+            taskwait( si, task,
+                      printsucc=False,
+                      callback=myCallback( si, args.vm_name ).callback )
     else:
         print( 'template not found' )
 
