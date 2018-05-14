@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.11 2018/05/08 21:32:26 friedman Exp $
+# $Id: vspherelib.py,v 1.12 2018/05/10 04:18:38 friedman Exp $
 
 # Commentary:
 # Code:
@@ -306,7 +306,8 @@ def taskwait( si, tasklist, printsucc=True, callback=None ):
                         elif state == vim.TaskInfo.State.error:
                             taskleft.remove( info.key )
                             succ = 0
-                            printerr( info.entityName, info.error.msg )
+                            if not our.callback:
+                                printerr( info.entityName, info.error.msg )
             version = update.version
     finally:
         if filter:
@@ -544,6 +545,7 @@ def printerr( *args, **kwargs ):
     file = kwargs.get( 'file', sys.stderr )
     print( *args, sep=sep, end=end, file=sys.stderr )
 
+
 def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
     if response is None:
         response = { 'y' : True,  'n' : False }
@@ -571,6 +573,7 @@ def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
         print( '\n\x57\x65\x6c\x6c\x20\x66\x75\x63\x6b',
                '\x79\x6f\x75\x20\x74\x68\x65\x6e\x2e\n' )
         sys.exit( 130 ) # WIFSIGNALED(128) + SIGINT(2)
+
 
 def yes_or_no_p( prompt, default=None ):
     return y_or_n_p( prompt,
