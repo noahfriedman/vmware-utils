@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.12 2018/05/10 04:18:38 friedman Exp $
+# $Id: vspherelib.py,v 1.13 2018/05/14 22:48:07 friedman Exp $
 
 # Commentary:
 # Code:
@@ -77,6 +77,7 @@ class MyArgumentParser( argparse.ArgumentParser ):
                     except IOError:
                         continue
                     return opt
+        return opt
 
     def parse_args( self ):
         args = super( self.__class__, self ).parse_args()
