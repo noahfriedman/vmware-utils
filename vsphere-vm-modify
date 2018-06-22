@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id$
+# $Id: vsphere-vm-modify,v 1.1 2018/06/22 02:05:44 friedman Exp $
 
 from __future__ import print_function
 from vspherelib import *
@@ -10,7 +10,8 @@ cmds = { 'to-template' : 'MarkAsTemplate',
 def get_args():
     parser = get_args_setup()
     parser.add_argument( '-c', '--command', required=True, choices=cmds, help='Command to perform on virtual machines')
-    parser.add_argument( '-r', '--pool', default=None,    help='Pool to assign to when converting a template to a vm')
+    parser.add_argument( '--pool',    default=None, help='Pool to assign to when converting a template to a vm')
+    parser.add_argument( '--cluster', default=None, help='Compute resource to assign to when converting a template to a vm')
     parser.add_argument( 'vm', nargs='*', help='vm or template names' )
 
     args = parser.parse_args()
@@ -44,7 +45,8 @@ def main():
     method = getattr( type( vmlist[ 0 ] ), cmds[args.command] )
 
     def MarkAsVirtualMachine( vm ):
-        pool = mobj.get_pool_mobj( args.pool )
+        cluster = mobj.get_cluster( args.cluster )
+        pool = mobj.get_pool( args.pool, root=cluster )
         return method( vm, pool=pool )
 
     if fboundp( cmds[args.command] ):
@@ -58,8 +60,8 @@ def main():
             task = op( vm )
             if task:
                 tasklist.append( task )
-#        except vmodl.MethodFault as e:
-#            printerr( vm.name, e.msg )
+        except vmodl.MethodFault as e:
+            printerr( vm.name, e.msg )
         except Exception as e:
             printerr( 'Caught Exception', str( e ))
 
