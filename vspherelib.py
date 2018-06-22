@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.14 2018/05/17 17:38:45 friedman Exp $
+# $Id: vspherelib.py,v 1.15 2018/06/22 02:05:45 friedman Exp $
 
 # Commentary:
 # Code:
@@ -257,7 +257,7 @@ class ManagedObjectFinder():
         self.si = si
 
     # If name is null but there is only one object of that type anyway, just return that.
-    def _get_single_mobj( self, name, mot, label ):
+    def _get_single( self, name, mot, label, root=None ):
         def err( *msg ):
             printerr( *msg )
             printerr( 'Available {0}s:'.format( label ) )
@@ -275,7 +275,7 @@ class ManagedObjectFinder():
             if type( mot ) is vim.ManagedObject.Array:
                 res = filter( lambda o: o.name == name, mot )
             else:
-                res = get_obj( self.si, mot, { 'name' : name } )
+                res = get_obj( self.si, mot, { 'name' : name }, root=root )
 
             if res is None or len( res ) < 1:
                 err( name, '{0} not found or not available.'.format( label ) )
@@ -285,7 +285,7 @@ class ManagedObjectFinder():
             if type( mot ) is vim.ManagedObject.Array:
                 res = mot
             else:
-                res = get_obj( self.si, mot )
+                res = get_obj( self.si, mot, root=root )
 
             if res is None or len( res ) < 1:
                 err( 'No {0}s found!'.format( label ) )
@@ -293,17 +293,17 @@ class ManagedObjectFinder():
                 err( 'More than one {0}s exists; specify {0}s to use.'.format( label ) )
         return res[0]
 
-    def get_datacenter_mobj( self, name ):
-        return self._get_single_mobj( name, [vim.Datacenter], 'datacenter' )
+    def get_datacenter( self, name, root=None ):
+        return self._get_single( name, [vim.Datacenter], 'datacenter', root=root )
 
-    def get_cluster_mobj( self, name ):
-        return self._get_single_mobj( name, [vim.ComputeResource], 'cluster' )
+    def get_cluster( self, name, root=None ):
+        return self._get_single( name, [vim.ComputeResource], 'cluster', root=root )
 
-    def get_datastore_mobj( self, name ):
-        return self._get_single_mobj( name, [vim.Datastore], 'datastore' )
+    def get_datastore( self, name, root=None,  ):
+        return self._get_single( name, [vim.Datastore], 'datastore', root=root )
 
-    def get_pool_mobj( self, name ):
-        return self._get_single_mobj( name, [vim.ResourcePool], 'resource pool' )
+    def get_pool( self, name, root=None ):
+        return self._get_single( name, [vim.ResourcePool], 'resource pool', root=root )
 
 
 def taskwait( si, tasklist, printsucc=True, callback=None ):
