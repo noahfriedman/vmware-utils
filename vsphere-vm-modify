@@ -1,0 +1,74 @@
+#!/usr/bin/env python
+# $Id$
+
+from __future__ import print_function
+from vspherelib import *
+
+cmds = { 'to-template' : 'MarkAsTemplate',
+         'to-vm'       : 'MarkAsVirtualMachine', }
+
+def get_args():
+    parser = get_args_setup()
+    parser.add_argument( '-c', '--command', required=True, choices=cmds, help='Command to perform on virtual machines')
+    parser.add_argument( '-r', '--pool', default=None,    help='Pool to assign to when converting a template to a vm')
+    parser.add_argument( 'vm', nargs='*', help='vm or template names' )
+
+    args = parser.parse_args()
+    if not args.vm:
+        printerr( 'Specify VM name(s)' )
+        sys.exit (1)
+
+    return args
+
+def fboundp( sym, f_globals=None, f_locals=None ):
+    import inspect
+    if f_globals is None and f_locals is None:
+        pframe = inspect.getouterframes( inspect.currentframe() )[1][0]
+        f_globals = pframe.f_globals
+        f_locals  = pframe.f_locals
+        del pframe
+    try:
+        return callable( eval( sym, f_globals, f_locals ))
+    except:
+        return False
+
+def main():
+    args = get_args()
+    si   = hconnect( args )
+    mobj = ManagedObjectFinder( si )
+
+    vmlist = get_obj( si, [vim.VirtualMachine], { 'name' : args.vm } )
+    if not vmlist:
+        return
+
+    method = getattr( type( vmlist[ 0 ] ), cmds[args.command] )
+
+    def MarkAsVirtualMachine( vm ):
+        pool = mobj.get_pool_mobj( args.pool )
+        return method( vm, pool=pool )
+
+    if fboundp( cmds[args.command] ):
+        op = vars()[ cmds[args.command] ]
+    else:
+        op = method
+
+    tasklist = []
+    for vm in vmlist:
+        try:
+            task = op( vm )
+            if task:
+                tasklist.append( task )
+#        except vmodl.MethodFault as e:
+#            printerr( vm.name, e.msg )
+        except Exception as e:
+            printerr( 'Caught Exception', str( e ))
+
+    if tasklist:
+        succ = taskwait( si, tasklist )
+        if not succ:
+            sys.exit( 1 )
+
+if __name__ == '__main__':
+    main()
+
+# eof

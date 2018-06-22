@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.13 2018/05/14 22:48:07 friedman Exp $
+# $Id: vspherelib.py,v 1.14 2018/05/17 17:38:45 friedman Exp $
 
 # Commentary:
 # Code:
@@ -39,7 +39,7 @@ class _timer:
         print( '{0}: {1}s'.format( self.label, total ))
 
 
-class MyArgumentParser( argparse.ArgumentParser ):
+class ArgumentParser( argparse.ArgumentParser ):
     class _Option(): pass  # just a container
 
     searchpath = ['XDG_CONFIG_HOME', 'HOME']
@@ -97,7 +97,7 @@ class MyArgumentParser( argparse.ArgumentParser ):
         return args
 
 def get_args_setup():
-    return MyArgumentParser()
+    return ArgumentParser()
 
 
 def hconnect( args ):
@@ -248,6 +248,62 @@ def propset_to_dict( propset ):
 
 def get_seq_type( obj, typeref ):
     return filter( lambda elt: issubclass( type( elt ), typeref ), obj)
+
+
+# retrieving Managed Objects by name
+
+class ManagedObjectFinder():
+    def __init__( self, si ):
+        self.si = si
+
+    # If name is null but there is only one object of that type anyway, just return that.
+    def _get_single_mobj( self, name, mot, label ):
+        def err( *msg ):
+            printerr( *msg )
+            printerr( 'Available {0}s:'.format( label ) )
+
+            if type( mot ) is vim.ManagedObject.Array:
+                res = mot  # mot: Managed Object Type
+            else:
+                res = get_obj( self.si, mot )
+            names = [elt.name for elt in res]
+            for n in sorted( names ):
+                printerr( "\t" + n )
+            exit( 1 )
+
+        if name:
+            if type( mot ) is vim.ManagedObject.Array:
+                res = filter( lambda o: o.name == name, mot )
+            else:
+                res = get_obj( self.si, mot, { 'name' : name } )
+
+            if res is None or len( res ) < 1:
+                err( name, '{0} not found or not available.'.format( label ) )
+            if len( res ) > 1:
+                err( name, 'name is not unique.' )
+        else:
+            if type( mot ) is vim.ManagedObject.Array:
+                res = mot
+            else:
+                res = get_obj( self.si, mot )
+
+            if res is None or len( res ) < 1:
+                err( 'No {0}s found!'.format( label ) )
+            if len( res ) > 1:
+                err( 'More than one {0}s exists; specify {0}s to use.'.format( label ) )
+        return res[0]
+
+    def get_datacenter_mobj( self, name ):
+        return self._get_single_mobj( name, [vim.Datacenter], 'datacenter' )
+
+    def get_cluster_mobj( self, name ):
+        return self._get_single_mobj( name, [vim.ComputeResource], 'cluster' )
+
+    def get_datastore_mobj( self, name ):
+        return self._get_single_mobj( name, [vim.Datastore], 'datastore' )
+
+    def get_pool_mobj( self, name ):
+        return self._get_single_mobj( name, [vim.ResourcePool], 'resource pool' )
 
 
 def taskwait( si, tasklist, printsucc=True, callback=None ):
