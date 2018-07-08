@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.15 2018/06/22 02:05:45 friedman Exp $
+# $Id: vspherelib.py,v 1.16 2018/06/22 02:18:52 friedman Exp $
 
 # Commentary:
 # Code:
@@ -304,6 +304,9 @@ class ManagedObjectFinder():
 
     def get_pool( self, name, root=None ):
         return self._get_single( name, [vim.ResourcePool], 'resource pool', root=root )
+
+    def get_vm( self, name, root=None ):
+        return self._get_single( name, [vim.VirtualMachine], 'virtual machine', root=root )
 
 
 def taskwait( si, tasklist, printsucc=True, callback=None ):
