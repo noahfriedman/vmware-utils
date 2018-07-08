@@ -1,74 +1,116 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-modify,v 1.1 2018/06/22 02:05:44 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.2 2018/06/22 02:17:37 friedman Exp $
 
 from __future__ import print_function
 from vspherelib import *
 
-cmds = { 'to-template' : 'MarkAsTemplate',
-         'to-vm'       : 'MarkAsVirtualMachine', }
+cmds = { 'to-template' : 'to_template',
+         'to-vm'       : 'to_vm',
+         'rename'      : 'rename',
+         'unregister'  : 'unregister',
+         'register'    : 'register',
+}
+
+class Mo():
+    def __init__( self, args ):
+        self.args   = args
+        self.method = getattr( self, cmds[self.args.command] )
+        self.si     = hconnect( args )
+        self.mof    = ManagedObjectFinder( self.si )
+        self.task   = []
+
+    def doit( self, *rest ):
+        try:
+            task = self.method( *rest )
+            if task:
+                self.task.append( task )
+        except vmodl.MethodFault as e:
+            printerr( rest[0].name, e.msg )
+        except Exception as e:
+            printerr( 'Caught Exception', str( e ))
+
+    def to_template( self, name ):
+        return self.mof.get_vm( name ).MarkAsTemplate()
+
+    def to_vm( self, name ):
+        cluster = self.mof.get_cluster( args.cluster )
+        pool    = self.mof.get_pool( args.pool, root=cluster )
+        return self.mof.get_vm( name ).MarkAsVirtualMachine( pool=pool )
+
+    def rename( self, name, newname ):
+        confspec = vim.vm.ConfigSpec()
+        confspec.name = newname
+        return self.mof.get_vm( name ).ReconfigVM_Task( confspec )
+
+    def unregister( self, name ):
+        return self.mof.get_vm( name ).UnregisterVM()
+
+    def register( self, vmx ):
+        folder     = path_to_folder( self.si, self.args.folder)
+        cluster    = self.mof.get_cluster(    self.args.cluster )
+        if self.args.pool:
+            pool = self.mof.get_pool(self.args.pool, cluster.resourcePool.resourcePool )
+        else:
+            pool = cluster.resourcePool
+
+        istmpl = self.args.as_template
+        if vmx.find(".vmtx", -5) >= 0:
+            istmpl=True
+
+        return folder.RegisterVM_Task( name=self.args.name,
+                                       path=vmx,
+                                       pool=pool,
+                                       asTemplate=istmpl )
+
+    def register_mark_moved( self, vm ):
+        uuid_action = vim.option.OptionValue( key='uuid.action', value='keep' )
+        confspec = vim.vm.ConfigSpec()
+        confspec.extraConfig.append( uuid_action )
+        return vm.ReconfigVM_Task( confspec )
+
 
 def get_args():
     parser = get_args_setup()
     parser.add_argument( '-c', '--command', required=True, choices=cmds, help='Command to perform on virtual machines')
-    parser.add_argument( '--pool',    default=None, help='Pool to assign to when converting a template to a vm')
-    parser.add_argument( '--cluster', default=None, help='Compute resource to assign to when converting a template to a vm')
-    parser.add_argument( 'vm', nargs='*', help='vm or template names' )
-
+    parser.add_argument( '--datacenter',  default=None )
+    parser.add_argument( '--datastore',   default=None )
+    parser.add_argument( '--pool',        default=None )
+    parser.add_argument( '--cluster',     default=None )
+    parser.add_argument( '--folder',      default=None )
+    parser.add_argument( '--name',        default=None )
+    parser.add_argument( '--as-template', action='store_true' )
+    parser.add_argument( 'vm', nargs='*', help='names' )
     args = parser.parse_args()
     if not args.vm:
         printerr( 'Specify VM name(s)' )
         sys.exit (1)
-
     return args
 
-def fboundp( sym, f_globals=None, f_locals=None ):
-    import inspect
-    if f_globals is None and f_locals is None:
-        pframe = inspect.getouterframes( inspect.currentframe() )[1][0]
-        f_globals = pframe.f_globals
-        f_locals  = pframe.f_locals
-        del pframe
-    try:
-        return callable( eval( sym, f_globals, f_locals ))
-    except:
-        return False
 
 def main():
     args = get_args()
-    si   = hconnect( args )
-    mobj = ManagedObjectFinder( si )
-
-    vmlist = get_obj( si, [vim.VirtualMachine], { 'name' : args.vm } )
-    if not vmlist:
-        return
-
-    method = getattr( type( vmlist[ 0 ] ), cmds[args.command] )
-
-    def MarkAsVirtualMachine( vm ):
-        cluster = mobj.get_cluster( args.cluster )
-        pool = mobj.get_pool( args.pool, root=cluster )
-        return method( vm, pool=pool )
-
-    if fboundp( cmds[args.command] ):
-        op = vars()[ cmds[args.command] ]
-    else:
-        op = method
+    mi   = Mo( args )
 
     tasklist = []
-    for vm in vmlist:
-        try:
-            task = op( vm )
-            if task:
-                tasklist.append( task )
-        except vmodl.MethodFault as e:
-            printerr( vm.name, e.msg )
-        except Exception as e:
-            printerr( 'Caught Exception', str( e ))
-
-    if tasklist:
-        succ = taskwait( si, tasklist )
+    if args.command == 'rename':
+        mi.doit( args.vm[0], args.vm[1] )
+    else:
+        for vm in args.vm:
+            mi.doit( vm )
+    if mi.task:
+        succ = taskwait( mi.si, mi.task )
         if not succ:
             sys.exit( 1 )
+
+        if args.command == 'register' and not args.as_template:
+            mtask = []
+            for task in mi.task:
+                vm = task.info.result
+                mtask.append( mi.register_mark_moved ( vm ) )
+            if mtask:
+                succ = taskwait( mi.si, mtask )
+                if not succ:
+                    sys.exit( 1 )
 
 if __name__ == '__main__':
     main()
