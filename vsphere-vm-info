@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.10 2018/04/17 02:50:57 friedman Exp $
+# $Id: vsphere-vm-info,v 1.11 2018/05/05 02:54:48 friedman Exp $
 
 # Commentary:
 # Code:
@@ -96,8 +96,6 @@ def print_vm( si, vm, args, sep="" ):
     memargs = [scale_size( hw_conf.memoryMB * 1024 * 1024)]
     if vm_conf.memoryHotAddEnabled: memargs.append( 'hot add enabled' )
 
-    folder = get_vm_folder_path( si, vm )
-
     if vm_conf.template:
         p( 'VM Name', vm.config.name, '    [TEMPLATE]' )
     else:
@@ -113,7 +111,13 @@ def print_vm( si, vm, args, sep="" ):
         p( 'Location Id', vm.config.locationId )
         p( 'Config modtime', vm.config.changeVersion )
     p( 'VMX',         vm.config.files.vmPathName )
-    p( 'Folder',      folder )
+
+    try:
+        folder = get_vm_folder_path( si, vm )
+        p( 'Folder',      folder )
+    except KeyError:
+        pass
+
     if vm.resourcePool:
         p( 'Resource Pool', vm.resourcePool.name )
 
