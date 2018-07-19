@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-clone,v 1.5 2018/05/10 04:22:06 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.6 2018/05/14 22:53:43 friedman Exp $
 
-from __future__ import print_function
-from vspherelib import *
+from   __future__ import print_function
+from   pyVmomi    import vim
+import vspherelib     as vsl
 
 import sys
 
@@ -11,7 +12,7 @@ class Stuff: pass
 
 ##########
 def get_args():
-    parser = get_args_setup()
+    parser = vsl.ArgumentParser()
     parser.add_argument(       '--template',  required=True, help='Name of template or vm to clone from' )
     parser.add_argument( '--vm-name', '-v',   required=True, help='Name for new vm' )
     parser.add_argument( '--folder',          required=True, help='Path of vSphere folder for vm to appear' )
@@ -19,75 +20,22 @@ def get_args():
     parser.add_argument( '--datacenter',                     help='Name of the datacenter to use' )
     parser.add_argument( '--datastore',                      help='Name of datastore for vm storage' )
     parser.add_argument( '--cluster',                        help='Name of the cluster or hypervisor host for new vm' )
-
     args = parser.parse_args()
     return args
 
 
 ##########
 
-# If name is null but there is only one object of that type anyway, just return that.
-def _get_single( si, mot, label, name ):
-    def err( *msg ):
-        printerr( *msg )
-        printerr( 'Available {0}s:'.format( label ) )
-
-        if type( mot ) is vim.ManagedObject.Array:
-            res = mot  # mot: Managed Object Type
-        else:
-            res = get_obj( si, mot )
-        names = [elt.name for elt in res]
-        for n in sorted( names ):
-            printerr( "\t" + n )
-        exit( 1 )
-
-    if name:
-        if type( mot ) is vim.ManagedObject.Array:
-            res = filter( lambda o: o.name == name, mot )
-        else:
-            res = get_obj( si, mot, { 'name' : name } )
-
-        if res is None or len( res ) < 1:
-            err( name, '{0} not found or not available.'.format( label ) )
-        if len( res ) > 1:
-            err( name, 'name is not unique.' )
-    else:
-        if type( mot ) is vim.ManagedObject.Array:
-            res = mot
-        else:
-            res = get_obj( si, mot )
-
-        if res is None or len( res ) < 1:
-            err( 'No {0}s found!'.format( label ) )
-        if len( res ) > 1:
-            err( 'More than one {0}s exists; specify {0}s to use.'.format( label ) )
-    return res[0]
-
-
-def get_datacenter( si, name, mot=[vim.Datacenter] ):
-    return _get_single( si, mot, 'datacenter', name )
-
-def get_cluster( si, name, mot=[vim.ComputeResource] ):
-    return _get_single( si, mot, 'cluster', name )
-
-def get_datastore( si, name, mot=[vim.Datastore] ):
-    return _get_single( si, mot, 'datastore', name )
-
-def get_pool( si, name, mot=[vim.ResourcePool] ):
-    return _get_single( si, mot, 'resource pool', name )
-
-
-##########
-def vmclone( si, template, opt ):
+def vmclone( vsi, template, opt ):
     vm = Stuff()
 
-    datacenter = get_datacenter( si, opt.datacenter )
-    folder     = path_to_folder( si, opt.folder )
-    cluster    = get_cluster(    si, opt.cluster )
-    datastore  = get_datastore(  si, opt.datastore, cluster.datastore )
+    datacenter = vsi.get_datacenter( opt.datacenter )
+    folder     = vsi.path_to_folder( opt.folder )
+    cluster    = vsi.get_cluster(    opt.cluster )
+    datastore  = vsi.get_datastore(  opt.datastore, cluster.datastore )
 
     if opt.pool:
-        pool = get_pool( si, opt.pool, cluster.resourcePool.resourcePool )
+        pool = vsi.get_pool( opt.pool, cluster.resourcePool.resourcePool )
     else:
         pool = cluster.resourcePool
 
@@ -102,14 +50,13 @@ def vmclone( si, template, opt ):
     try:
         task = template.Clone( folder=folder, name=opt.vm_name, spec=clonespec )
     except Exception as details:
-        printerr( 'exception', details )
+        vsl.printerr( 'exception', details )
         return
     return task
 
 ##########
 class myCallback():
-    def __init__( self, si, target="", msg=None ):
-        self.si     = si
+    def __init__( self, target="", msg=None ):
         self.msg    = msg
         self.newmsg = ""
         self.target = target
@@ -161,17 +108,18 @@ class myCallback():
 ##########
 def main():
     args = get_args()
-    si   = hconnect( args )
+    vsi  = vsl.vmomiConnector( args )
 
-    template = get_obj( si, [vim.VirtualMachine], { 'name' : args.template } )
+    template = vsi.get_obj( [vim.VirtualMachine], { 'name' : args.template } )
     if template:
-        task = vmclone( si, template[0], args )
+        task = vmclone( vsi, template[0], args )
         if task:
-            taskwait( si, task,
-                      printsucc=False,
-                      callback=myCallback( si, args.vm_name ).callback )
+            vsi.taskwait( task,
+                          printsucc=False,
+                          callback=myCallback( args.vm_name ).callback )
     else:
         print( 'template not found' )
+
 
 if __name__ == "__main__":
     main()

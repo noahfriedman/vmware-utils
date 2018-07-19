@@ -5,16 +5,19 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.11 2018/05/05 02:54:48 friedman Exp $
+# $Id: vsphere-vm-info,v 1.12 2018/07/10 00:50:26 friedman Exp $
 
 # Commentary:
 # Code:
 
-from __future__ import print_function
-from vspherelib import *
+from   __future__ import print_function
+from   pyVmomi    import vim
+
+import vspherelib     as vsl
+
 
 def get_args():
-    parser = get_args_setup()
+    parser = vsl.ArgumentParser()
     parser.add_argument( '-a', '--all',     action='store_true', help='Retrieve all known VMs' )
     parser.add_argument( '-v', '--verbose', action='store_true', help='Display extended info' )
     parser.add_argument( 'vm', nargs='*',                        help='VM names, if not all' )
@@ -23,20 +26,19 @@ def get_args():
     if not args.all and not args.vm:
         printerr( 'Specify VM names or -a (--all)' )
         sys.exit (1)
-
     return args
 
 
 def storage_size( storage ):
     comb = storage.committed + storage.uncommitted
-    return scale_size( comb )
+    return vsl.scale_size( comb )
 
 def plural( text, n ):
     if int( n ) != 1 and int( n ) != -1:
         text += 's'
     return text
 
-def print_vm( si, vm, args, sep="" ):
+def print_vm( vsi, vm, args, sep="" ):
     stdindent =  -17
     indentL    = stdindent - 3
     indentS    = " " * abs( indentL )
@@ -82,8 +84,7 @@ def print_vm( si, vm, args, sep="" ):
 
     vm_conf = vm.config
     hw_conf = vm_conf.hardware
-
-    extraConfig = attr_to_dict( vm_conf.extraConfig )
+    ex_conf = vsl.attr_to_dict( vm_conf.extraConfig )
 
     numCPU = hw_conf.numCPU
     coreargs = [plural( 'core', numCPU )]
@@ -93,7 +94,7 @@ def print_vm( si, vm, args, sep="" ):
     if vm_conf.cpuHotAddEnabled:    coreargs.append( 'hot add enabled' )
     if vm_conf.cpuHotRemoveEnabled: coreargs.append( 'hot remove enabled' )
 
-    memargs = [scale_size( hw_conf.memoryMB * 1024 * 1024)]
+    memargs = [vsl.scale_size( hw_conf.memoryMB * 1024 * 1024)]
     if vm_conf.memoryHotAddEnabled: memargs.append( 'hot add enabled' )
 
     if vm_conf.template:
@@ -113,7 +114,7 @@ def print_vm( si, vm, args, sep="" ):
     p( 'VMX',         vm.config.files.vmPathName )
 
     try:
-        folder = get_vm_folder_path( si, vm )
+        folder = vsi.get_vm_folder_path( vm )
         p( 'Folder',      folder )
     except KeyError:
         pass
@@ -176,10 +177,10 @@ def print_vm( si, vm, args, sep="" ):
                       'standbyAction', )))
 
     if True:
-        nics = get_seq_type( hw_conf.device, vim.vm.device.VirtualEthernetCard )
+        nics = vsl.get_seq_type( hw_conf.device, vim.vm.device.VirtualEthernetCard )
         for nic in nics:
             devtype = type(nic)._wsdlName.replace('Virtual','').lower()
-            netlabel = get_network_label( si, nic )
+            netlabel = vsi.get_network_label( nic )
             pf( nic.deviceInfo.label, devtype+' on "'+netlabel+'"' , nic,
                 ( 'macAddress', ) )
 
@@ -192,7 +193,7 @@ def print_vm( si, vm, args, sep="" ):
             if vm.summary.runtime.powerState == "poweredOn":
                 gnic = filter( lambda g: g.macAddress == nic.macAddress, vm.guest.net )
                 if len( gnic ):
-                    cidr = get_vmnic_cidrs( gnic[0] )
+                    cidr = vsi.get_vmnic_cidrs( gnic[0] )
                     if cidr and len(cidr) > 0:
                         spc  = " " * (abs( farindentL ) + abs( indentL ) + 2)
                         pi( farindentL, 'IP Addresses', cidr[0] )
@@ -202,7 +203,7 @@ def print_vm( si, vm, args, sep="" ):
     # This is a custom key I insert into our VMs
     if args.verbose:
         try:
-            p( 'Guest json', extraConfig['guestinfo.json'] )
+            p( 'Guest json', ex_conf['guestinfo.json'] )
         except: pass
 
     try:
@@ -223,21 +224,21 @@ def print_vm( si, vm, args, sep="" ):
 
 def main():
     args = get_args()
-    si   = hconnect( args )
+    vsi = vsl.vmomiConnector( args )
 
     sep = '-' * 78
     if args.vm:
-        vmlist = vmlist_find( si, args.vm )
+        vmlist = vsi.find_vm( args.vm )
         for vm in vmlist:
             args.vm.pop()
             if not args.vm:
                 sep = ""
-            print_vm( si, vm, args, sep=sep )
+            print_vm( vsi, vm, args, sep=sep )
     else:
-        vmlist = get_obj( si, [vim.VirtualMachine] )
+        vmlist = vsi.get_obj( [vim.VirtualMachine] )
         vmlist.sort( cmp=lambda a, b: cmp( a.name, b.name ))
         for vm in vmlist:
-            print_vm( si, vm, args, sep=sep )
+            print_vm( vsi, vm, args, sep=sep )
 
 
 ##########

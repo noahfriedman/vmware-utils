@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-# $Id: vsphere-power-cmd,v 1.3 2018/04/11 04:56:09 friedman Exp $
+# $Id: vsphere-vm-power,v 1.4 2018/04/26 23:45:30 friedman Exp $
 
-from __future__ import print_function
-from vspherelib import *
+from   __future__ import print_function
+from   pyVmomi    import vim, vmodl
+import vspherelib     as vsl
 
 cmds = { 'on'          : 'PowerOn',
          'off'         : 'PowerOff',
@@ -17,7 +18,7 @@ cmds = { 'on'          : 'PowerOn',
 
 
 def get_args():
-    parser = get_args_setup()
+    parser = vsl.ArgumentParser()
     parser.add_argument( '-c', '--command', required=True, choices=cmds, help='Command to perform on virtual machines')
     parser.add_argument( 'vm', nargs='*', help='optional vm names, default display all' )
 
@@ -31,13 +32,13 @@ def get_args():
 
 def main():
     args = get_args()
-    si   = hconnect( args )
+    vsi  = vsl.vmomiConnector( args )
 
-    vmlist = get_obj( si, [vim.VirtualMachine], { 'name' : args.vm } )
+    vmlist = vsi.get_obj( [vim.VirtualMachine], { 'name' : args.vm } )
     if not vmlist:
         return
 
-    op = getattr( type( vmlist[ 0 ] ), cmds[args.command] )
+    op = getattr( type( vmlist[ 0 ] ), cmds[ args.command ] )
     tasklist = []
     for vm in vmlist:
         try:
@@ -45,12 +46,12 @@ def main():
             if task:
                 tasklist.append( task )
         except vmodl.MethodFault as e:
-            printerr( vm.name, e.msg )
+            vsl.printerr( vm.name, e.msg )
         except Exception as e:
-            printerr( 'Caught Exception', str( e ))
+            vsl.printerr( 'Caught Exception', str( e ))
 
     if tasklist:
-        succ = taskwait( si, tasklist )
+        succ = vsi.taskwait( tasklist )
         if not succ:
             sys.exit( 1 )
 

@@ -1,16 +1,13 @@
 #!/usr/bin/env python
-# $Id$
+# $Id: vsphere-vm-tag,v 1.1 2018/06/21 01:04:36 friedman Exp $
 
 # This uses the vSphere Automation SDK for Python as well as pyVmomi.
 
 from __future__ import print_function
 
-import argparse
-import atexit
 import requests
 import ssl
-
-import pyVim.connect
+import simplejson                               as json
 
 import com.vmware.cis_client                    as cis_client
 import com.vmware.cis.tagging_client            as tagging_client
@@ -23,6 +20,9 @@ from   vmware.vapi.stdlib.client.factories  import StubConfigurationFactory
 from   requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings( InsecureRequestWarning )
 
+import vspherelib                               as vsl
+from   pyVmomi                              import vim
+
 class vapiConnect():
     def __init__( self, host=None, user=None, passwd=None ):
         self.host   = host
@@ -32,10 +32,9 @@ class vapiConnect():
 
     def connect( self ):
         host_url = "https://{}/api".format( self.host )
-        self.session = requests.Session()
+        self.session        = requests.Session()
         self.session.verify = False
-        # Suppress unverified https request warnings
-        self.connector = get_requests_connector( session=self.session, url=host_url )
+        self.connector   = get_requests_connector( session=self.session, url=host_url )
         self.stub_config = StubConfigurationFactory.new_std_configuration( self.connector )
         self.login()
 
@@ -54,87 +53,95 @@ class vapiConnect():
         if self.stub_config:
             session_svc = cis_client.Session( self.stub_config )
             session_svc.delete()
+            self.stub_config = None
 
+    def __del__( self ):
+        self.logout()
 
-class ServiceManager():
-    def __init__( self, host, user, passwd ):
-        self.host   = host
-        self.user   = user
-        self.passwd = passwd
-        self.connect()
-        atexit.register( self.disconnect )
+    def vmid_to_owner_tag_map( self ):
+        cat_svc   = tagging_client.Category(       self.stub_config )
+        tag_svc   = tagging_client.Tag(            self.stub_config )
+        tag_assoc = tagging_client.TagAssociation( self.stub_config )
+        result = {}
 
-    def connect( self ):
-        # Connect to vAPI Endpoint on vCenter Server system
-        self.vapiconn = vapiConnect( host=self.host,
-                                     user=self.user,
-                                     passwd=self.passwd )
-        self.stub_config = self.vapiconn.stub_config
-
-        # Connect to VIM API Endpoint on vCenter Server system
-        context = None
-        if hasattr( ssl, '_create_unverified_context' ):
-            context = ssl._create_unverified_context()
-        self.si = pyVim.connect.SmartConnect( host=self.host,
-                                              user=self.user,
-                                               pwd=self.passwd,
-                                        sslContext=context )
-        assert self.si is not None
-
-    def disconnect( self ):
-        self.vapiconn.logout()
-        pyVim.connect.Disconnect( self.si )
-
-
-class TagFrob():
-    def __init__( self, svc_mgr ):
-        self.svc_mgr   = svc_mgr
-        self.cat_svc   = tagging_client.Category(       self.svc_mgr.stub_config )
-        self.tag_svc   = tagging_client.Tag(            self.svc_mgr.stub_config )
-        self.tag_assoc = tagging_client.TagAssociation( self.svc_mgr.stub_config )
-        self.cat_name_id_map = {}
-
-        print(self.svc_mgr)
-        print(self.cat_svc)
-        print(self.tag_svc)
-        print(self.tag_assoc)
-
-
-    def run( self ):
-        cats = [ self.cat_svc.get( cat ) for cat in self.cat_svc.list() ]
+        cats = [ cat_svc.get( cat ) for cat in cat_svc.list() ]
         for cat in cats:
-            self.cat_name_id_map[cat.name] = cat.id
-            self.cat_name_id_map[cat.id]   = cat.name
+            if cat.name == 'Owners':
+                owners_id = cat.id
+                break
 
-        Owners_id = self.cat_name_id_map['Owners']
-        tags = [ self.tag_svc.get( tag ) for tag in self.tag_svc.list() ]
-        for tag in tags:
-            if tag.category_id != Owners_id:
-                continue
+        tag_ids = tag_svc.list_tags_for_category( owners_id )
+        for tag_id in tag_ids:
+            tag = tag_svc.get( tag_id )
+            owner = tag.name
+            # Calling list_attached_objects per tag is slow.
+            # vsphere 6.0 doesn't support
+            vm_ids = map( lambda obj: obj.id,
+                          filter( lambda obj: obj.type == 'VirtualMachine',
+                                  tag_assoc.list_attached_objects( tag_id )))
+            for vm_id in vm_ids:
+                try:
+                    result[ vm_id ] += ", " + owner
+                except KeyError:
+                    result[ vm_id ] = owner
+        return result
 
-            objs = filter( lambda obj: obj.type == 'VirtualMachine',
-                           self.tag_assoc.list_attached_objects( tag.id ) )
-            if len( objs ) < 1:
-                continue
 
-            print( 'VMs owned by {0} ({1}): {2}'.format( tag.name, tag.description, len( objs )))
-            objs.sort( lambda a, b: cmp( a.id, b.id ))
-            for obj in objs:
-                print( '\t{0}'.format( obj.id ))
-
+def get_args():
+    parser = vsl.ArgumentParser()
+    args = parser.parse_args()
+    return args
 
 def main():
-    argparser = argparse.ArgumentParser()
-    argparser.add_argument('-s', '--server',   help='Hostname of vCenter Server')
-    argparser.add_argument('-u', '--username', help='Username to login to the vCenter Server')
-    argparser.add_argument('-p', '--password', help='Password to login to the vCenter Server')
-    args = argparser.parse_args()
+    args = get_args()
+    vsi  = vsl.vmomiConnector( args )
+    vpi  = vapiConnect( host   = args.host,
+                        user   = args.user,
+                        passwd = args.password )
 
-    svc_mgr = ServiceManager( args.server, args.username, args.password )
-    tagfrob = TagFrob( svc_mgr )
+    t = vsl._timer('vmid_to_owner_tag_map')
+    vmid2owner = vpi.vmid_to_owner_tag_map()
+    t.report()
 
-    tagfrob.run()
+    obj_props = [ 'name',
+                  #'config.template',
+                  #'runtime.powerState',
+                  'guest.guestState',
+                  'guest.hostName',
+                  'guest.ipAddress', ]
 
+    t = vsl._timer("get_obj_props")
+    vmlist = vsi.get_obj_props( [vim.VirtualMachine], obj_props )
+    t.report()
+    #print(vmlist)
+
+    t = vsl._timer('make vmtbl')
+    vmtbl = {}
+    for vm in vmlist:
+        if vm[ 'guest.guestState' ] != 'running':
+            continue
+        del vm[ 'guest.guestState' ]
+
+        vmtbl[ vm.pop( 'name' ) ] = vm
+        vmid = vm.pop( 'obj' )._moId
+        vm[ 'owner'    ] = vmid2owner[ vmid ]
+        try:
+            vm[ 'hostname' ] = vm.pop( 'guest.hostName' )
+        except KeyError:
+            pass
+
+        try:
+            vm[ 'ip'       ] = vm.pop( 'guest.ipAddress' )
+        except KeyError:
+            pass
+
+    t.report()
+
+    t = vsl._timer("generate json")
+    out = json.dumps( vmtbl, sort_keys=True, indent='    ', check_circular=False)
+    t.report()
+
+    print( out )
 
 if __name__ == '__main__':
     main()

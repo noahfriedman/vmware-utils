@@ -1,14 +1,15 @@
 #!/usr/bin/env python
-# $Id$
+# $Id: vsphere-folder-tree,v 1.1 2018/05/05 02:54:21 friedman Exp $
 
 from __future__ import print_function
-from vspherelib import *
+import vspherelib as vsl
+import re
 
 def main():
-    args = get_args_setup().parse_args()
-    si   = hconnect( args )
+    args = vsl.ArgumentParser().parse_args()
+    vsi  = vsl.vmomiConnector( args )
 
-    ptbl = path_to_folder_map( si )
+    ptbl = vsi.path_to_folder_map()
     for p in sorted( ptbl.keys() ):
         p = p[1:]
         if p.count( '/' ):

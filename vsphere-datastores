@@ -1,9 +1,10 @@
 #!/usr/bin/env python
-# $Id: vsphere-datastores,v 1.4 2018/05/03 19:29:54 friedman Exp $
+# $Id: vsphere-datastores,v 1.5 2018/07/10 19:56:22 friedman Exp $
 
-from __future__ import print_function
-
-from vspherelib import *
+from   __future__ import print_function
+from   pyVmomi    import vim
+import vspherelib     as vsl
+import re
 
 props = [ 'summary.name',
           'summary.capacity',
@@ -11,7 +12,7 @@ props = [ 'summary.name',
           'summary.uncommitted' ]
 
 def get_args():
-    parser = get_args_setup()
+    parser = vsl.ArgumentParser()
     parser.add_argument( '-H', '--header', action='store_true', help='Show column headers' )
     args = parser.parse_args()
     return args
@@ -40,9 +41,9 @@ def cmpdsname(a, b):
 
 def main():
     args = get_args()
-    si   = hconnect( args )
+    vsi   = vsl.vmomiConnector( args )
 
-    ds = get_obj_props( si, [vim.Datastore], props )
+    ds = vsi.get_obj_props( [vim.Datastore], props )
     if not ds:
         return
 
@@ -67,12 +68,12 @@ def main():
         ucom = int( elt['summary.uncommitted'] )
 
         s = fmt.format( name,
-                        scale_size( size ).split( ' ' ),
+                        vsl.scale_size( size ).split( ' ' ),
 
-                        scale_size( free ).split( ' ' ),
+                        vsl.scale_size( free ).split( ' ' ),
                         100 * free / size,
 
-                        scale_size( ucom ).split( ' '),
+                        vsl.scale_size( ucom ).split( ' '),
                         100 * ucom / size )
         print( s )
 

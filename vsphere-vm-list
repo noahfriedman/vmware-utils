@@ -1,19 +1,20 @@
 #!/usr/bin/env python
-# $Id$
+# $Id: vsphere-vm-list,v 1.1 2018/05/08 21:32:52 friedman Exp $
 
-from __future__ import print_function
-from vspherelib import *
+from   __future__ import print_function
+from   pyVmomi    import vim
+import vspherelib     as vsl
 
 def get_args():
-    parser = get_args_setup()
+    parser = vsl.ArgumentParser()
     args = parser.parse_args()
     return args
 
 def main():
     args = get_args()
-    si   = hconnect( args )
+    vsi  = vsl.vmomiConnector( args )
 
-    vmlist = get_obj_props( si, [vim.VirtualMachine], [ 'name' ] )
+    vmlist = vsi.get_obj_props( [vim.VirtualMachine], [ 'name' ] )
     namelist = [ vm[ 'name' ] for vm in vmlist ]
     namelist.sort()
 

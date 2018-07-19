@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-modify,v 1.2 2018/06/22 02:17:37 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.3 2018/07/08 08:04:34 noah Exp $
 
-from __future__ import print_function
-from vspherelib import *
+from   __future__ import print_function
+from   pyVmomi    import vim, vmodl
+import vspherelib     as vsl
 
 cmds = { 'to-template' : 'to_template',
          'to-vm'       : 'to_vm',
@@ -11,13 +12,12 @@ cmds = { 'to-template' : 'to_template',
          'register'    : 'register',
 }
 
-class Mo():
-    def __init__( self, args ):
+class mVM():
+    def __init__( self, vsi, args ):
+        self.vsi    = vsi
         self.args   = args
-        self.method = getattr( self, cmds[self.args.command] )
-        self.si     = hconnect( args )
-        self.mof    = ManagedObjectFinder( self.si )
         self.task   = []
+        self.method = getattr( self, cmds[ self.args.command ] )
 
     def doit( self, *rest ):
         try:
@@ -25,31 +25,31 @@ class Mo():
             if task:
                 self.task.append( task )
         except vmodl.MethodFault as e:
-            printerr( rest[0].name, e.msg )
+            vsl.printerr( rest[0].name, e.msg )
         except Exception as e:
-            printerr( 'Caught Exception', str( e ))
+            vsl.printerr( 'Caught Exception', str( e ))
 
     def to_template( self, name ):
-        return self.mof.get_vm( name ).MarkAsTemplate()
+        return self.vsi.get_vm( name ).MarkAsTemplate()
 
     def to_vm( self, name ):
-        cluster = self.mof.get_cluster( args.cluster )
-        pool    = self.mof.get_pool( args.pool, root=cluster )
-        return self.mof.get_vm( name ).MarkAsVirtualMachine( pool=pool )
+        cluster = self.vsi.get_cluster( args.cluster )
+        pool    = self.vsi.get_pool( args.pool, root=cluster )
+        return self.vsi.get_vm( name ).MarkAsVirtualMachine( pool=pool )
 
     def rename( self, name, newname ):
-        confspec = vim.vm.ConfigSpec()
+        confspec      = vim.vm.ConfigSpec()
         confspec.name = newname
-        return self.mof.get_vm( name ).ReconfigVM_Task( confspec )
+        return self.vsi.get_vm( name ).ReconfigVM_Task( confspec )
 
     def unregister( self, name ):
-        return self.mof.get_vm( name ).UnregisterVM()
+        return self.vsi.get_vm( name ).UnregisterVM()
 
     def register( self, vmx ):
-        folder     = path_to_folder( self.si, self.args.folder)
-        cluster    = self.mof.get_cluster(    self.args.cluster )
+        folder     = self.vsi.path_to_folder( self.args.folder)
+        cluster    = self.vsi.get_cluster(    self.args.cluster )
         if self.args.pool:
-            pool = self.mof.get_pool(self.args.pool, cluster.resourcePool.resourcePool )
+            pool = self.vsi.get_pool( self.args.pool, cluster.resourcePool.resourcePool )
         else:
             pool = cluster.resourcePool
 
@@ -64,13 +64,13 @@ class Mo():
 
     def register_mark_moved( self, vm ):
         uuid_action = vim.option.OptionValue( key='uuid.action', value='keep' )
-        confspec = vim.vm.ConfigSpec()
+        confspec    = vim.vm.ConfigSpec()
         confspec.extraConfig.append( uuid_action )
         return vm.ReconfigVM_Task( confspec )
 
 
 def get_args():
-    parser = get_args_setup()
+    parser = vsl.ArgumentParser()
     parser.add_argument( '-c', '--command', required=True, choices=cmds, help='Command to perform on virtual machines')
     parser.add_argument( '--datacenter',  default=None )
     parser.add_argument( '--datastore',   default=None )
@@ -89,16 +89,16 @@ def get_args():
 
 def main():
     args = get_args()
-    mi   = Mo( args )
+    vsi  = vsl.vmomiConnector( args )
+    mi   = mVM( vsi, args )
 
-    tasklist = []
     if args.command == 'rename':
         mi.doit( args.vm[0], args.vm[1] )
     else:
         for vm in args.vm:
             mi.doit( vm )
     if mi.task:
-        succ = taskwait( mi.si, mi.task )
+        succ = vsi.taskwait( mi.task )
         if not succ:
             sys.exit( 1 )
 
@@ -108,7 +108,7 @@ def main():
                 vm = task.info.result
                 mtask.append( mi.register_mark_moved ( vm ) )
             if mtask:
-                succ = taskwait( mi.si, mtask )
+                succ = vsi.taskwait( mtask )
                 if not succ:
                     sys.exit( 1 )
 

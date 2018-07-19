@@ -1,22 +1,22 @@
 #!/usr/bin/env python
-# $Id: vsphere-console-uri,v 1.4 2018/04/11 04:56:09 friedman Exp $
+# $Id: vsphere-console-uri,v 1.5 2018/05/05 02:53:59 friedman Exp $
 
-from __future__ import print_function
+from   __future__ import print_function
 
-from vspherelib import *
+from   pyVmomi    import vim
+import vspherelib     as vsl
 
 import OpenSSL
+import ssl
 import time
 
 def get_args():
-    parser = get_args_setup()
+    parser = vsl.ArgumentParser()
     parser.add_argument( 'vm', nargs='*', help='optional vm names, default display all' )
-
     args = parser.parse_args()
     if not args.vm:
         printerr( 'Specify VM name' )
         sys.exit (1)
-
     return args
 
 
@@ -39,24 +39,24 @@ def print_uri_html5( vmrc ):
 
 def main():
     args = get_args()
-    si   = hconnect( args )
-    content = si.content
+    vsi  = vsl.vmomiConnector( args )
+    content = vsi.si.content
 
     vmrc = args
     vmrc.serverGUID = content.about.instanceUuid
-    vmrc.session = content.sessionManager.AcquireCloneTicket()
-    vmrc.vc_fqdn = attr_get( content.setting.setting, 'VirtualCenter.FQDN' )
+    vmrc.session    = content.sessionManager.AcquireCloneTicket()
+    vmrc.vc_fqdn    = vsl.attr_get( content.setting.setting, 'VirtualCenter.FQDN' )
 
     vc_cert      = ssl.get_server_certificate( (args.host, int( args.port )) )
     vc_pem       = OpenSSL.crypto.load_certificate( OpenSSL.crypto.FILETYPE_PEM, vc_cert )
     vmrc.fprint  = vc_pem.digest( 'sha1' )
 
-    vmlist = get_obj( si, [vim.VirtualMachine], { 'name' : args.vm } )
+    vmlist = vsi.get_obj( [vim.VirtualMachine], { 'name' : args.vm } )
     for vm in vmlist:
         vmrc.vmname = vm.name
         vmrc.vmoid  = str( vm._moId )
 
-        if len(vmlist) > 1:
+        if len( vmlist ) > 1:
             print_uri_vmrc( vmrc )
             print_uri_html5( vmrc )
             print( '' )

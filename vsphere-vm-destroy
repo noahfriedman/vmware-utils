@@ -1,36 +1,35 @@
 #!/usr/bin/env python
-# $Id$
+# $Id: vsphere-vm-destroy,v 1.1 2018/05/08 21:32:52 friedman Exp $
 
-from __future__ import print_function
-from vspherelib import *
+from   __future__ import print_function
+import vspherelib     as vsl
 
 import os
 import sys
 
 def get_args():
-    parser = get_args_setup()
+    parser = vsl.ArgumentParser()
     parser.add_argument( 'vm', nargs='*', help='VM names' )
     args = parser.parse_args()
     if not args.vm:
         printerr( 'Specify VM names' )
         sys.exit (1)
-
     return args
 
-def power_off( si, vm ):
+def power_off( vsi, vm ):
     if vm.runtime.powerState == 'poweredOn':
-        print( 'Powering off {}... '.format (vm.name), end='' )
+        print( 'Powering off {}... '.format( vm.name ), end='' )
         task = vm.PowerOff()
-        succ = taskwait( si, task, printsucc=False )
+        succ = vsi.taskwait( task, printsucc=False )
         if not succ:
             return False
         print( 'success' )
     return True
 
-def nuke( si, vm ):
+def nuke( vsi, vm ):
     print( '{}: Unregistering vm and deleting data... '.format( vm.name ), end='' )
     task = vm.Destroy()
-    succ = taskwait( si, task, printsucc=False )
+    succ = vsi.taskwait( task, printsucc=False )
     if not succ:
         return False
     print( 'success' )
@@ -38,12 +37,12 @@ def nuke( si, vm ):
 
 def main():
     args = get_args()
-    si   = hconnect( args )
+    vsi  = vsl.vmomiConnector( args )
 
-    vmlist = vmlist_find( si, args.vm )
+    vmlist = vsi.find_vm( args.vm )
     for vm in vmlist:
-        if yes_or_no_p( 'Really destroy {}?'.format(vm.name), default=False ):
-            power_off( si, vm ) and nuke( si, vm )
+        if vsl.yes_or_no_p( 'Really destroy {}?'.format( vm.name ), default=False ):
+            power_off( vsi, vm ) and nuke( vsi, vm )
         else:
             print( "I could tell you weren't really serious." )
 
