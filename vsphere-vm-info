@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.12 2018/07/10 00:50:26 friedman Exp $
+# $Id: vsphere-vm-info,v 1.13 2018/07/19 00:48:39 friedman Exp $
 
 # Commentary:
 # Code:
@@ -208,7 +208,7 @@ def print_vm( vsi, vm, args, sep="" ):
 
     try:
         annot = vm.config.annotation
-        annot = fold_text( annot, maxlen=70, indent=abs( indentL ) )
+        annot = vsl.fold_text( annot, maxlen=70, indent=abs( indentL ) )
         if annot.find ("\n") >= 0:
             annot = "\n" + indentS + annot
         if annot != "":
