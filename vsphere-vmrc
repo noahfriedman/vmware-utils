@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vmrc,v 1.4 2018/07/19 00:48:39 friedman Exp $
+# $Id: vsphere-vmrc,v 1.5 2018/07/21 19:38:56 friedman Exp $
 
 from   __future__ import print_function
 
@@ -11,14 +11,9 @@ import sys
 import time
 
 def get_args():
-    parser = vsl.ArgumentParser()
-    parser.add_argument( 'vmnames', nargs='*',          help='vm names' )
-    parser.add_argument( '--uri',  action='store_true', help='display URIs instead of launching' )
-    args = parser.parse_args()
-    if not args.vmnames:
-        printerr( 'Specify VM name(s)' )
-        sys.exit( 1 )
-    return args
+    p = vsl.ArgumentParser( rest='vmname', required=True )
+    p.add( '--uri', action='store_true', help='display URIs instead of launching' )
+    return p.parse()
 
 
 def spawn(*args):
@@ -63,7 +58,7 @@ def main():
     vsi  = vsl.vmomiConnect( args )
     mks  = vsi.mks( args )
 
-    vmlist = vsi.find_vm( args.vmnames )
+    vmlist = vsi.find_vm( args.vmname )
     if args.uri:
         display( mks, vmlist )
     else:
