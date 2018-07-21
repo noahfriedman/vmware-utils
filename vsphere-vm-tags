@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-tag,v 1.1 2018/06/21 01:04:36 friedman Exp $
+# $Id: vsphere-vm-tags,v 1.2 2018/07/19 00:48:39 friedman Exp $
 
 # This uses the vSphere Automation SDK for Python as well as pyVmomi.
 
@@ -87,14 +87,9 @@ class vapiConnect():
         return result
 
 
-def get_args():
-    parser = vsl.ArgumentParser()
-    args = parser.parse_args()
-    return args
-
 def main():
-    args = get_args()
-    vsi  = vsl.vmomiConnector( args )
+    args = vsl.ArgumentParser().parse_args()
+    vsi  = vsl.vmomiConnect( args )
     vpi  = vapiConnect( host   = args.host,
                         user   = args.user,
                         passwd = args.password )
