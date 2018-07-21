@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-clone,v 1.6 2018/05/14 22:53:43 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.7 2018/07/19 00:48:39 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim
@@ -12,17 +12,15 @@ class Stuff: pass
 
 ##########
 def get_args():
-    parser = vsl.ArgumentParser()
-    parser.add_argument(       '--template',  required=True, help='Name of template or vm to clone from' )
-    parser.add_argument( '--vm-name', '-v',   required=True, help='Name for new vm' )
-    parser.add_argument( '--folder',          required=True, help='Path of vSphere folder for vm to appear' )
-    parser.add_argument( '--pool',                           help='Resource pool for vm' )
-    parser.add_argument( '--datacenter',                     help='Name of the datacenter to use' )
-    parser.add_argument( '--datastore',                      help='Name of datastore for vm storage' )
-    parser.add_argument( '--cluster',                        help='Name of the cluster or hypervisor host for new vm' )
-    args = parser.parse_args()
-    return args
-
+    p = vsl.ArgumentParser()
+    p.add(       '--template',  required=True, help='Name of template or vm to clone from' )
+    p.add( '--vm-name', '-v',   required=True, help='Name for new vm' )
+    p.add( '--folder',                         help='Path of vSphere folder for vm to appear' )
+    p.add( '--pool',                           help='Resource pool for vm' )
+    p.add( '--datacenter',                     help='Name of the datacenter to use' )
+    p.add( '--datastore',                      help='Name of datastore for vm storage' )
+    p.add( '--cluster',                        help='Name of the cluster or hypervisor host for new vm' )
+    return p.parse()
 
 ##########
 
@@ -108,9 +106,9 @@ class myCallback():
 ##########
 def main():
     args = get_args()
-    vsi  = vsl.vmomiConnector( args )
+    vsi  = vsl.vmomiConnect( args )
 
-    template = vsi.get_obj( [vim.VirtualMachine], { 'name' : args.template } )
+    template = vsi.find_vm( args.template )
     if template:
         task = vmclone( vsi, template[0], args )
         if task:
