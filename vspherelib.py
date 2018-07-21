@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.18 2018/07/19 00:48:39 friedman Exp $
+# $Id: vspherelib.py,v 1.19 2018/07/21 17:04:39 friedman Exp $
 
 # Commentary:
 # Code:
@@ -15,6 +15,7 @@ import argparse
 import getpass
 import os
 import sys
+import OpenSSL
 import ssl
 import re
 import time
@@ -44,7 +45,7 @@ class Timer( object ):
 
 
 class ArgumentParser( argparse.ArgumentParser, object ):
-    class _Option(): pass  # just a container
+    class Option(): pass  # just a container
 
     searchpath = ['XDG_CONFIG_HOME', 'HOME']
     rcname     = '.vspherelibrc.py'
@@ -52,7 +53,7 @@ class ArgumentParser( argparse.ArgumentParser, object ):
     def __init__( self ):
         super( self.__class__, self ).__init__()
         timer = Timer( 'loadrc' )
-        opt = self.loadrc()
+        opt = self.opt = self.loadrc()
         timer.report()
         self.add_argument( '-s', '--host',     default=opt.host,           help='Remote esxi/vcenter host to connect to' )
         self.add_argument( '-o', '--port',     default=opt.port, type=int, help='Port to connect on' )
@@ -63,7 +64,7 @@ class ArgumentParser( argparse.ArgumentParser, object ):
     # provide a default for the host via:
     # 	opt.host = 'vcenter1.mydomain.com'
     def loadrc( self ):
-        opt          = self._Option()
+        opt          = self.Option()
         opt.host     = None
         opt.port     = 443
         opt.user     = os.getenv( 'LOGNAME' )
@@ -93,12 +94,17 @@ class ArgumentParser( argparse.ArgumentParser, object ):
             sys.exit( 1 )
 
         if args.password:
-            return args
+            pass
         elif os.getenv( 'VMPASSWD' ):
             args.password = os.getenv( 'VMPASSWD' )
         else:
             prompt = 'Enter password for %(user)s@%(host)s: ' % vars( args )
             args.password = getpass.getpass( prompt )
+
+        extra = vars( self.opt )
+        for elt in extra:
+            if elt.find( '_' ) != 0 and not hasattr( args, elt ):
+                setattr( args, elt, extra[ elt ] )
 
         return args
 
@@ -115,7 +121,7 @@ class propList( object ):
         if type( args[0] ) is propList:
             return args[0]
         else:
-            return super( propList, self ).__new__( propList, *args )
+            return super( self.__class__, self ).__new__( propList, *args )
 
     def __init__( self, *args ):
         if type( args[0] ) is propList:
@@ -586,8 +592,11 @@ class vmomiConnect( _vmomiCollect,
                     _vmomiTask, ):
 
     def __init__( self, *args, **kwargs ):
-        if len( args ) == 1 and issubclass( type( args[0] ), argparse.Namespace ):
-            kwargs = self.namespacetodict( args[0] )
+        kwargs = dict( **kwargs ) # copy; destructively modified
+        for arg in args:
+            if issubclass( type( arg ), argparse.Namespace ):
+                kwargs.update( vars( arg ))
+
         self.host = kwargs[ 'host' ]
         self.user = kwargs[ 'user' ]
         self.pwd  = kwargs[ 'password' ]
@@ -600,12 +609,6 @@ class vmomiConnect( _vmomiCollect,
             pyVconnect.Disconnect( self.si )
         except AttributeError:
             pass
-
-    def namespacetodict( self, namespace ):
-        darg = {}
-        for pair in namespace._get_kwargs():
-            darg[ pair[0] ] = pair[1]
-        return darg
 
     def connect( self ):
         timer = Timer( 'vmomiConnect.connect' )
@@ -625,9 +628,69 @@ class vmomiConnect( _vmomiCollect,
             sys.exit( 1 )
         timer.report()
 
+    def mks( self, *args, **kwargs ):
+        return vmomiMKS( self, *args, **kwargs )
+
+
 vmomiConnector = vmomiConnect  # deprecated alias
 
 # end class vmomiConnect
+
+
+class vmomiMKS( object ):
+    def __init__( self, vsi, *args, **kwargs ):
+        kwargs = dict( **kwargs ) # copy; destructively modified
+        for arg in args:
+            if issubclass( type( arg ), argparse.Namespace ):
+                kwargs.update( vars( arg ))
+
+        content   = vsi.si.content
+        self.host = vsi.host
+        self.port = int( vsi.port )
+
+        vc_cert   = ssl.get_server_certificate( (self.host, self.port) )
+        vc_pem    = OpenSSL.crypto.load_certificate( OpenSSL.crypto.FILETYPE_PEM, vc_cert )
+
+        self.fingerprint = vc_pem.digest( 'sha1' )
+        self.serverGUID  = content.about.instanceUuid
+        self.session     = content.sessionManager.AcquireCloneTicket()
+        self.fqdn        = attr_get( content.setting.setting, 'VirtualCenter.FQDN' )
+
+        for arg in kwargs:
+            setattr( self, arg, kwargs[ arg ] )
+
+        vm = getattr( self, 'vm', None )
+        if vm:
+            self.vm_name = vm.name
+            self.vm_id   = str( vm.id )
+
+
+    def uri_vmrc( self, vm=None ):
+        param = dict( vars( self ))
+        if vm:
+            param[ 'vm_name' ] = vm.name
+            param[ 'vm_id' ]   = str( vm.id )
+        return 'vmrc://clone:%(session)s@%(fqdn)s/?moid=%(vm_id)s' % param
+
+
+    def uri_html( self, vm=None ):
+        param = dict( vars( self ))
+        if vm:
+            param[ 'vm_name' ] = vm.name
+            param[ 'vm_id' ]   = str( vm._moId )
+        param[ 'html_host' ]   = getattr( self, 'html_host', self.host )
+        param[ 'html_path' ]   = getattr( self, 'html_path', '/ui/webconsole.html' )
+        param[ 'html_port' ]   = getattr( self, 'html_port', 9443 )
+        uri = ( 'https://{html_host}:{html_port}{html_path}'
+                +          '?vmId={vm_id}'
+                +        '&vmName={vm_name}'
+                +    '&serverGuid={serverGUID}'
+                +          '&host={fqdn}'
+                + '&sessionTicket={session}'
+                +    '&thumbprint={fingerprint}' )
+        return uri.format( **param )
+
+# end class vomiMKS
 
 
 ######
