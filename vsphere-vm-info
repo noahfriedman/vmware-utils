@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.15 2018/07/21 17:14:47 friedman Exp $
+# $Id: vsphere-vm-info,v 1.16 2018/07/21 20:46:02 friedman Exp $
 
 # Commentary:
 # Code:
@@ -109,7 +109,7 @@ def plural( text, n ):
         text += 's'
     return text
 
-def print_vm( vsi, vmflat, args, sep="" ):
+def print_vm( vsi, vmflat, verbose, sep="" ):
     stdindent =  -17
     indentL    = stdindent - 3
     indentS    = " " * abs( indentL )
@@ -196,7 +196,7 @@ def print_vm( vsi, vmflat, args, sep="" ):
 
     p( 'VM Id',   'vim.VirtualMachine:' + vm[ 'obj' ]._moId )
     p( 'VM UUID', vm_conf[ 'uuid' ] )
-    if args.verbose:
+    if verbose:
         p( 'Instance Id',    getattr( vm_conf, 'instanceUuid', None ))
         p( 'Location Id',    getattr( vm_conf, 'locationId', None ))
         p( 'Config modtime', vm_conf[ 'changeVersion' ] )
@@ -229,7 +229,7 @@ def print_vm( vsi, vmflat, args, sep="" ):
     if rt_conf[ 'powerState' ] == "poweredOn":
         p( 'Boot time', getattr( rt_conf, 'bootTime', None ))
 
-    if args.verbose:
+    if verbose:
         pf2( 'Tools ', vm_conf[ 'tools' ],
              ( ('Power On' , 'afterPowerOn'),
                ('Resume'   , 'afterResume'),
@@ -239,7 +239,7 @@ def print_vm( vsi, vmflat, args, sep="" ):
                ('Upgrade'  , 'toolsUpgradePolicy'),
                ('syncTime' , 'syncTimeWithHost'), ))
 
-    if args.verbose:
+    if verbose:
         pf( 'Flags', '', vm_conf[ 'flags' ],
             sorted( ( 'disableAcceleration',
                       'enableLogging',
@@ -257,7 +257,7 @@ def print_vm( vsi, vmflat, args, sep="" ):
                       'faultToleranceType',
                       'cbrcCacheEnabled', )))
 
-    if args.verbose:
+    if verbose:
         pf( 'Power Ops', '', vm_conf[ 'defaultPowerOps' ],
             sorted( ( 'powerOffType',
                       'suspendType',
@@ -275,7 +275,7 @@ def print_vm( vsi, vmflat, args, sep="" ):
             pf( nic.deviceInfo.label, devtype+' on "'+netlabel+'"' , nic,
                 ( 'macAddress', ) )
 
-            if args.verbose:
+            if verbose:
                 pi( farindentL, 'wakeOnLanEnabled',  nic.wakeOnLanEnabled )
                 pi( farindentL, 'startConnected',    nic.connectable.startConnected )
                 pi( farindentL, 'connected',         nic.connectable.connected )
@@ -292,13 +292,13 @@ def print_vm( vsi, vmflat, args, sep="" ):
                             print( spc, ip )
 
     # This is a custom key I insert into our VMs
-    if args.verbose:
+    if verbose:
         try:
             p( 'Guest json', ex_conf.guestinfo.json )
         except:
             pass
 
-    if args.verbose:
+    if verbose:
         try:
             annot = vm_conf['annotation']
             annot = vsl.fold_text( annot, maxlen=70, indent=abs( indentL ) )
@@ -333,11 +333,12 @@ def main():
 
         # Get the properties we want from the resulting maetches
         vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, vmlist )
+        n = len( vmlist )
         for vm in vmlist:
-            args.vm.pop()
-            if not args.vm:
+            n -= 1
+            if not n:
                 sep = ""
-            print_vm( vsi, vm, args, sep=sep )
+            print_vm( vsi, vm, args.verbose, sep=sep )
     else:
         timer = vsl._timer('collect all')
         vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
@@ -349,8 +350,12 @@ def main():
         timer.report()
 
         timer = vsl._timer('print')
+        n = len( vmlist )
         for vm in vmlist:
-            print_vm( vsi, vm, args, sep=sep )
+            n -= 1
+            if not n:
+                sep = ""
+            print_vm( vsi, vm, args.verbose, sep=sep )
         timer.report()
 
 
