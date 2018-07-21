@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.19 2018/07/21 17:04:39 friedman Exp $
+# $Id: vspherelib.py,v 1.20 2018/07/21 19:36:55 friedman Exp $
 
 # Commentary:
 # Code:
@@ -47,18 +47,35 @@ class Timer( object ):
 class ArgumentParser( argparse.ArgumentParser, object ):
     class Option(): pass  # just a container
 
+    # aliases
+    add        = argparse.ArgumentParser.add_argument
+    parse      = argparse.ArgumentParser.parse_args
+
     searchpath = ['XDG_CONFIG_HOME', 'HOME']
     rcname     = '.vspherelibrc.py'
 
-    def __init__( self ):
-        super( self.__class__, self ).__init__()
+    def __init__( self, rest=None, help='Remaining arguments', required=False, **kwargs ):
+        super( self.__class__, self ).__init__( **kwargs )
+
         timer = Timer( 'loadrc' )
         opt = self.opt = self.loadrc()
         timer.report()
-        self.add_argument( '-s', '--host',     default=opt.host,           help='Remote esxi/vcenter host to connect to' )
-        self.add_argument( '-o', '--port',     default=opt.port, type=int, help='Port to connect on' )
-        self.add_argument( '-u', '--user',     default=opt.user,           help='User name for host connection' )
-        self.add_argument( '-p', '--password', default=opt.password,       help='Server user password' )
+
+        nargs = '*'
+        if required:
+            if type( required ) is bool:
+                nargs = '+'
+            else:
+                nargs = required
+            if not rest:
+                rest = 'rest'
+
+        self.add( '-s', '--host',     default=opt.host,           help='Remote esxi/vcenter host to connect to' )
+        self.add( '-o', '--port',     default=opt.port, type=int, help='Port to connect on' )
+        self.add( '-u', '--user',     default=opt.user,           help='User name for host connection' )
+        self.add( '-p', '--password', default=opt.password,       help='Server user password' )
+        if rest:
+            self.add( rest, nargs=nargs,                          help=help )
 
     # The rc file can manipulate this 'opt' variable; for example it could
     # provide a default for the host via:
