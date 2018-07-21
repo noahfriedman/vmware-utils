@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.17 2018/07/08 08:03:01 noah Exp $
+# $Id: vspherelib.py,v 1.18 2018/07/19 00:48:39 friedman Exp $
 
 # Commentary:
 # Code:
@@ -26,7 +26,7 @@ from pyVmomi import vim, vmodl
 vim.ManagedObject.id = property( lambda self: self._moId )
 
 
-class _timer( object ):
+class Timer( object ):
     enabled = os.getenv( 'VSPHERELIB_DEBUG' ) is not None
 
     def __init__( self, label ):
@@ -40,7 +40,7 @@ class _timer( object ):
         total = end - self.start
         print( '{0}: {1}s'.format( self.label, total ), file=sys.stderr )
 
-# end class _timer
+# end class Timer
 
 
 class ArgumentParser( argparse.ArgumentParser, object ):
@@ -51,7 +51,9 @@ class ArgumentParser( argparse.ArgumentParser, object ):
 
     def __init__( self ):
         super( self.__class__, self ).__init__()
+        timer = Timer( 'loadrc' )
         opt = self.loadrc()
+        timer.report()
         self.add_argument( '-s', '--host',     default=opt.host,           help='Remote esxi/vcenter host to connect to' )
         self.add_argument( '-o', '--port',     default=opt.port, type=int, help='Port to connect on' )
         self.add_argument( '-u', '--user',     default=opt.user,           help='User name for host connection' )
@@ -104,11 +106,191 @@ class ArgumentParser( argparse.ArgumentParser, object ):
 
 
 ######
-### retrieve managed objects by name
-### This is meant to extend vmomiConnector, not used directly.
+## Class for handling property list parameters in a more systematic way.
 ######
 
-class _vmomiFinder( object ):
+class propList( object ):
+    def __new__( self, *args ):
+        """If first param is already an instance, just return previous instance"""
+        if type( args[0] ) is propList:
+            return args[0]
+        else:
+            return super( propList, self ).__new__( propList, *args )
+
+    def __init__( self, *args ):
+        if type( args[0] ) is propList:
+            return
+        self.proplist = []
+        self.propdict = {}
+        self.add_if_new( *args )
+
+    def __len__( self ):
+        return len( self.proplist )
+
+    def add_if_new( self, *props ):
+        for elt in props:
+            if type( elt ) is dict:
+                self.propdict.update( elt )
+                self.add_if_new( *elt.keys() )
+            elif type( elt ) in (tuple, list):
+                self.add_if_new( *elt )
+            elif elt not in self.proplist:
+                self.proplist.append( elt )
+
+    def names( self ):
+        return list( self.proplist )
+
+    def filters( self ):
+        return dict( self.propdict )
+
+# end class propList
+
+
+######
+## Mixins for collecting managed objects and properties
+######
+
+class _vmomiCollect( object ):
+    def create_filter_spec( self, vimtype, container, props ):
+        props      = propList( props )
+
+        vpc        = vmodl.query.PropertyCollector
+        travSpec   = vpc.TraversalSpec( name = 'traverseEntities',
+                                        path = 'view',
+                                        skip = False,
+                                        type = type( container ) )
+        objSpec    = vpc.ObjectSpec( obj=container, skip=True, selectSet=[ travSpec ] )
+        propSet    = [ vpc.PropertySpec( type    = vimt,
+                                         pathSet = props.names(),
+                                         all     = not len( props ) )
+                       for vimt in vimtype ]
+        return vpc.FilterSpec( objectSet=[ objSpec ], propSet=propSet )
+
+
+    def create_container_view( self, vimtype, root=None, recursive=True ):
+        if root is None:
+            root = self.si.content.rootFolder
+        return self.si.content.viewManager.CreateContainerView(
+            container = root,
+            type      = vimtype,
+            recursive = recursive )
+
+
+    def create_list_view( self, objs ):
+        if type( objs ) is not vim.ManagedObject.Array:
+            try:
+                objs = map( lambda o: o.obj, objs )
+            except AttributeError:
+                pass
+        return self.si.content.viewManager.CreateListView( obj=objs )
+
+
+    def _get_obj_props_nofilter( self, vimtype, props=None, root=None, recursive=True ):
+        """
+        Retrieve all listed properties from objects in container (root), or
+        create container out of the rootFolder.
+
+        Returns an object of type vmodl.query.PropertyCollector.ObjectContent[],
+        or vim.ManagedObject[] if there are no properties to collect.
+        """
+
+        gc_container = False
+        if any( map( lambda c: issubclass( type( root ), c),
+                     ( vim.view.ListView, vim.view.ContainerView ))):
+            container = root
+        elif type( root ) is list:
+            container    = self.create_list_view( root )
+            gc_container = True
+        else:
+            container    = self.create_container_view( vimtype, root, recursive )
+            gc_container = True
+
+        if props is None:
+            result = container.view
+        else:
+            props      = propList( props )
+            spc        = self.si.content.propertyCollector
+            filterSpec = self.create_filter_spec( vimtype, container, props )
+
+            timer  = Timer( 'spc.RetrieveContents' )
+            result = spc.RetrieveContents( [ filterSpec ] )
+            timer.report()
+
+        if gc_container:
+            container.Destroy()
+        return result
+
+
+    def get_obj_props( self, vimtype, props=None, root=None, recursive=True ):
+        """
+        If any of the properties have matching values to search for, narrow down
+        the view of managed objects to retrieve the full list of attributes from.
+
+        So for example, if you want a laundry list of attributes from a
+        VirtualMachine but only the one that has a specific name, it's way
+        faster to create a new container with just that machine in it
+        before then collecting a dozen properties from it.
+
+        Returns a list of dict objects for each result.
+
+        """
+        if props is None or len( props ) < 1:
+            return self._get_obj_props_nofilter( vimtype, props, root, recursive )
+
+        # First get the subset of managed objects we want
+        props   = propList( props )
+        filters = props.filters()
+        if filters:
+            filterprops = filters.keys()
+            res = self._get_obj_props_nofilter( vimtype, filterprops, root, recursive )
+            match = []
+            for r in res:
+                for rprop in r.propSet:
+                    if rprop.val in filters.get( rprop.name ):
+                        match.append( r )
+                        break
+            if not match:
+                # there were filters but nothing matched.  So don't let the
+                # collector below run since it would collect *everything*
+                return
+        else:
+            # No filters, so fetch everything in the container
+            match = root
+
+        # Now get all the props from the selected objects... if there are
+        # any we don't already have.  (propnames is a superset of filters)
+        propnames = props.names()
+        if len( filters ) != len( propnames ):
+            res = self._get_obj_props_nofilter( vimtype, propnames, match, recursive )
+        else:
+            res = match
+
+        if res and len( res ) > 0:
+            result = []
+            for r in res:
+                elt = propset_to_dict( r.propSet )
+                elt[ 'obj' ] = r.obj
+                result.append( elt )
+            return result
+
+
+    def get_obj( self, *args, **kwargs):
+        result = self.get_obj_props( *args, **kwargs )
+        if not result:
+            return
+        if kwargs.get( 'props' ) or len( args ) > 1:
+            return [ elt[ 'obj' ] for elt in result ]
+        else:
+            return result
+
+# end class _vmomiCollect
+
+
+######
+## mixins for retrieving Managed Objects by name
+######
+
+class _vmomiFind( object ):
     def _get_single( self, name, mot, label, root=None ):
         """If name is null but there is only one object of that type anyway, just return that."""
         def err( msg, *res ):
@@ -210,12 +392,11 @@ class _vmomiFinder( object ):
             cmp_fn = lambda a, b: cmp( vmorder[ a.obj.name ], vmorder[ b.obj.name ] )
         vmlist.sort( cmp=cmp_fn )
 
-# end class vmomiFinder
+# end class _vmomiFinder
 
 
 ######
-### vCenter folder-related routines
-### This is meant to extend vmomiConnector, not used directly.
+## folder-related mixins
 ######
 
 class _vmomiFolderMap( object ):
@@ -260,6 +441,8 @@ class _vmomiFolderMap( object ):
     def folder_to_path( self, folder ):
         try:
             return self._folder_to_path_map[ folder ]
+        except KeyError:
+            return None
         except AttributeError:
             self._init_path_folder_maps()
             return self._folder_to_path_map[ folder ]
@@ -268,6 +451,8 @@ class _vmomiFolderMap( object ):
     def path_to_folder( self, path ):
         try:
             return self._path_to_folder_map[ path ]
+        except KeyError:
+            return None
         except AttributeError:
             self._init_path_folder_maps()
             return self._path_to_folder_map[ path ]
@@ -276,12 +461,12 @@ class _vmomiFolderMap( object ):
     def get_vm_folder_path( self, vm ):
         return self.folder_to_path( vm.parent )
 
-# end class vmomiFolderMap
+# end class _vmomiFolderMap
 
 
 ######
-### resolve network labels and distributed port groups
-### This is meant to extend vmomiConnector, not used directly.
+## Network mixins
+## resolves network labels and distributed port groups
 ######
 
 class _vmomiNetworkMap( object ):
@@ -296,11 +481,12 @@ class _vmomiNetworkMap( object ):
     def get_network_label( self, nic ):
         if hasattr( nic.backing, 'deviceName' ):
             return nic.backing.deviceName
-        groupmap = self.get_network_groupmap()
+        if not self._network_groupmap:
+            self._network_groupmap = self.get_network_groupmap()
         if issubclass( type( nic.backing ),
                        vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo ):
             key = nic.backing.port.portgroupKey
-            return groupmap.get( key, key )
+            return self._network_groupmap.get( key, key )
         return 'unknown'
 
     # a vmnic is any vim.vm.device.VirtualEthernetCard type element
@@ -317,143 +503,14 @@ class _vmomiNetworkMap( object ):
             cidr.append( ip.ipAddress + "/" + str( ip.prefixLength ) )
         return cidr
 
-# end of class vmomiNetworkMap
-
+# end of class _vmomiNetworkMap
 
 
-class vmomiConnector( _vmomiFinder, _vmomiFolderMap, _vmomiNetworkMap ):
-    def __init__( self, *args, **kwargs ):
-        if len( args ) == 1 and issubclass( type( args[0] ), argparse.Namespace ):
-            kwargs = self.namespacetodict( args[0] )
-        self.host = kwargs[ 'host' ]
-        self.user = kwargs[ 'user' ]
-        self.pwd  = kwargs[ 'password' ]
-        self.port = int( kwargs.get( 'port', 443 ))
-        self.connect()
-        self._network_groupmap = None
+######
+## Task-related mixins
+######
 
-    def namespacetodict( self, namespace ):
-        darg = {}
-        for pair in namespace._get_kwargs():
-            darg[ pair[0] ] = pair[1]
-        return darg
-
-    def __del__( self ):
-        try:
-            pyVconnect.Disconnect( self.si )
-        except AttributeError:
-            pass
-
-
-    def connect( self ):
-        timer = _timer( 'vmomiConnector.connect' )
-        try:
-            context = None
-            if hasattr( ssl, '_create_unverified_context' ):
-                context = ssl._create_unverified_context()
-
-            self.si = pyVconnect.SmartConnect( host = self.host,
-                                               user = self.user,
-                                               pwd  = self.pwd,
-                                               port = self.port,
-                                               sslContext = context )
-        except Exception as e:
-            printerr( args.host, 'Could not connect to ESXi/vCenter server' )
-            printerr( repr( e ) )
-            sys.exit( 1 )
-        timer.report()
-
-
-    def create_filter_spec( self, container, props ):
-        if type( props ) is dict:
-            props = props.keys()
-        elif type( props ) is str:
-            props = [ props ]
-
-        vpc        = vmodl.query.PropertyCollector
-        travSpec   = vpc.TraversalSpec( name='traverseEntities',
-                                        path='view',
-                                        skip=False,
-                                        type=type( container ) )
-        objSpec    = vpc.ObjectSpec( obj=container, skip=True, selectSet=[ travSpec ] )
-        propSet    = [ vpc.PropertySpec( type=t,
-                                         pathSet=props,
-                                         all=not props or not len( props ) )
-               for t in set( type(v) for v in container.view ) ]
-        filterSpec = vpc.FilterSpec( objectSet=[ objSpec ], propSet=propSet )
-        return filterSpec
-
-
-    def create_container_view( self, type, root=None, recursive=True ):
-        if root is None:
-            root = self.si.content.rootFolder
-        return self.si.content.viewManager.CreateContainerView(
-            container = root,
-            type      = type,
-            recursive = recursive )
-
-
-    def create_list_view( self, *objs ):
-        return self.si.content.viewManager.CreateListView( obj=objs )
-
-
-    def get_obj_props( self, vimtype, props=None, root=None, recursive=True ):
-        container    = None
-        gc_container = False
-        if any( map( lambda c: issubclass( type( vimtype ), c),
-                     ( vim.view.ListView, vim.view.ContainerView ))):
-            container = vimtype
-        else:
-            container = self.create_container_view( vimtype, root=root, recursive=recursive )
-            gc_container = True
-
-        result = None
-        if props is None:
-            result = container.view
-        else:
-            spc = self.si.content.propertyCollector
-            filterSpec = self.create_filter_spec( container, props )
-            # Would need to loop with this.
-            #opt  = vmodl.query.PropertyCollector.RetrieveOptions()
-            #pres = spc.RetrievePropertiesEx( specSet=[ filterSpec ], options=opt )
-            timer = _timer( 'spc.RetrieveContents' )
-            res = spc.RetrieveContents( [ filterSpec ] )
-            timer.report()
-            if res:
-                match = res
-                if type( props ) is dict:
-                    match = []
-                    for r in res:
-                        for rprop in r.propSet:
-                            want = props.get( rprop.name )
-                            if want is None:
-                                continue
-                            if ( (type( want ) is str  and rprop.val == want )
-                                 or
-                                 (type( want ) is list and rprop.val in want ) ):
-                                match.append( r )
-                                break
-                if len( match ) > 0:
-                    result = []
-                    for m in match:
-                        elt = propset_to_dict( m.propSet )
-                        elt[ 'obj' ] = m.obj
-                        result.append( elt )
-        if gc_container:
-            container.Destroy()
-        return result
-
-
-    def get_obj( self, *args, **kwargs):
-        result = self.get_obj_props( *args, **kwargs )
-        if not result:
-            return
-        if kwargs.get( 'props' ) or len( args ) > 1:
-            return [ elt[ 'obj' ] for elt in result ]
-        else:
-            return result
-
-
+class _vmomiTask( object ):
     def taskwait( self, tasklist, printsucc=True, callback=None ):
         class our(): pass
         our.callback = callback
@@ -473,9 +530,9 @@ class vmomiConnector( _vmomiFinder, _vmomiFolderMap, _vmomiNetworkMap ):
             tasklist = [ tasklist ]
 
         objSpecs   = [ vpc.ObjectSpec( obj=task ) for task in tasklist ]
-        propSpec   =  vpc.PropertySpec( type=vim.Task, pathSet=[], all=True )
-        filterSpec =  vpc.FilterSpec( objectSet=objSpecs, propSet=[ propSpec ] )
-        filter     =  spc.CreateFilter( filterSpec, True )
+        propSpec   = vpc.PropertySpec( type=vim.Task, pathSet=[], all=True )
+        filterSpec = vpc.FilterSpec( objectSet=objSpecs, propSet=[ propSpec ] )
+        filter     = spc.CreateFilter( filterSpec, True )
 
         succ     = 1
         taskleft = [ task.info.key for task in tasklist ]
@@ -483,7 +540,8 @@ class vmomiConnector( _vmomiFinder, _vmomiFolderMap, _vmomiNetworkMap ):
             version, state = None, None
 
             while len( taskleft ):
-                update = spc.WaitForUpdates( version )
+                update  = spc.WaitForUpdates( version )
+                version = update.version
 
                 for filterSet in update.filterSet:
                     for objSet in filterSet.objectSet:
@@ -513,11 +571,61 @@ class vmomiConnector( _vmomiFinder, _vmomiFolderMap, _vmomiNetworkMap ):
                                 succ = 0
                                 if not our.callback:
                                     printerr( info.entityName, info.error.msg )
-                version = update.version
         finally:
             if filter:
                 filter.Destroy()
         return succ
+
+# end class _vmomiTask
+
+
+class vmomiConnect( _vmomiCollect,
+                    _vmomiFind,
+                    _vmomiFolderMap,
+                    _vmomiNetworkMap,
+                    _vmomiTask, ):
+
+    def __init__( self, *args, **kwargs ):
+        if len( args ) == 1 and issubclass( type( args[0] ), argparse.Namespace ):
+            kwargs = self.namespacetodict( args[0] )
+        self.host = kwargs[ 'host' ]
+        self.user = kwargs[ 'user' ]
+        self.pwd  = kwargs[ 'password' ]
+        self.port = int( kwargs.get( 'port', 443 ))
+        self.connect()
+        self._network_groupmap = None
+
+    def __del__( self ):
+        try:
+            pyVconnect.Disconnect( self.si )
+        except AttributeError:
+            pass
+
+    def namespacetodict( self, namespace ):
+        darg = {}
+        for pair in namespace._get_kwargs():
+            darg[ pair[0] ] = pair[1]
+        return darg
+
+    def connect( self ):
+        timer = Timer( 'vmomiConnect.connect' )
+        try:
+            context = None
+            if hasattr( ssl, '_create_unverified_context' ):
+                context = ssl._create_unverified_context()
+
+            self.si = pyVconnect.SmartConnect( host = self.host,
+                                               user = self.user,
+                                               pwd  = self.pwd,
+                                               port = self.port,
+                                               sslContext = context )
+        except Exception as e:
+            printerr( args.host, 'Could not connect to ESXi/vCenter server' )
+            printerr( repr( e ) )
+            sys.exit( 1 )
+        timer.report()
+
+vmomiConnector = vmomiConnect  # deprecated alias
 
 # end class vmomiConnect
 
@@ -556,6 +664,20 @@ def propset_to_dict( propset ):
 
 def get_seq_type( obj, typeref ):
     return filter( lambda elt: issubclass( type( elt ), typeref ), obj)
+
+def dotted_to_nested_dict( flat, sep='.' ):
+    nested = {}
+    for k in flat:
+        parts = k.split( sep )
+        walk = nested
+        for elt in parts[ :-1 ]:
+            try:
+                walk = walk[ elt ]
+            except KeyError:
+                walk[ elt ] = {}
+                walk = walk[ elt ]
+        walk[ parts[-1] ] = flat[ k ]
+    return nested
 
 
 ######
