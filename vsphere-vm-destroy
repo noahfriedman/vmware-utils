@@ -1,20 +1,11 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-destroy,v 1.1 2018/05/08 21:32:52 friedman Exp $
+# $Id: vsphere-vm-destroy,v 1.2 2018/07/19 00:48:39 friedman Exp $
 
 from   __future__ import print_function
 import vspherelib     as vsl
 
 import os
 import sys
-
-def get_args():
-    parser = vsl.ArgumentParser()
-    parser.add_argument( 'vm', nargs='*', help='VM names' )
-    args = parser.parse_args()
-    if not args.vm:
-        printerr( 'Specify VM names' )
-        sys.exit (1)
-    return args
 
 def power_off( vsi, vm ):
     if vm.runtime.powerState == 'poweredOn':
@@ -36,7 +27,7 @@ def nuke( vsi, vm ):
     return True
 
 def main():
-    args = get_args()
+    args = vsl.ArgumentParser( rest='vm', required=True ).parse()
     vsi  = vsl.vmomiConnector( args )
 
     vmlist = vsi.find_vm( args.vm )
