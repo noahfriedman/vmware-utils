@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-folder-tree,v 1.1 2018/05/05 02:54:21 friedman Exp $
+# $Id: vsphere-folder-tree,v 1.2 2018/07/19 00:48:39 friedman Exp $
 
 from __future__ import print_function
 import vspherelib as vsl
@@ -7,7 +7,7 @@ import re
 
 def main():
     args = vsl.ArgumentParser().parse_args()
-    vsi  = vsl.vmomiConnector( args )
+    vsi  = vsl.vmomiConnect( args )
 
     ptbl = vsi.path_to_folder_map()
     for p in sorted( ptbl.keys() ):
