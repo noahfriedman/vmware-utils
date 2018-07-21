@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.16 2018/07/21 20:46:02 friedman Exp $
+# $Id: vsphere-vm-info,v 1.17 2018/07/21 22:11:36 friedman Exp $
 
 # Commentary:
 # Code:
@@ -340,16 +340,16 @@ def main():
                 sep = ""
             print_vm( vsi, vm, args.verbose, sep=sep )
     else:
-        timer = vsl._timer('collect all')
+        timer = vsl.Timer('collect all')
         vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
         timer.report()
 
         print(vmlist[0])
-        timer = vsl._timer('sort')
+        timer = vsl.Timer('sort')
         vmlist.sort( cmp=lambda a, b: cmp( a[ 'name' ], b[ 'name' ] ))
         timer.report()
 
-        timer = vsl._timer('print')
+        timer = vsl.Timer('print')
         n = len( vmlist )
         for vm in vmlist:
             n -= 1
