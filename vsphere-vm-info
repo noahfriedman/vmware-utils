@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.14 2018/07/19 01:05:34 friedman Exp $
+# $Id: vsphere-vm-info,v 1.15 2018/07/21 17:14:47 friedman Exp $
 
 # Commentary:
 # Code:
@@ -88,12 +88,12 @@ proplist_verbose = [
 
 
 def get_args():
-    parser = vsl.ArgumentParser()
-    parser.add_argument( '-a', '--all',     action='store_true', help='Retrieve all known VMs' )
-    parser.add_argument( '-v', '--verbose', action='store_true', help='Display extended info' )
-    parser.add_argument( 'vm', nargs='*',                        help='VM names, if not all' )
+    p = vsl.ArgumentParser()
+    p.add( '-a', '--all',     action='store_true', help='Retrieve all known VMs' )
+    p.add( '-v', '--verbose', action='store_true', help='Display extended info' )
+    p.add( 'vm', nargs='*',                        help='VM names, if not all' )
 
-    args = parser.parse_args()
+    args = p.parse()
     if not args.all and not args.vm:
         vsl.printerr( 'Specify VM names or -a (--all)' )
         sys.exit (1)
@@ -319,7 +319,7 @@ def print_vm( vsi, vmflat, args, sep="" ):
 
 def main():
     args = get_args()
-    vsi = vsl.vmomiConnect( args )
+    vsi  = vsl.vmomiConnect( args )
 
     if args.verbose:
         proplist.extend( proplist_verbose )
