@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.20 2018/07/21 19:36:55 friedman Exp $
+# $Id: vspherelib.py,v 1.21 2018/07/21 20:43:17 friedman Exp $
 
 # Commentary:
 # Code:
@@ -25,6 +25,11 @@ from pyVmomi import vim, vmodl
 
 # Get the id for a managed object type: Folder, Datacenter, Datastore, etc.
 vim.ManagedObject.id = property( lambda self: self._moId )
+
+try:
+    progname = os.path.basename( sys.argv[0] )
+except:
+    pass
 
 
 class Timer( object ):
@@ -368,7 +373,7 @@ class _vmomiFind( object ):
 
     # TODO: for hosts which still can't be found from the searchindex,
     # try a substring match on all host names.
-    def find_vm( self, *names ):
+    def find_vm( self, *names, showerrors=True ):
         args = None # make copy of names since we alter
         if type( names[0] ) is not str:
             args = list( names[0] )
@@ -387,29 +392,32 @@ class _vmomiFind( object ):
             search = self.si.content.searchIndex
             for vmname in args:
                 i = sortord.index( vmname )
-                sortord.pop( i )
 
                 res = search.FindByDnsName( vmSearch=True, dnsName=vmname )
                 if res:
                     found.append( res )
+                    sortord.pop( i )
                     sortord.insert( i, res.name )
                 else:
                     res = search.FindByIp( vmSearch=True, ip=vmname )
                     if res:
                         found.append( res )
+                        sortord.pop( i )
                         sortord.insert( i, res.name )
+
+        if showerrors and len( found ) < len( sortord ):
+            found_names = map( lambda o: o.name, found )
+            for name in sortord:
+                if name not in found_names:
+                    printerr( name, 'virtual machine not found.' )
 
         self.vmlist_sort_by_args( found, sortord )
         return found
 
     def vmlist_sort_by_args( self, vmlist, args ):
-        if not vmlist or len(vmlist) < 1:
+        if not vmlist or len( vmlist ) < 1:
             return
-        vmorder = dict()
-        i = 0
-        for name in args:
-            vmorder[ name ] = i
-            i += 1
+        vmorder = dict( (elt[ 1 ], elt[ 0 ]) for elt in enumerate( args ) )
         cmp_fn = lambda a, b: cmp( vmorder[ a.name ], vmorder[ b.name ] )
         if type( vmlist[ 0 ] ) is vmodl.query.PropertyCollector.ObjectContent:
             cmp_fn = lambda a, b: cmp( vmorder[ a.obj.name ], vmorder[ b.obj.name ] )
@@ -842,7 +850,11 @@ def printerr( *args, **kwargs ):
     sep  = kwargs.get( 'sep',  ': ' )
     end  = kwargs.get( 'end',  "\n" )
     file = kwargs.get( 'file', sys.stderr )
-    print( *args, sep=sep, end=end, file=sys.stderr )
+
+    pargs = list( args )
+    if progname:
+        pargs.insert( 0, progname )
+    print( *pargs, sep=sep, end=end, file=file )
 
 
 def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
