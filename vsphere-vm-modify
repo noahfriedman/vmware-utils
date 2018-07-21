@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-modify,v 1.3 2018/07/08 08:04:34 noah Exp $
+# $Id: vsphere-vm-modify,v 1.4 2018/07/19 00:48:39 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
@@ -70,26 +70,22 @@ class mVM():
 
 
 def get_args():
-    parser = vsl.ArgumentParser()
-    parser.add_argument( '-c', '--command', required=True, choices=cmds, help='Command to perform on virtual machines')
-    parser.add_argument( '--datacenter',  default=None )
-    parser.add_argument( '--datastore',   default=None )
-    parser.add_argument( '--pool',        default=None )
-    parser.add_argument( '--cluster',     default=None )
-    parser.add_argument( '--folder',      default=None )
-    parser.add_argument( '--name',        default=None )
-    parser.add_argument( '--as-template', action='store_true' )
-    parser.add_argument( 'vm', nargs='*', help='names' )
-    args = parser.parse_args()
-    if not args.vm:
-        printerr( 'Specify VM name(s)' )
-        sys.exit (1)
-    return args
+    p = vsl.ArgumentParser()
+    p.add( '-c', '--command', required=True, choices=cmds, help='Command to perform on virtual machines')
+    p.add( '--datacenter',  default=None )
+    p.add( '--datastore',   default=None )
+    p.add( '--pool',        default=None )
+    p.add( '--cluster',     default=None )
+    p.add( '--folder',      default=None )
+    p.add( '--name',        default=None )
+    p.add( '--as-template', action='store_true' )
+    p.add( 'vm', nargs='+', help='VM names' )
+    return p.parse()
 
 
 def main():
     args = get_args()
-    vsi  = vsl.vmomiConnector( args )
+    vsi  = vsl.vmomiConnect( args )
     mi   = mVM( vsi, args )
 
     if args.command == 'rename':
