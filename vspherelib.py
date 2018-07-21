@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.21 2018/07/21 20:43:17 friedman Exp $
+# $Id: vspherelib.py,v 1.22 2018/07/21 21:27:33 friedman Exp $
 
 # Commentary:
 # Code:
@@ -373,7 +373,7 @@ class _vmomiFind( object ):
 
     # TODO: for hosts which still can't be found from the searchindex,
     # try a substring match on all host names.
-    def find_vm( self, *names, showerrors=True ):
+    def find_vm( self, *names, **kwargs ):
         args = None # make copy of names since we alter
         if type( names[0] ) is not str:
             args = list( names[0] )
@@ -405,11 +405,11 @@ class _vmomiFind( object ):
                         sortord.pop( i )
                         sortord.insert( i, res.name )
 
-        if showerrors and len( found ) < len( sortord ):
+        if kwargs.get( 'showerrors', True ) and len( found ) < len( sortord ):
             found_names = map( lambda o: o.name, found )
             for name in sortord:
                 if name not in found_names:
-                    printerr( name, 'virtual machine not found.' )
+                    printerr( '"{}"'.format( name ), 'virtual machine not found.' )
 
         self.vmlist_sort_by_args( found, sortord )
         return found
