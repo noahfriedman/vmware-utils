@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.25 2018/07/23 17:48:16 friedman Exp $
+# $Id: vspherelib.py,v 1.26 2018/07/23 22:12:48 friedman Exp $
 
 # Commentary:
 # Code:
@@ -37,7 +37,7 @@ class Timer( object ):
     enabled = os.getenv( 'VSPHERELIB_DEBUG' ) is not None
     acc_tm   = 0
     acc_cl   = 0
-    fmt      = '{0:<24}: {1: > 8.4f}s / {2:> 8.4f}s'
+    fmt      = '{0:<40}: {1: > 8.4f}s / {2:> 8.4f}s'
     fh       = sys.stderr
 
     def __init__( self, label ):
@@ -51,6 +51,10 @@ class Timer( object ):
         tot_cl = time.clock() - self.beg_cl
         self.__class__.acc_tm += tot_tm
         self.__class__.acc_cl += tot_cl
+
+        # Allows for delayed evaluation
+        if callable( self.label ):
+            self.label = self.label()
 
         print( self.fmt.format( self.label, tot_cl, tot_tm ),
                file=self.fh )
@@ -258,7 +262,7 @@ class _vmomiCollect( object ):
             spc        = self.si.content.propertyCollector
             filterSpec = self.create_filter_spec( vimtype, container, props )
 
-            timer  = Timer( 'spc.RetrieveContents' )
+            timer  = Timer( lambda: 'retrieve {} '.format( ', '.join( v._wsdlName for v in vimtype )))
             result = spc.RetrieveContents( [ filterSpec ] )
             timer.report()
 
