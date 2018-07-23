@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.18 2018/07/21 22:17:01 friedman Exp $
+# $Id: vsphere-vm-info,v 1.19 2018/07/21 22:42:52 friedman Exp $
 
 # Commentary:
 # Code:
@@ -85,6 +85,9 @@ proplist_verbose = [
     'config.defaultPowerOps.resetType',
     'config.defaultPowerOps.standbyAction',
     'config.defaultPowerOps.suspendType', ]
+
+vim_objmap = { 'pool' : vim.ResourcePool,
+               'host' : vim.HostSystem, }
 
 
 def get_args():
@@ -272,7 +275,7 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
         for nic in nics:
             devtype = nic._wsdlName.replace( 'Virtual', '' ).lower()
             netlabel = vsi.get_network_label( nic )
-            pf( nic.deviceInfo.label, devtype+' on "'+netlabel+'"' , nic,
+            pf( nic.deviceInfo.label, '{} on "{}"'.format( devtype, netlabel ), nic,
                 ( 'macAddress', ) )
 
             if verbose:
@@ -284,7 +287,7 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
             if rt_conf[ 'powerState' ] == "poweredOn":
                 gnic = filter( lambda g: g.macAddress == nic.macAddress, gu_conf[ 'net' ] )
                 if len( gnic ):
-                    cidr = vsi.get_vmnic_cidrs( gnic[0] )
+                    cidr = vsi.vmnic_cidrs( gnic[0] )
                     if cidr and len(cidr) > 0:
                         spc  = " " * (abs( farindentL ) + abs( indentL ) + 2)
                         pi( farindentL, 'IP Addresses', cidr[0] )
@@ -317,6 +320,11 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
     print( sep )
 
 
+def moId_to_name_map( vsi, vimtype ):
+    res = vsi.get_obj_props( [vimtype], [ 'name' ] )
+    print(res)
+    return dict( map( lambda o: ( str( o[ 'obj' ]._moId ), o[ 'name' ] ), res ))
+
 def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
@@ -340,9 +348,26 @@ def main():
                 sep = ""
             print_vm( vsi, vm, args.verbose, sep=sep )
     else:
-        timer = vsl.Timer('collect all')
+        timer  = vsl.Timer('collect all virtual machines')
         vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
         timer.report()
+
+        #objtypes = [vim.HostSystem, vim.ResourcePool,
+        #objlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
+
+
+#         timer = vsl.Timer('hosts')
+#         hosts = moId_to_name_map( vsi, vim.HostSystem )
+#         timer.report()
+#         timer = vsl.Timer('pools')
+#         pools = moId_to_name_map( vsi, vim.ResourcePool )
+#         timer.report()
+#
+#         print(hosts)
+#         print(pools)
+#         sys.exit(1)
+#
+
 
         timer = vsl.Timer('sort')
         vmlist.sort( cmp=lambda a, b: cmp( a[ 'name' ], b[ 'name' ] ))
