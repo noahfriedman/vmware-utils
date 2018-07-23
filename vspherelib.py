@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.24 2018/07/23 16:56:45 friedman Exp $
+# $Id: vspherelib.py,v 1.25 2018/07/23 17:48:16 friedman Exp $
 
 # Commentary:
 # Code:
@@ -19,6 +19,7 @@ import OpenSSL
 import ssl
 import re
 import time
+import atexit
 
 from pyVim   import connect as pyVconnect
 from pyVmomi import vim, vmodl
@@ -34,16 +35,32 @@ except:
 
 class Timer( object ):
     enabled = os.getenv( 'VSPHERELIB_DEBUG' ) is not None
+    acc_tm   = 0
+    acc_cl   = 0
+    fmt      = '{0:<24}: {1: > 8.4f}s / {2:> 8.4f}s'
+    fh       = sys.stderr
 
     def __init__( self, label ):
         self.label = label
-        self.start = time.clock()
+        self.beg_cl = time.clock()
+        self.beg_tm = time.time()
 
     def report( self ):
         if not self.enabled: return
-        end   = time.clock()
-        total = end - self.start
-        print( '{0}: {1}s'.format( self.label, total ), file=sys.stderr )
+        tot_tm = time.time()  - self.beg_tm
+        tot_cl = time.clock() - self.beg_cl
+        self.__class__.acc_tm += tot_tm
+        self.__class__.acc_cl += tot_cl
+
+        print( self.fmt.format( self.label, tot_cl, tot_tm ),
+               file=self.fh )
+
+    def _atexit_report_accum():
+        if not Timer.enabled: return
+        print( Timer.fmt.format( "TOTAL", Timer.acc_cl, Timer.acc_tm ),
+               file=Timer.fh )
+    atexit.register( _atexit_report_accum )
+
 
 # end class Timer
 
