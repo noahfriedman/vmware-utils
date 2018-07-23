@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.22 2018/07/21 21:27:33 friedman Exp $
+# $Id: vspherelib.py,v 1.23 2018/07/21 22:10:24 friedman Exp $
 
 # Commentary:
 # Code:
@@ -36,7 +36,6 @@ class Timer( object ):
     enabled = os.getenv( 'VSPHERELIB_DEBUG' ) is not None
 
     def __init__( self, label ):
-        if not self.enabled: return
         self.label = label
         self.start = time.clock()
 
@@ -503,38 +502,96 @@ class _vmomiFolderMap( object ):
 class _vmomiNetworkMap( object ):
     def get_network_groupmap( self ):
         tbl = {}
-        nets = self.get_obj_props( [vim.dvs.DistributedVirtualPortgroup], ['config'] )
-        for elt in nets:
-            conf = elt[ 'config' ]
-            tbl[ conf.key ] = conf.name
-        return tbl
+        nets = self.get_obj_props( [vim.dvs.DistributedVirtualPortgroup],
+                                   ['config.key', 'config.name'] )
+        if not nets:
+            return
+        return dict( (x[ 'config.key' ], x[ 'config.name' ]) for x in nets )
 
     def get_network_label( self, nic ):
-        if hasattr( nic.backing, 'deviceName' ):
+        try:
             return nic.backing.deviceName
-        if not self._network_groupmap:
-            self._network_groupmap = self.get_network_groupmap()
+        except AttributeError:
+            pass
+
         if issubclass( type( nic.backing ),
                        vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo ):
+            if not self._network_groupmap:
+                self._network_groupmap = self.get_network_groupmap()
             key = nic.backing.port.portgroupKey
             return self._network_groupmap.get( key, key )
+
         return 'unknown'
+
+# end of class _vmomiNetworkMap
+
+
+######
+## GuestInfo subtype mixins
+######
+
+class _vmomiGuestInfo( object ):
+
+    def guest_dns_config( self, vm ):
+        dns = []
+        for ipStack in vm.guest.ipStack:
+            dconf = ipStack.dnsConfig
+            if not dconf:
+                continue
+            dns.append( {
+                'server' : list( dconf.ipAddress ),
+                'search' : list( dconf.searchDomain ), })
+        return dns
+
+    def guest_ip_routes( self, vm ):
+        tbl = {}
+        for ipStack in vm.guest.ipStack:
+            routes = ipStack.ipRouteConfig.ipRoute
+            for elt in routes:
+                if ( elt.prefixLength == 128
+                     or elt.network in ('ff00::', '169.254.0.0')
+                     or elt.network.find( 'fe80::' ) == 0 ):
+                    continue
+
+                if elt.prefixLength != 0:
+                    net = '{}/{}'.format( elt.network, elt.prefixLength )
+                elif elt.network == '0.0.0.0':
+                    net = 'default'
+                else:
+                    net = elt.network
+                new = { 'network' : net }
+
+                gw = elt.gateway.ipAddress
+                if gw:
+                    new[ 'gateway' ] = gw
+
+                dev = elt.gateway.device
+                if dev not in tbl:
+                    eth = tbl[ dev ] = []
+                else:
+                    eth = tbl[ dev ]
+                eth.append( new )
+        return list( tbl[i] for i in sorted( tbl.keys() ))
+
+    def guest_ip_addrs( self, vm ):
+        return [ self.vmnic_cidrs( vmnic )
+                 for vmnic in vm.guest.net ]
 
     # a vmnic is any vim.vm.device.VirtualEthernetCard type element
     # from vm.config.hardware.device
-    def get_vmnic_cidrs( self, vmnic ):
+    def vmnic_cidrs( self, vmnic ):
         """
+        vmnic should be an object of type vim.vm.GuestInfo.NicInfo
+
+
         a vmnic is any vim.vm.device.VirtualEthernetCard type element from
         vm.config.hardware.device
         """
-        if not vmnic.ipConfig:
-            return
-        cidr = []
-        for ip in vmnic.ipConfig.ipAddress:
-            cidr.append( ip.ipAddress + "/" + str( ip.prefixLength ) )
-        return cidr
-
-# end of class _vmomiNetworkMap
+        if vmnic.ipConfig:
+            return [ "{}/{}".format( ip.ipAddress, ip.prefixLength )
+                     for ip in vmnic.ipConfig.ipAddress ]
+        else:
+            return vmnic.ipAddress
 
 
 ######
@@ -614,6 +671,7 @@ class vmomiConnect( _vmomiCollect,
                     _vmomiFind,
                     _vmomiFolderMap,
                     _vmomiNetworkMap,
+                    _vmomiGuestInfo,
                     _vmomiTask, ):
 
     def __init__( self, *args, **kwargs ):
@@ -728,27 +786,21 @@ def attr_get( obj, name ):
             return getattr( elt, 'value' )
 
 def attr_to_dict( obj ):
-    attrs = dict()
-    for elt in obj:
-        key = getattr( elt, 'key' )
-        val = getattr( elt, 'value' )
-        attrs[ key ] = val
-    return attrs
+    return dict( ( getattr( o, 'key' ),
+                   getattr( o, 'value' ) )
+                 for o in obj )
 
 def propset_get( propset, name ):
     if type( propset ) is vmodl.query.PropertyCollector.ObjectContent:
         propset = propset.propSet
-    search = filter( lambda elt: elt.name == name, propset )
-    if search and len( search ) > 0:
-        return search[ 0 ].val
+    for elt in propset:
+        if elt.name == name:
+            return elt.val
 
 def propset_to_dict( propset ):
     if type( propset ) is vmodl.query.PropertyCollector.ObjectContent:
         propset = propset.propSet
-    _dict = dict()
-    for prop in propset:
-        _dict[ prop.name ] = prop.val
-    return _dict
+    return dict( ( p.name, p.val ) for p in propset )
 
 def get_seq_type( obj, typeref ):
     return filter( lambda elt: issubclass( type( elt ), typeref ), obj)
