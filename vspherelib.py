@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.23 2018/07/21 22:10:24 friedman Exp $
+# $Id: vspherelib.py,v 1.24 2018/07/23 16:56:45 friedman Exp $
 
 # Commentary:
 # Code:
@@ -51,9 +51,8 @@ class Timer( object ):
 class ArgumentParser( argparse.ArgumentParser, object ):
     class Option(): pass  # just a container
 
-    # aliases
+    # alias
     add        = argparse.ArgumentParser.add_argument
-    parse      = argparse.ArgumentParser.parse_args
 
     searchpath = ['XDG_CONFIG_HOME', 'HOME']
     rcname     = '.vspherelibrc.py'
@@ -128,6 +127,9 @@ class ArgumentParser( argparse.ArgumentParser, object ):
                 setattr( args, elt, extra[ elt ] )
 
         return args
+    # alias
+    parse = parse_args
+
 
 # end class ArgumentParser
 
