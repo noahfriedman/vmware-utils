@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-tags,v 1.2 2018/07/19 00:48:39 friedman Exp $
+# $Id: vsphere-vm-tags,v 1.3 2018/07/21 20:48:24 friedman Exp $
 
 # This uses the vSphere Automation SDK for Python as well as pyVmomi.
 
@@ -90,11 +90,14 @@ class vapiConnect():
 def main():
     args = vsl.ArgumentParser().parse_args()
     vsi  = vsl.vmomiConnect( args )
+
+    t = vsl.Timer('vapiConnect')
     vpi  = vapiConnect( host   = args.host,
                         user   = args.user,
                         passwd = args.password )
+    t.report()
 
-    t = vsl._timer('vmid_to_owner_tag_map')
+    t = vsl.Timer('vmid_to_owner_tag_map')
     vmid2owner = vpi.vmid_to_owner_tag_map()
     t.report()
 
@@ -105,12 +108,12 @@ def main():
                   'guest.hostName',
                   'guest.ipAddress', ]
 
-    t = vsl._timer("get_obj_props")
+    t = vsl.Timer("get_obj_props")
     vmlist = vsi.get_obj_props( [vim.VirtualMachine], obj_props )
     t.report()
     #print(vmlist)
 
-    t = vsl._timer('make vmtbl')
+    t = vsl.Timer('make vmtbl')
     vmtbl = {}
     for vm in vmlist:
         if vm[ 'guest.guestState' ] != 'running':
@@ -132,7 +135,7 @@ def main():
 
     t.report()
 
-    t = vsl._timer("generate json")
+    t = vsl.Timer("generate json")
     out = json.dumps( vmtbl, sort_keys=True, indent='    ', check_circular=False)
     t.report()
 
