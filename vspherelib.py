@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.26 2018/07/23 22:12:48 friedman Exp $
+# $Id: vspherelib.py,v 1.27 2018/07/23 23:44:05 friedman Exp $
 
 # Commentary:
 # Code:
@@ -245,8 +245,7 @@ class _vmomiCollect( object ):
         """
 
         gc_container = False
-        if any( map( lambda c: issubclass( type( root ), c),
-                     ( vim.view.ListView, vim.view.ContainerView ))):
+        if isinstance( root, ( vim.view.ListView, vim.view.ContainerView )):
             container = root
         elif type( root ) is list:
             container    = self.create_list_view( root )
@@ -537,8 +536,7 @@ class _vmomiNetworkMap( object ):
         except AttributeError:
             pass
 
-        if issubclass( type( nic.backing ),
-                       vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo ):
+        if isinstance( nic.backing, vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo ):
             if not self._network_groupmap:
                 self._network_groupmap = self.get_network_groupmap()
             key = nic.backing.port.portgroupKey
@@ -700,7 +698,7 @@ class vmomiConnect( _vmomiCollect,
     def __init__( self, *args, **kwargs ):
         kwargs = dict( **kwargs ) # copy; destructively modified
         for arg in args:
-            if issubclass( type( arg ), argparse.Namespace ):
+            if isinstance( arg, argparse.Namespace ):
                 kwargs.update( vars( arg ))
 
         self.host = kwargs[ 'host' ]
@@ -747,7 +745,7 @@ class vmomiMKS( object ):
     def __init__( self, vsi, *args, **kwargs ):
         kwargs = dict( **kwargs ) # copy; destructively modified
         for arg in args:
-            if issubclass( type( arg ), argparse.Namespace ):
+            if isinstance( arg, argparse.Namespace ):
                 kwargs.update( vars( arg ))
 
         content   = vsi.si.content
@@ -826,7 +824,7 @@ def propset_to_dict( propset ):
     return dict( ( p.name, p.val ) for p in propset )
 
 def get_seq_type( obj, typeref ):
-    return filter( lambda elt: issubclass( type( elt ), typeref ), obj)
+    return filter( lambda elt: isinstance( elt , typeref ), obj )
 
 def dotted_to_nested_dict( flat, sep='.' ):
     nested = {}
