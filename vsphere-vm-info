@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.19 2018/07/21 22:42:52 friedman Exp $
+# $Id: vsphere-vm-info,v 1.20 2018/07/23 16:57:50 friedman Exp $
 
 # Commentary:
 # Code:
@@ -16,12 +16,16 @@ from   pyVmomi    import vim
 import vspherelib     as vsl
 import sys
 
+#import httplib
+#httplib.HTTPConnection.debuglevel = 1
+
 proplist = [
     'config.annotation',
     'config.bootOptions.bootDelay',
     'config.cpuHotAddEnabled',
     'config.cpuHotRemoveEnabled',
     'config.files.vmPathName',
+    'config.guestFullName',
     'config.hardware.device',
     'config.hardware.memoryMB',
     'config.hardware.numCPU',
@@ -31,7 +35,6 @@ proplist = [
     'config.uuid',
     'config.version',
 
-    'guest.guestFullName',
     'guest.hostName',
     'guest.net',
 
@@ -86,8 +89,8 @@ proplist_verbose = [
     'config.defaultPowerOps.standbyAction',
     'config.defaultPowerOps.suspendType', ]
 
-vim_objmap = { 'pool' : vim.ResourcePool,
-               'host' : vim.HostSystem, }
+moId_types = [ vim.HostSystem, vim.ResourcePool ]
+moId_map   = {}
 
 
 def get_args():
@@ -172,20 +175,20 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
     su_conf = vm[ 'summary' ]
 
     hw_conf = vm_conf[ 'hardware' ]
-    ex_conf = getattr( vm_conf, 'extraConfig', None )
+    ex_conf = vm_conf.get( 'extraConfig' )
 
     numCPU = hw_conf[ 'numCPU' ]
     coreargs = [plural( 'core', numCPU )]
-    if getattr( hw_conf, 'numCoresPerSocket', None ):
+    if hw_conf.get( 'numCoresPerSocket' ):
         nsockets = numCPU / hw_conf[ 'numCoresPerSocket' ]
         coreargs.append( plural('%d socket' % nsockets, nsockets ))
-    if getattr( vm_conf, 'cpuHotAddEnabled', None ):
+    if vm_conf.get( 'cpuHotAddEnabled' ):
         coreargs.append( 'hot add enabled' )
-    if getattr( vm_conf, 'cpuHotRemoveEnabled', None ):
+    if vm_conf.get( 'cpuHotRemoveEnabled' ):
         coreargs.append( 'hot remove enabled' )
 
     memargs = [vsl.scale_size( hw_conf[ 'memoryMB' ] * 1024 * 1024)]
-    if getattr( vm_conf, 'memoryHotAddEnabled', None):
+    if vm_conf.get( 'memoryHotAddEnabled' ):
         memargs.append( 'hot add enabled' )
 
     vm_name = vm[ 'name' ]
@@ -193,26 +196,30 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
         p( 'VM Name', vm_name, '    [TEMPLATE]' )
     else:
         p( 'VM Name', vm_name )
-        hn = getattr( gu_conf, 'hostName', None )
+        hn = gu_conf.get( 'hostName' )
         if hn and hn != vm_name:
             p( 'VM Guest Name', hn )
 
     p( 'VM Id',   'vim.VirtualMachine:' + vm[ 'obj' ]._moId )
     p( 'VM UUID', vm_conf[ 'uuid' ] )
     if verbose:
-        p( 'Instance Id',    getattr( vm_conf, 'instanceUuid', None ))
-        p( 'Location Id',    getattr( vm_conf, 'locationId', None ))
+        p( 'Instance Id',    vm_conf.get( 'instanceUuid' ))
+        p( 'Location Id',    vm_conf.get( 'locationId' ))
         p( 'Config modtime', vm_conf[ 'changeVersion' ] )
     p( 'VMX', vm_conf[ 'files' ][ 'vmPathName' ] )
 
     folder = vsi.get_vm_folder_path( vm[ 'obj' ] )
     p( 'Folder',      folder )
 
-    resourcePool = getattr( vm, 'resourcePool', None )
-    if resourcePool:
-        p( 'Resource Pool', resourcePool.name )
+    resourcePool = vm.get( 'resourcePool' )
+    try:
+        p( 'Resource Pool', moId_map[ resourcePool._moId ] )
+    except KeyError:
+        p( 'Resource Pool', resourcePool._moId )
+    except AttributeError:
+        pass
 
-    p( 'Guest type',  getattr( gu_conf, 'guestFullName', None ))
+    p( 'Guest type',  vm_conf.get( 'guestFullName' ))
     p( 'HW version',  str.replace( vm_conf[ 'version' ], 'vmx-', '' ))
     p( 'CPU',         numCPU, str.join( ", ", coreargs ) )
     p( 'Memory',      str.join( ", ", memargs ))
@@ -222,15 +229,17 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
     p( 'Storage',     storage_size( su_conf[ 'storage' ] ))
 
     rt_conf = su_conf[ 'runtime' ]
+    host    = rt_conf[ 'host' ]
     try:
-        p( 'Hypervisor',  rt_conf[ 'host' ].name )
-    except vim.NoPermission:
-        p( 'Hypervisor',  rt_conf[ 'host' ] )
+        p( 'Hypervisor',  moId_map[ host._moId ] )
+    except KeyError:
+        p( 'Hypervisor',  host._moId )
+
     p( 'Boot delay',  vm_conf[ 'bootOptions' ][ 'bootDelay' ], "ms" )
     p( 'State',       rt_conf[ 'powerState' ] )
 
     if rt_conf[ 'powerState' ] == "poweredOn":
-        p( 'Boot time', getattr( rt_conf, 'bootTime', None ))
+        p( 'Boot time', rt_conf.get( 'bootTime' ))
 
     if verbose:
         pf2( 'Tools ', vm_conf[ 'tools' ],
@@ -319,15 +328,18 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
 
     print( sep )
 
-
-def moId_to_name_map( vsi, vimtype ):
-    res = vsi.get_obj_props( [vimtype], [ 'name' ] )
-    print(res)
-    return dict( map( lambda o: ( str( o[ 'obj' ]._moId ), o[ 'name' ] ), res ))
+def init_moId_map( vsi ):
+    timer = vsl.Timer('init moId map')
+    global moId_map
+    moId_map = dict( map( lambda o: ( str( o[ 'obj' ]._moId ), o[ 'name' ] ),
+                          vsi.get_obj_props( moId_types, [ 'name' ] )))
+    timer.report()
 
 def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
+
+    init_moId_map( vsi )
 
     if args.verbose:
         proplist.extend( proplist_verbose )
@@ -348,26 +360,7 @@ def main():
                 sep = ""
             print_vm( vsi, vm, args.verbose, sep=sep )
     else:
-        timer  = vsl.Timer('collect all virtual machines')
         vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
-        timer.report()
-
-        #objtypes = [vim.HostSystem, vim.ResourcePool,
-        #objlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
-
-
-#         timer = vsl.Timer('hosts')
-#         hosts = moId_to_name_map( vsi, vim.HostSystem )
-#         timer.report()
-#         timer = vsl.Timer('pools')
-#         pools = moId_to_name_map( vsi, vim.ResourcePool )
-#         timer.report()
-#
-#         print(hosts)
-#         print(pools)
-#         sys.exit(1)
-#
-
 
         timer = vsl.Timer('sort')
         vmlist.sort( cmp=lambda a, b: cmp( a[ 'name' ], b[ 'name' ] ))
