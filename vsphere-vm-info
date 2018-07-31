@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.20 2018/07/23 16:57:50 friedman Exp $
+# $Id: vsphere-vm-info,v 1.21 2018/07/24 01:50:41 friedman Exp $
 
 # Commentary:
 # Code:
@@ -208,8 +208,11 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
         p( 'Config modtime', vm_conf[ 'changeVersion' ] )
     p( 'VMX', vm_conf[ 'files' ][ 'vmPathName' ] )
 
-    folder = vsi.get_vm_folder_path( vm[ 'obj' ] )
-    p( 'Folder',      folder )
+    try:
+        folder = vsi.get_vm_folder_path( vm[ 'obj' ] )
+        p( 'Folder',      folder )
+    except KeyError:
+        pass
 
     resourcePool = vm.get( 'resourcePool' )
     try:
