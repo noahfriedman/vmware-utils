@@ -1,9 +1,10 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-power,v 1.5 2018/07/19 00:48:39 friedman Exp $
+# $Id: vsphere-vm-power,v 1.6 2018/07/21 20:47:17 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
+import sys
 
 cmds = { 'on'          : 'PowerOn',
          'off'         : 'PowerOff',
