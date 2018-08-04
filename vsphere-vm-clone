@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-clone,v 1.7 2018/07/19 00:48:39 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.8 2018/07/21 20:44:43 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim
@@ -32,8 +32,8 @@ def vmclone( vsi, template, opt ):
     cluster    = vsi.get_cluster(    opt.cluster )
     datastore  = vsi.get_datastore(  opt.datastore, cluster.datastore )
 
-    if opt.pool:
-        pool = vsi.get_pool( opt.pool, cluster.resourcePool.resourcePool )
+    if opt.pool or cluster.resourcePool.resourcePool:
+        pool = vsi.get_pool( opt.pool, cluster.resourcePool )
     else:
         pool = cluster.resourcePool
 
