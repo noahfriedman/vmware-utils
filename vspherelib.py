@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.27 2018/07/23 23:44:05 friedman Exp $
+# $Id: vspherelib.py,v 1.28 2018/07/24 00:14:44 friedman Exp $
 
 # Commentary:
 # Code:
@@ -21,8 +21,8 @@ import re
 import time
 import atexit
 
-from pyVim   import connect as pyVconnect
-from pyVmomi import vim, vmodl
+from pyVim      import connect as pyVconnect
+from pyVmomi    import vim, vmodl
 
 # Get the id for a managed object type: Folder, Datacenter, Datastore, etc.
 vim.ManagedObject.id = property( lambda self: self._moId )
@@ -33,8 +33,57 @@ except:
     pass
 
 
+debug = bool( os.getenv( 'VSPHERELIB_DEBUG' ))
+
+# Class decorator to avoid stacktraces on uncaught exceptions
+# in the decorated class unless debugging is enabled.
+def conditional_stacktrace( wrapped_class ):
+    def conditional_stacktrace_excepthook( extype, val, bt ):
+        sys.excepthook = sys.__excepthook__
+        if issubclass( extype, wrapped_class ):
+            print( ': '.join( ( os.path.basename( sys.argv[0] ),
+                                str( val )) ),
+                   file=sys.stderr )
+        else:
+            sys.__excepthook__( extype, val, bt )
+
+    class conditional_exception( wrapped_class ):
+        def __init__( self, reason ):
+            self.reason = str( reason )
+            if not debug and sys.excepthook is sys.__excepthook__:
+                sys.excepthook = conditional_stacktrace_excepthook
+
+        def __str__( self ):
+            return self.reason
+
+    return conditional_exception
+
+@conditional_stacktrace
+class vmomiError( Exception ): pass
+class NameNotFoundError(     vmomiError ): pass
+class NameNotUniqueError(    vmomiError ): pass
+class ConnectionFailedError( vmomiError ): pass
+class RequiredArgumentError( vmomiError ): pass
+
+
+class Diag( object ):
+    def __init__( self, *args, **kwargs ):
+        self.sep    = kwargs.get( 'sep',  ': ' )
+        self.lines  = []
+        self.append( *args )
+
+    def __str__( self ):
+        if not self.lines:
+            return ""
+        return "\n".join( self.lines )
+
+    def append( self, *args ):
+        if args:
+            self.lines.append( self.sep.join( args ))
+
+
 class Timer( object ):
-    enabled = os.getenv( 'VSPHERELIB_DEBUG' ) is not None
+    enabled  = bool( os.getenv( "VSPHERELIB_TIMER" ))
     acc_tm   = 0
     acc_cl   = 0
     fmt      = '{0:<40}: {1: > 8.4f}s / {2:> 8.4f}s'
@@ -64,7 +113,6 @@ class Timer( object ):
         print( Timer.fmt.format( "TOTAL", Timer.acc_cl, Timer.acc_tm ),
                file=Timer.fh )
     atexit.register( _atexit_report_accum )
-
 
 # end class Timer
 
@@ -131,8 +179,7 @@ class ArgumentParser( argparse.ArgumentParser, object ):
         args = super( self.__class__, self ).parse_args()
 
         if not args.host:
-            printerr( 'Server host is required' )
-            sys.exit( 1 )
+            raise RequiredArgumentError( 'Server host is required' )
 
         if args.password:
             pass
@@ -342,40 +389,40 @@ class _vmomiCollect( object ):
 class _vmomiFind( object ):
     def _get_single( self, name, mot, label, root=None ):
         """If name is null but there is only one object of that type anyway, just return that."""
-        def err( msg, *res ):
-            printerr( msg )
-            printerr( 'Available {0}s:'.format( label ) )
-
-            if res[0] and type( res[0] ) is vim.ManagedObject.Array:
-                res = res[0]
-            else:
-                res = self.get_obj( mot )
-            names = [elt.name for elt in res]
-            for n in sorted( names ):
-                printerr( "\t" + n )
-            exit( 1 )
+        def err( exception, msg, res=root ):
+            if not isinstance( res, vim.ManagedObject.Array):
+                res = self.get_obj( mot, root=res )
+            diag = Diag( msg )
+            if not res:
+                raise exception( diag )
+            diag.append( 'Available {0}s:'.format( label ) )
+            for n in sorted( [elt.name for elt in res] ):
+                diag.append( "\t" + n )
+            raise exception( diag )
 
         if name:
             if type( root ) is vim.ManagedObject.Array:
-                res = filter( lambda o: o.name == name, root )
+                found = filter( lambda o: o.name == name, root )
             else:
-                res = self.get_obj( mot, { 'name' : name }, root=root )
+                found = self.get_obj( mot, { 'name' : name }, root=root )
 
-            if res is None or len( res ) < 1:
-                err( name, '{0} not found or not available.'.format( label ) )
-            if len( res ) > 1:
-                err( name, 'name is not unique.', res )
+            if not found:
+                 err( NameNotFoundError, '{}: {} not found or not available.'.format( name, label ) )
+            elif len( found ) > 1:
+                err( NameNotUniqueError, '{}: name is not unique.'.format( name ), found )
         else:
             if type( root ) is vim.ManagedObject.Array:
-                res = root
+                found = root
             else:
-                res = self.get_obj( mot, root=root )
+                found = self.get_obj( mot, root=root )
 
-            if res is None or len( res ) < 1:
-                err( 'No {0}s found!'.format( label ) )
-            if len( res ) > 1:
-                err( 'More than one {0}s exists; specify {0}s to use.'.format( label ), res )
-        return res[0]
+            if not found:
+                raise NameNotFoundError( 'No {0}s found!'.format( label ))
+            elif len( found ) > 1:
+                err( NameNotUniqueError,
+                     'More than one {0}s exists; specify {0}s to use.'.format( label, label ),
+                     found )
+        return found[0]
 
     def get_datacenter( self, name, root=None ):
         return self._get_single( name, [vim.Datacenter], 'datacenter', root=root )
@@ -407,7 +454,10 @@ class _vmomiFind( object ):
         if vmlist:
             for vm in vmlist:
                 found.append( vm[ 'obj' ] )
-                args.remove( vm[ 'name' ] )
+                try:
+                    args.remove( vm[ 'name' ] )
+                except ValueError:
+                    printerr( vm )
 
         if len( args ) > 0:
             search = self.si.content.searchIndex
@@ -509,7 +559,6 @@ class _vmomiFolderMap( object ):
             self._init_path_folder_maps()
             return self._path_to_folder_map[ path ]
 
-    # legacy: get path of folder in which vm resides
     def get_vm_folder_path( self, vm ):
         return self.folder_to_path( vm.parent )
 
@@ -727,9 +776,10 @@ class vmomiConnect( _vmomiCollect,
                                                port = self.port,
                                                sslContext = context )
         except Exception as e:
-            printerr( args.host, 'Could not connect to ESXi/vCenter server' )
-            printerr( repr( e ) )
-            sys.exit( 1 )
+            msg = ': '.join(( self.host,
+                              'Could not connect',
+                              getattr( e, 'msg', str( e ) ) ))
+            raise ConnectionFailedError( msg )
         timer.report()
 
     def mks( self, *args, **kwargs ):
@@ -748,12 +798,12 @@ class vmomiMKS( object ):
             if isinstance( arg, argparse.Namespace ):
                 kwargs.update( vars( arg ))
 
-        content   = vsi.si.content
         self.host = vsi.host
         self.port = int( vsi.port )
 
         vc_cert   = ssl.get_server_certificate( (self.host, self.port) )
         vc_pem    = OpenSSL.crypto.load_certificate( OpenSSL.crypto.FILETYPE_PEM, vc_cert )
+        content   = vsi.si.content
 
         self.fingerprint = vc_pem.digest( 'sha1' )
         self.serverGUID  = content.about.instanceUuid
