@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.28 2018/07/24 00:14:44 friedman Exp $
+# $Id: vspherelib.py,v 1.29 2018/08/04 05:36:43 friedman Exp $
 
 # Commentary:
 # Code:
@@ -159,9 +159,10 @@ class ArgumentParser( argparse.ArgumentParser, object ):
         opt.user     = os.getenv( 'LOGNAME' )
         opt.password = None
 
-        if os.getenv( 'VSPHERELIBRC' ):
+        env_rc = os.getenv( 'VSPHERELIBRC' )
+        if env_rc:
             try:
-                execfile( os.getenv( 'VSPHERELIBRC' ) )
+                execfile( env_rc )
             except IOError:
                 pass
             return opt
@@ -591,8 +592,6 @@ class _vmomiNetworkMap( object ):
             key = nic.backing.port.portgroupKey
             return self._network_groupmap.get( key, key )
 
-        return 'unknown'
-
 # end of class _vmomiNetworkMap
 
 
@@ -601,8 +600,7 @@ class _vmomiNetworkMap( object ):
 ######
 
 class _vmomiGuestInfo( object ):
-
-    def guest_dns_config( self, vm ):
+    def vmguest_dns_config( self, vm ):
         dns = []
         for ipStack in vm.guest.ipStack:
             dconf = ipStack.dnsConfig
@@ -613,7 +611,7 @@ class _vmomiGuestInfo( object ):
                 'search' : list( dconf.searchDomain ), })
         return dns
 
-    def guest_ip_routes( self, vm ):
+    def vmguest_ip_routes( self, vm ):
         tbl = {}
         for ipStack in vm.guest.ipStack:
             routes = ipStack.ipRouteConfig.ipRoute
@@ -643,7 +641,7 @@ class _vmomiGuestInfo( object ):
                 eth.append( new )
         return list( tbl[i] for i in sorted( tbl.keys() ))
 
-    def guest_ip_addrs( self, vm ):
+    def vmguest_ip_addrs( self, vm ):
         return [ self.vmnic_cidrs( vmnic )
                  for vmnic in vm.guest.net ]
 
@@ -658,10 +656,27 @@ class _vmomiGuestInfo( object ):
         vm.config.hardware.device
         """
         if vmnic.ipConfig:
-            return [ "{}/{}".format( ip.ipAddress, ip.prefixLength )
+            return [ '{}/{}'.format( ip.ipAddress, ip.prefixLength )
                      for ip in vmnic.ipConfig.ipAddress ]
         else:
             return vmnic.ipAddress
+
+    def vmguest_nic_info( self, vm ):
+        ethernet = vim.vm.device.VirtualEthernetCard
+        nics = []
+        for nic in get_seq_type( vm.config.hardware.device, ethernet ):
+            prop = { 'obj'        : nic,
+                     'type'       : nic._wsdlName.replace( 'Virtual', '' ).lower(),
+                     'label'      : nic.deviceInfo.label,
+                     'netlabel'   : self.get_network_label( nic ),
+                     'macAddress' : nic.macAddress, }
+            if vm.summary.runtime.powerState == "poweredOn":
+                gnic = filter( lambda g: g.macAddress == nic.macAddress, vm.guest.net )
+                if gnic:
+                    prop[ 'ip' ] = self.vmnic_cidrs( gnic[0] )
+            nics.append( prop )
+        return nics
+
 
 
 ######
@@ -876,7 +891,7 @@ def propset_to_dict( propset ):
 def get_seq_type( obj, typeref ):
     return filter( lambda elt: isinstance( elt , typeref ), obj )
 
-def dotted_to_nested_dict( flat, sep='.' ):
+def flat_to_nested_dict( flat, sep='.' ):
     nested = {}
     for k in flat:
         parts = k.split( sep )
@@ -888,6 +903,33 @@ def dotted_to_nested_dict( flat, sep='.' ):
                 walk[ elt ] = {}
                 walk = walk[ elt ]
         walk[ parts[-1] ] = flat[ k ]
+    return nested
+
+
+class pseudoPropAttr( object ):
+    # Allows foo.x to be retrieved as foo[ 'x' ]
+    def __getitem__( self, key ):
+        try:
+            return getattr( self, key )
+        except AttributeError as e:
+            raise KeyError( e )
+
+    def __setitem__( self, key, val ):
+        setattr( self, key, val )
+        return val # allow passthrough assignment a = b[ c ] = d
+
+def flat_dict_to_nested_attributes( flat, sep='.' ):
+    nested = pseudoPropAttr()
+    for k in flat:
+        parts = k.split( sep )
+        walk = nested
+        for elt in parts[ :-1 ]:
+            try:
+                walk = getattr( walk, elt )
+            except AttributeError:
+                setattr( walk, elt, pseudoPropAttr() )
+                walk = getattr( walk, elt )
+        setattr( walk, parts[-1], flat[ k ] )
     return nested
 
 
