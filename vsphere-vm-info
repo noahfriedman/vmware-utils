@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.21 2018/07/24 01:50:41 friedman Exp $
+# $Id: vsphere-vm-info,v 1.22 2018/07/31 20:56:05 friedman Exp $
 
 # Commentary:
 # Code:
@@ -18,6 +18,17 @@ import sys
 
 #import httplib
 #httplib.HTTPConnection.debuglevel = 1
+
+hw_compat = {
+    '14' : [ 'ESXi 6.7', 'Workstation Pro 14.x', 'Fusion 10.x', 'Player 14.x' ],
+    '13' : [ 'ESXi 6.5' ],
+    '11' : [ 'ESXi 6.0', 'Workstation 11.x', 'Fusion 7.x', 'Player 7.x' ],
+    '10' : [ 'ESXi 5.5', 'Workstation 10.x', 'Fusion 6.x', 'Player 6.x' ],
+     '9' : [ 'ESXi 5.1', 'Workstation 9.x',  'Fusion 5.x', 'Player 5.x' ],
+     '8' : [ 'ESXi 5.0', 'Workstation 8.x',  'Fusion 4.x', 'Player 4.x' ],
+     '7' : [ 'ESXi/ESX 4.x', 'Server 2.x', 'Workstation 6.5.x/7.x', 'Fusion 2.x/3.x', 'Player 3.x' ],
+     '4' : [ 'ESX 3.x', 'Server 1.x', 'Lab Manager 2.x', 'ACE 2.x' ],
+}
 
 proplist = [
     'config.annotation',
@@ -111,7 +122,7 @@ def storage_size( storage ):
     return vsl.scale_size( comb )
 
 def plural( text, n ):
-    if int( n ) != 1 and int( n ) != -1:
+    if abs( int( n ) ) != 1:
         text += 's'
     return text
 
@@ -168,53 +179,52 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
             try:    pi( farindentL, a, dic[ b ] )
             except: pass
 
-    vm = vsl.dotted_to_nested_dict( vmflat )
+    vm = vsl.flat_dict_to_nested_attributes( vmflat )
 
-    vm_conf = vm[ 'config' ]
-    gu_conf = vm[ 'guest' ]
-    su_conf = vm[ 'summary' ]
+    vm_conf = vm.config
+    hw_conf = vm.config.hardware
+    gu_conf = vm.guest
+    su_conf = vm.summary
+    rt_conf = vm.summary.runtime
+    ex_conf = getattr( vm.config, 'extraConfig', None )
 
-    hw_conf = vm_conf[ 'hardware' ]
-    ex_conf = vm_conf.get( 'extraConfig' )
-
-    numCPU = hw_conf[ 'numCPU' ]
+    numCPU = hw_conf.numCPU
     coreargs = [plural( 'core', numCPU )]
-    if hw_conf.get( 'numCoresPerSocket' ):
-        nsockets = numCPU / hw_conf[ 'numCoresPerSocket' ]
+    if getattr( hw_conf, 'numCoresPerSocket', None ):
+        nsockets = numCPU / hw_conf.numCoresPerSocket
         coreargs.append( plural('%d socket' % nsockets, nsockets ))
-    if vm_conf.get( 'cpuHotAddEnabled' ):
+    if getattr( vm_conf, 'cpuHotAddEnabled', False ):
         coreargs.append( 'hot add enabled' )
-    if vm_conf.get( 'cpuHotRemoveEnabled' ):
+    if getattr( vm_conf, 'cpuHotRemoveEnabled', False ):
         coreargs.append( 'hot remove enabled' )
 
-    memargs = [vsl.scale_size( hw_conf[ 'memoryMB' ] * 1024 * 1024)]
-    if vm_conf.get( 'memoryHotAddEnabled' ):
+    memargs = [vsl.scale_size( hw_conf.memoryMB * 1024 * 1024)]
+    if getattr( vm_conf, 'memoryHotAddEnabled', False ):
         memargs.append( 'hot add enabled' )
 
-    vm_name = vm[ 'name' ]
-    if vm_conf[ 'template' ]:
-        p( 'VM Name', vm_name, '    [TEMPLATE]' )
+    if vm_conf.template:
+        p( 'VM Name', vm.name, '    [TEMPLATE]' )
     else:
-        p( 'VM Name', vm_name )
-        hn = gu_conf.get( 'hostName' )
-        if hn and hn != vm_name:
+        p( 'VM Name', vm.name )
+        hn = getattr( gu_conf, 'hostName', None )
+        if hn and hn != vm.name:
             p( 'VM Guest Name', hn )
 
-    p( 'VM Id',   'vim.VirtualMachine:' + vm[ 'obj' ]._moId )
-    p( 'VM UUID', vm_conf[ 'uuid' ] )
+    p( 'VM moId', vm.obj._moId )
+    p( 'VM UUID', vm_conf.uuid)
     if verbose:
-        p( 'Instance Id',    vm_conf.get( 'instanceUuid' ))
-        p( 'Location Id',    vm_conf.get( 'locationId' ))
-        p( 'Config modtime', vm_conf[ 'changeVersion' ] )
-    p( 'VMX', vm_conf[ 'files' ][ 'vmPathName' ] )
+        p( 'Instance Id',    vm_conf.instanceUuid )
+        p( 'Location Id',    vm_conf.locationId )
+        p( 'Config modtime', vm_conf.changeVersion )
+    p( 'VMX', vm_conf.files.vmPathName )
 
     try:
-        folder = vsi.get_vm_folder_path( vm[ 'obj' ] )
-        p( 'Folder',      folder )
+        folder = vsi.get_vm_folder_path( vm.obj )
+        p( 'Folder', folder )
     except KeyError:
         pass
 
-    resourcePool = vm.get( 'resourcePool' )
+    resourcePool = vm.resourcePool
     try:
         p( 'Resource Pool', moId_map[ resourcePool._moId ] )
     except KeyError:
@@ -222,30 +232,38 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
     except AttributeError:
         pass
 
-    p( 'Guest type',  vm_conf.get( 'guestFullName' ))
-    p( 'HW version',  str.replace( vm_conf[ 'version' ], 'vmx-', '' ))
-    p( 'CPU',         numCPU, str.join( ", ", coreargs ) )
-    p( 'Memory',      str.join( ", ", memargs ))
+    p( 'Guest type',  vm_conf.guestFullName )
 
-    p( 'NICs',        su_conf[ 'config' ][ 'numEthernetCards' ] )
-    p( 'Disks',       su_conf[ 'config' ][ 'numVirtualDisks' ] )
-    p( 'Storage',     storage_size( su_conf[ 'storage' ] ))
+    hw_ver = vm_conf.version[4:]  # skip 'vmx-'
+    if hw_ver[0] == '0': hw_ver = hw_ver[1:]
+    try:
+        hw_desc = '\t({})'.format( hw_compat[ hw_ver ][0] )
+    except KeyError:
+        hw_desc = ""
+    hw_ver += hw_desc
+    p( 'HW version',  hw_ver )
 
-    rt_conf = su_conf[ 'runtime' ]
-    host    = rt_conf[ 'host' ]
+    p( 'CPU',         numCPU, str.join( ', ', coreargs ) )
+    p( 'Memory',      str.join( ', ', memargs ))
+
+    p( 'NICs',        su_conf.config.numEthernetCards )
+    p( 'Disks',       su_conf.config.numVirtualDisks )
+    p( 'Storage',     storage_size( su_conf.storage ))
+
+    host = rt_conf.host
     try:
         p( 'Hypervisor',  moId_map[ host._moId ] )
     except KeyError:
         p( 'Hypervisor',  host._moId )
 
-    p( 'Boot delay',  vm_conf[ 'bootOptions' ][ 'bootDelay' ], "ms" )
-    p( 'State',       rt_conf[ 'powerState' ] )
+    p( 'Boot delay',  vm_conf.bootOptions.bootDelay, "ms" )
+    p( 'State',       rt_conf.powerState )
 
-    if rt_conf[ 'powerState' ] == "poweredOn":
-        p( 'Boot time', rt_conf.get( 'bootTime' ))
+    if rt_conf.powerState == "poweredOn":
+        p( 'Boot time', rt_conf.bootTime )
 
     if verbose:
-        pf2( 'Tools ', vm_conf[ 'tools' ],
+        pf2( 'Tools ', vm_conf.tools,
              ( ('Power On' , 'afterPowerOn'),
                ('Resume'   , 'afterResume'),
                ('Standby'  , 'beforeGuestStandby'),
@@ -255,7 +273,7 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
                ('syncTime' , 'syncTimeWithHost'), ))
 
     if verbose:
-        pf( 'Flags', '', vm_conf[ 'flags' ],
+        pf( 'Flags', '', vm_conf.flags,
             sorted( ( 'disableAcceleration',
                       'enableLogging',
                       'useToe',
@@ -273,7 +291,7 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
                       'cbrcCacheEnabled', )))
 
     if verbose:
-        pf( 'Power Ops', '', vm_conf[ 'defaultPowerOps' ],
+        pf( 'Power Ops', '', vm_conf.defaultPowerOps,
             sorted( ( 'powerOffType',
                       'suspendType',
                       'resetType',
@@ -283,39 +301,32 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
                       'standbyAction', )))
 
     if True:
-        nics = vsl.get_seq_type( hw_conf[ 'device' ], vim.vm.device.VirtualEthernetCard )
-        for nic in nics:
-            devtype = nic._wsdlName.replace( 'Virtual', '' ).lower()
-            netlabel = vsi.get_network_label( nic )
-            pf( nic.deviceInfo.label, '{} on "{}"'.format( devtype, netlabel ), nic,
-                ( 'macAddress', ) )
+        for nic in vsi.vmguest_nic_info( vm ):
+            pf( nic[ 'label' ], '{} on "{}"'.format( nic[ 'type' ], nic[ 'netlabel' ] ),
+                nic, ( 'macAddress', ) )
 
             if verbose:
-                pi( farindentL, 'wakeOnLanEnabled',  nic.wakeOnLanEnabled )
-                pi( farindentL, 'startConnected',    nic.connectable.startConnected )
-                pi( farindentL, 'connected',         nic.connectable.connected )
-                pi( farindentL, 'allowGuestControl', nic.connectable.allowGuestControl )
+                obj = nic[ 'obj' ]
+                pi( farindentL, 'wakeOnLanEnabled',  obj.wakeOnLanEnabled )
+                pi( farindentL, 'startConnected',    obj.connectable.startConnected )
+                pi( farindentL, 'connected',         obj.connectable.connected )
+                pi( farindentL, 'allowGuestControl', obj.connectable.allowGuestControl )
 
-            if rt_conf[ 'powerState' ] == "poweredOn":
-                gnic = filter( lambda g: g.macAddress == nic.macAddress, gu_conf[ 'net' ] )
-                if len( gnic ):
-                    cidr = vsi.vmnic_cidrs( gnic[0] )
-                    if cidr and len(cidr) > 0:
-                        spc  = " " * (abs( farindentL ) + abs( indentL ) + 2)
-                        pi( farindentL, 'IP Addresses', cidr[0] )
-                        for ip in cidr[1:]:
-                            print( spc, ip )
+            cidr = nic.get( 'ip' )
+            if cidr:
+                spc  = " " * (abs( farindentL ) + abs( indentL ) + 2)
+                pi( farindentL, 'IP Addresses', cidr[0] )
+                for ip in cidr[1:]:
+                    print( spc, ip )
 
-    # This is a custom key I insert into our VMs
+    # This is a custom key I insert into my VMs
     if verbose:
-        try:
-            p( 'Guest json', ex_conf.guestinfo.json )
-        except:
-            pass
+        try:    p( 'Guest json', ex_conf.guestinfo.json )
+        except: pass
 
     if verbose:
         try:
-            annot = vm_conf['annotation']
+            annot = vm.config.annotation
             annot = vsl.fold_text( annot, maxlen=70, indent=abs( indentL ) )
             if annot.find ("\n") >= 0:
                 annot = "\n" + indentS + annot
@@ -325,8 +336,8 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
             pass
 
     try:
-        p( 'Question', rt_conf[ 'question' ].text )
-    except KeyError:
+        p( 'Question', rt_conf.question.text )
+    except AttributeError:
         pass
 
     print( sep )
