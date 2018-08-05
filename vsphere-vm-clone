@@ -1,14 +1,11 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-clone,v 1.8 2018/07/21 20:44:43 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.9 2018/08/04 05:18:31 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim
 import vspherelib     as vsl
 
 import sys
-
-##########
-class Stuff: pass
 
 ##########
 def get_args():
@@ -25,8 +22,6 @@ def get_args():
 ##########
 
 def vmclone( vsi, template, opt ):
-    vm = Stuff()
-
     datacenter = vsi.get_datacenter( opt.datacenter )
     folder     = vsi.path_to_folder( opt.folder )
     cluster    = vsi.get_cluster(    opt.cluster )
