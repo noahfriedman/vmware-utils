@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.30 2018/08/05 08:34:28 friedman Exp $
+# $Id: vspherelib.py,v 1.31 2018/08/08 12:23:13 friedman Exp $
 
 # Commentary:
 # Code:
@@ -228,7 +228,17 @@ class propList( object ):
     def add_if_new( self, *props ):
         for elt in props:
             if type( elt ) is dict:
-                self.propdict.update( elt )
+                for key in elt:
+                    try:
+                        kvl = self.propdict[ key ]
+                    except KeyError:
+                        kvl = self.propdict[ key ] = []
+
+                    val = elt[ key ]
+                    if type( val ) in (tuple, list):
+                        kvl.extend( val )
+                    else:
+                        kvl.append( val )
                 self.add_if_new( *elt.keys() )
             elif type( elt ) in (tuple, list):
                 self.add_if_new( *elt )
