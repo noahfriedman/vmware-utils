@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-clone,v 1.9 2018/08/04 05:18:31 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.10 2018/08/05 08:14:54 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim
@@ -10,35 +10,83 @@ import sys
 ##########
 def get_args():
     p = vsl.ArgumentParser()
-    p.add(       '--template',  required=True, help='Name of template or vm to clone from' )
-    p.add( '--vm-name', '-v',   required=True, help='Name for new vm' )
-    p.add( '--folder',                         help='Path of vSphere folder for vm to appear' )
-    p.add( '--pool',                           help='Resource pool for vm' )
-    p.add( '--datacenter',                     help='Name of the datacenter to use' )
-    p.add( '--datastore',                      help='Name of datastore for vm storage' )
-    p.add( '--cluster',                        help='Name of the cluster or hypervisor host for new vm' )
+    p.add( '-t', '--template',     required=True, help='Name of template or vm to clone from' )
+    p.add( '-v', '--vm-name',      required=True, help='Name for new vm' )
+    p.add( '-f', '--folder',                      help='Path of vSphere folder for vm to appear' )
+    p.add( '-r', '--pool',                        help='Resource pool for vm' )
+    p.add( '-d', '--datastore',                   help='Name of datastore for vm storage' )
+    p.add( '-c', '--cluster',                     help='Name of the cluster or hypervisor host for new vm' )
+    p.add( '-n', '--network',                     help='Network label for first virtual nic' )
+    p.add( '-a', '--annotation',                  help='New annotation for cloned VM' )
     return p.parse()
 
 ##########
 
+def make_nic_changespec( vsi, template, label, root=None ):
+    ethernet = vim.vm.device.VirtualEthernetCard
+
+    nic = vsl.get_seq_type( template.config.hardware.device, ethernet )[0]
+    net = vsi.get_network( label, root=root )
+
+    spec           = vim.vm.device.VirtualDeviceSpec()
+    spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
+    spec.device    = nic
+
+    try:
+        dvs_port = vim.dvs.PortConnection()
+        dvs_port.portgroupKey = net.key
+        dvs_port.switchUuid   = net.config.distributedVirtualSwitch.uuid
+
+        spec.device.backing = ethernet.DistributedVirtualPortBackingInfo()
+        spec.device.backing.port = dvs_port
+    except AttributeError:
+        spec.device.backing = ethernet.NetworkBackingInfo()
+        spec.device.backing.network = net
+        spec.device.backing.deviceName = label
+
+    return spec
+
+
 def vmclone( vsi, template, opt ):
-    datacenter = vsi.get_datacenter( opt.datacenter )
-    folder     = vsi.path_to_folder( opt.folder )
-    cluster    = vsi.get_cluster(    opt.cluster )
-    datastore  = vsi.get_datastore(  opt.datastore, cluster.datastore )
-
-    if opt.pool or cluster.resourcePool.resourcePool:
-        pool = vsi.get_pool( opt.pool, cluster.resourcePool )
+    if opt.folder:
+        folder = vsi.path_to_folder( opt.folder )
     else:
-        pool = cluster.resourcePool
+        folder = template.parent
 
-    relospec           = vim.vm.RelocateSpec()
-    relospec.datastore = datastore
-    relospec.pool      = pool
+    cluster = None
+    if opt.cluster:
+        cluster = vsi.get_cluster( opt.cluster )
+
+    datastore = None
+    if opt.datastore:
+        try:
+            datastore = vsi.get_datastore( opt.datastore, cluster.datastore )
+        except AttributeError:
+            datastore = vsi.get_datastore( opt.datastore )
+
+    pool = None
+    if opt.pool:
+        if cluster.resourcePool.resourcePool:
+            pool = vsi.get_pool( opt.pool, cluster.resourcePool )
+        else:
+            pool = cluster.resourcePool
+
+    relospec              = vim.vm.RelocateSpec()
+    relospec.datastore    = datastore
+    relospec.pool         = pool
+    relospec.deviceChange = []
+
+    if opt.network:
+        nicspec = make_nic_changespec( vsi, template, opt.network, root=cluster.network )
+        relospec.deviceChange.append( nicspec )
 
     clonespec          = vim.vm.CloneSpec()
     clonespec.location = relospec
     clonespec.powerOn  = False
+
+    if opt.annotation is not None:
+        clonespec.config = vim.vm.ConfigSpec()
+        clonespec.config.annotation = opt.annotation
 
     try:
         task = template.Clone( folder=folder, name=opt.vm_name, spec=clonespec )
@@ -81,7 +129,7 @@ class myCallback():
                  or
                  ( sys.stdout.fileno() ==  sys.stderr.fileno() )):
                 print()
-            printerr( self.target, val.msg )
+            vsl.printerr( self.target, val.msg )
             return
         elif key == 'info.state':
             if val == 'success':
