@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.29 2018/08/04 05:36:43 friedman Exp $
+# $Id: vspherelib.py,v 1.30 2018/08/05 08:34:28 friedman Exp $
 
 # Commentary:
 # Code:
@@ -437,6 +437,13 @@ class _vmomiFind( object ):
     def get_pool( self, name, root=None ):
         return self._get_single( name, [vim.ResourcePool], 'resource pool', root=root )
 
+    def get_network( self, name, root=None ):
+        return self._get_single( name, [vim.Network], 'network label', root=root )
+
+    # These are a subset of vim.Network
+    def get_portgroup( self, name, root=None ):
+        return self._get_single( name, [vim.dvs.DistributedVirtualPortgroup], 'portgroup', root=root )
+
     def get_vm( self, name, root=None ):
         return self._get_single( name, [vim.VirtualMachine], 'virtual machine', root=root )
 
@@ -572,25 +579,25 @@ class _vmomiFolderMap( object ):
 ######
 
 class _vmomiNetworkMap( object ):
-    def get_network_groupmap( self ):
-        tbl = {}
-        nets = self.get_obj_props( [vim.dvs.DistributedVirtualPortgroup],
-                                   ['config.key', 'config.name'] )
-        if not nets:
-            return
-        return dict( (x[ 'config.key' ], x[ 'config.name' ]) for x in nets )
+    def _get_network_moId_label_map( self ):
+        return dict( ( x[ 'obj' ]._moId, x[ 'name' ] ) for x in
+                     self.get_obj_props( [vim.Network], [ 'name' ] ) )
 
-    def get_network_label( self, nic ):
+    def get_nic_network_label( self, nic ):
         try:
             return nic.backing.deviceName
         except AttributeError:
             pass
 
-        if isinstance( nic.backing, vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo ):
-            if not self._network_groupmap:
-                self._network_groupmap = self.get_network_groupmap()
-            key = nic.backing.port.portgroupKey
-            return self._network_groupmap.get( key, key )
+        try:
+            groupKey = nic.backing.port.portgroupKey
+        except AttributeError:
+            return
+        try:
+            return self._network_moId_label_map.get( groupKey, groupKey )
+        except AttributeError:
+            self._network_moId_label_map = self._get_network_moId_label_map()
+            return self._network_moId_label_map.get( groupKey, groupKey )
 
 # end of class _vmomiNetworkMap
 
@@ -668,7 +675,7 @@ class _vmomiGuestInfo( object ):
             prop = { 'obj'        : nic,
                      'type'       : nic._wsdlName.replace( 'Virtual', '' ).lower(),
                      'label'      : nic.deviceInfo.label,
-                     'netlabel'   : self.get_network_label( nic ),
+                     'netlabel'   : self.get_nic_network_label( nic ),
                      'macAddress' : nic.macAddress, }
             if vm.summary.runtime.powerState == "poweredOn":
                 gnic = filter( lambda g: g.macAddress == nic.macAddress, vm.guest.net )
@@ -770,7 +777,6 @@ class vmomiConnect( _vmomiCollect,
         self.pwd  = kwargs[ 'password' ]
         self.port = int( kwargs.get( 'port', 443 ))
         self.connect()
-        self._network_groupmap = None
 
     def __del__( self ):
         try:
