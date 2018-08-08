@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.23 2018/08/05 08:43:18 friedman Exp $
+# $Id: vsphere-vm-info,v 1.24 2018/08/05 08:48:24 friedman Exp $
 
 # Commentary:
 # Code:
@@ -214,7 +214,7 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
     p( 'VM UUID', vm_conf.uuid)
     if verbose:
         p( 'Instance Id',    vm_conf.instanceUuid )
-        p( 'Location Id',    vm_conf.locationId )
+        p( 'Location Id',    getattr( vm_conf, 'locationId', None ))
         p( 'Config modtime', vm_conf.changeVersion )
     p( 'VMX', vm_conf.files.vmPathName )
 
@@ -224,7 +224,7 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
     except KeyError:
         pass
 
-    resourcePool = vm.resourcePool
+    resourcePool = getattr( vm, 'resourcePool', None )
     try:
         p( 'Resource Pool', moId_map[ resourcePool._moId ] )
     except KeyError:
