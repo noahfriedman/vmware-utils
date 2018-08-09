@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.31 2018/08/08 12:23:13 friedman Exp $
+# $Id: vspherelib.py,v 1.32 2018/08/08 22:55:21 friedman Exp $
 
 # Commentary:
 # Code:
@@ -520,62 +520,65 @@ class _vmomiFind( object ):
 ######
 
 class _vmomiFolderMap( object ):
-    def _init_path_folder_maps( self ):
-        p2f = self.path_to_folder_map()
-        f2p = { p2f[k] : k for k in p2f }
-        self._path_to_folder_map = p2f
-        self._folder_to_path_map = f2p
-
     # Generate a complete map of full paths to corresponding vsphere folder objects
-    def path_to_folder_map( self ):
+    def _init_folder_path_maps( self ):
         mtbl = {}
         for elt in self.get_obj_props( [vim.Folder, vim.Datacenter], ['name', 'parent'] ):
-            moId = repr( elt[ 'obj' ] )
-            mtbl[ moId ] = [ repr( elt[ 'parent' ] ), elt[ 'name' ], elt ]
+            obj = elt[ 'obj' ]
+            mtbl[ obj._moId ] = [ elt[ 'name' ], elt[ 'parent' ]._moId , obj ]
 
-        rootFolder  = self.si.content.rootFolder
-        vmFolderH   = { repr( elt.vmFolder ) : elt.vmFolder for elt in rootFolder.childEntity }
-
-        ptbl = {}
-        for moId in mtbl.keys():
+        p2f = self._path_to_folder_map = {}
+        f2p = self._folder_to_path_map = {}
+        for moId in mtbl:
             name = []
-            mobj = mtbl[ moId ][ 2 ][ 'obj' ]
+            obj = mtbl[ moId ][ 2 ]
             while mtbl.has_key( moId ):
-                if vmFolderH.has_key( moId ):
-                    par = mtbl[ moId ][0]
-                    name.insert( 0, mtbl[ par ][ 1 ])
+                node = mtbl[ moId ]
+                name.insert( 0, node[ 0 ] )
+                moId = node[ 1 ]
+                # See if we've already computed the rest of the parent path.
+                # If so, prepend it and stop.
+                try:
+                    name.insert( 0, f2p[ moId ] )
                     break
+                except KeyError:
+                    pass
 
-                elt   = mtbl[ moId ]
-                moId  = elt[ 0 ]
-                name.insert( 0, elt[ 1 ] )
+            if len( name ) > 1:
+                if name[0][0] is not '/':
+                    name.pop( 1 )  # remove vmFolder
+                    name.insert( 0, '' )
+                name = str.join( '/', name )
+                p2f[ name ] = obj
+                f2p[ obj._moId ] = name
 
-            if len(name) > 0:
-                name.insert( 0, '' )
-                name = str.join('/', name )
-                ptbl[ name ] = mobj
-
-        return ptbl
+    def folder_to_path_map( self ):
+        try:
+            return self._path_to_path_map
+        except AttributeError:
+            self._init_folder_path_maps()
+            return self._folder_to_path_map
 
     # Return the path name of the folder object
     def folder_to_path( self, folder ):
         try:
-            return self._folder_to_path_map[ folder ]
+            return self.folder_to_path_map()[ folder._moId ]
         except KeyError:
-            return None
+            pass
+
+    def path_to_folder_map( self ):
+        try:
+            return self._path_to_folder_map
         except AttributeError:
-            self._init_path_folder_maps()
-            return self._folder_to_path_map[ folder ]
+            self._init_folder_path_maps()
+            return self._path_to_folder_map
 
     # Return the folder object located at path
     def path_to_folder( self, path ):
         try:
-            return self._path_to_folder_map[ path ]
+            return self.path_to_folder_map()[ path ]
         except KeyError:
-            return None
-        except AttributeError:
-            self._init_path_folder_maps()
-            return self._path_to_folder_map[ path ]
+            pass
 
     def get_vm_folder_path( self, vm ):
         return self.folder_to_path( vm.parent )
