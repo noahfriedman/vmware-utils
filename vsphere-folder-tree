@@ -1,20 +1,55 @@
 #!/usr/bin/env python
-# $Id: vsphere-folder-tree,v 1.2 2018/07/19 00:48:39 friedman Exp $
+# $Id: vsphere-folder-tree,v 1.3 2018/07/21 20:44:27 friedman Exp $
 
 from __future__ import print_function
+from pyVmomi    import vim
 import vspherelib as vsl
 import re
 
+def get_args():
+    p = vsl.ArgumentParser()
+    p.add( '-v', '--verbose', action='store_true', help='Display extended info' )
+    return p.parse()
+
 def main():
-    args = vsl.ArgumentParser().parse_args()
+    args = get_args()
     vsi  = vsl.vmomiConnect( args )
 
+    if args.verbose:
+        props = [ 'name', 'config.template', 'runtime.powerState' ]
+        vmcfg = { vm[ 'obj' ].id : [ vm[ p ] for p in props ]
+                  for vm in vsi.get_obj_props( [vim.VirtualMachine], props ) }
+
     ptbl = vsi.path_to_folder_map()
-    for p in sorted( ptbl.keys() ):
-        p = p[1:]
-        if p.count( '/' ):
-            p = re.sub( '[^/]*/', '    ', p )
-        print( p )
+    plst = sorted( ptbl.keys() )
+    ldc = ""
+    for p in plst:
+        mp = p[1:]
+        dirs = mp.split( '/' )
+        dc   = dirs[ 0 ]
+        last = dirs[ -1 ]
+        indent = '    ' * len( dirs )
+
+        if dc != ldc:
+            print( dc )
+            ldc = dc
+
+        if args.verbose:
+            print( indent, last, '/', sep='' )
+
+            folder = ptbl[ p ]
+            vmlist = map( lambda vm: vmcfg[ vm.id ],
+                          vsl.get_seq_type( folder.childEntity, vim.VirtualMachine ))
+            vmlist.sort( lambda a, b: cmp( a[1], b[1]) or cmp( a[0], b[0] ) )
+            for vm in vmlist:
+                flag = '  '
+                if vm[1]:
+                    flag = '+ '
+                elif vm[2] == 'poweredOn':
+                    flag = 'o '
+                print( indent, '    ', flag, vm[0], sep='' )
+        else:
+            print( indent, last, sep='' )
 
 if __name__ == '__main__':
     main()
