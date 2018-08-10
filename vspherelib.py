@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.33 2018/08/09 01:44:12 friedman Exp $
+# $Id: vspherelib.py,v 1.34 2018/08/10 01:05:23 friedman Exp $
 
 # Commentary:
 # Code:
@@ -882,20 +882,6 @@ class vmomiMKS( object ):
 # end class vomiMKS
 
 
-# vm = vsi.get_vm('win16-noahf')
-#
-# auth = vim.vm.guest.NamePasswordAuthentication()
-# auth.username = 'noahf'
-# auth.password = '*'
-#
-# pspec = vim.vm.guest.ProcessManager.ProgramSpec()
-# pspec.arguments="WMIC computersystem where caption='win16-noahf' rename win16-noahf-fnord"
-# pspec.programPath='C:\\Windows\\System32\\Wbem\\wmic.exe'
-# pspec.workingDirectory='C:\\'
-#
-# pm = vsi.si.content.guestOperationsManager.processManager
-# pm.StartProgramInGuest(vm=vm, auth=auth, spec=pspec)
-
 class vmomiVmGuestProcess( object ):
     def __init__( self, vsi, *args, **kwargs ):
         kwargs = dict( **kwargs ) # copy; destructively modified
@@ -933,6 +919,8 @@ class vmomiVmGuestProcess( object ):
             arguments        = cmdline[ 1: ], )
 
         return self.pm.StartProgramInGuest( vm=vm, auth=auth, spec=pspec )
+
+# end class vmomiVmGuestProcess
 
 
 ######
