@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.34 2018/08/10 01:05:23 friedman Exp $
+# $Id: vspherelib.py,v 1.35 2018/08/10 01:07:18 friedman Exp $
 
 # Commentary:
 # Code:
@@ -820,8 +820,6 @@ class vmomiConnect( _vmomiCollect,
 
     def mks( self, *args, **kwargs ):
         return vmomiMKS( self, *args, **kwargs )
-
-vmomiConnector = vmomiConnect  # deprecated alias
 
 # end class vmomiConnect
 
