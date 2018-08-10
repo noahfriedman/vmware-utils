@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.32 2018/08/08 22:55:21 friedman Exp $
+# $Id: vspherelib.py,v 1.33 2018/08/09 01:44:12 friedman Exp $
 
 # Commentary:
 # Code:
@@ -697,6 +697,8 @@ class _vmomiGuestInfo( object ):
             nics.append( prop )
         return nics
 
+    def vmguest_process( self, *args, **kwargs ):
+        return vmomiVmGuestProcess( self, *args, **kwargs )
 
 
 ######
@@ -819,7 +821,6 @@ class vmomiConnect( _vmomiCollect,
     def mks( self, *args, **kwargs ):
         return vmomiMKS( self, *args, **kwargs )
 
-
 vmomiConnector = vmomiConnect  # deprecated alias
 
 # end class vmomiConnect
@@ -879,6 +880,59 @@ class vmomiMKS( object ):
         return uri.format( **param )
 
 # end class vomiMKS
+
+
+# vm = vsi.get_vm('win16-noahf')
+#
+# auth = vim.vm.guest.NamePasswordAuthentication()
+# auth.username = 'noahf'
+# auth.password = '*'
+#
+# pspec = vim.vm.guest.ProcessManager.ProgramSpec()
+# pspec.arguments="WMIC computersystem where caption='win16-noahf' rename win16-noahf-fnord"
+# pspec.programPath='C:\\Windows\\System32\\Wbem\\wmic.exe'
+# pspec.workingDirectory='C:\\'
+#
+# pm = vsi.si.content.guestOperationsManager.processManager
+# pm.StartProgramInGuest(vm=vm, auth=auth, spec=pspec)
+
+class vmomiVmGuestProcess( object ):
+    def __init__( self, vsi, *args, **kwargs ):
+        kwargs = dict( **kwargs ) # copy; destructively modified
+        for arg in args:
+            if isinstance( arg, argparse.Namespace ):
+                kwargs.update( vars( arg ))
+
+        self.cwd = kwargs.get( 'cwd' ) or kwargs.get( 'workingDirectory' )
+        if not self.cwd:
+            if self.vm.config.guestId.find( 'win' ) == 0:
+                self.cwd = 'C:\\'
+            else:
+                self.cwd = '/'
+
+        self.vm      = kwargs[ 'vm' ]
+        self.environ = kwargs.get( 'environ' ) # optional
+        self.auth    = vim.vm.guest.NamePasswordAuthentication(
+            username = kwargs[ 'username' ],
+            password = kwargs[ 'password' ], )
+        self.pm      = vsi.si.content.guestOperationsManager.processManager
+
+    def ps( self, pids=None ):
+        return self.pm.listProcesses( vm=self.vm, auth=self.auth, pids=pids )
+
+    def start( self, cmdline, **kwargs ):
+        vm      = self.vm
+        auth    = self.auth
+        cwd     = kwargs.get( 'cwd' )     or self.cwd
+        environ = kwargs.get( 'environ' ) or self.environ
+
+        pspec = vim.vm.guest.ProcessManager.ProgramSpec(
+            workingDirectory = cwd,
+            envVariables     = environ,
+            programPath      = cmdline[ 0 ],
+            arguments        = cmdline[ 1: ], )
+
+        return self.pm.StartProgramInGuest( vm=vm, auth=auth, spec=pspec )
 
 
 ######
