@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.35 2018/08/10 01:07:18 friedman Exp $
+# $Id: vspherelib.py,v 1.36 2018/08/10 01:07:49 friedman Exp $
 
 # Commentary:
 # Code:
@@ -60,6 +60,7 @@ def conditional_stacktrace( wrapped_class ):
 
 @conditional_stacktrace
 class vmomiError( Exception ): pass
+class PermissionError(       vmomiError ): pass
 class NameNotFoundError(     vmomiError ): pass
 class NameNotUniqueError(    vmomiError ): pass
 class ConnectionFailedError( vmomiError ): pass
@@ -887,6 +888,10 @@ class vmomiVmGuestProcess( object ):
             if isinstance( arg, argparse.Namespace ):
                 kwargs.update( vars( arg ))
 
+        self.vsi     = vsi
+        self.vm      = kwargs[ 'vm' ]
+        self.environ = kwargs.get( 'environ' ) # optional
+
         self.cwd = kwargs.get( 'cwd' ) or kwargs.get( 'workingDirectory' )
         if not self.cwd:
             if self.vm.config.guestId.find( 'win' ) == 0:
@@ -894,8 +899,6 @@ class vmomiVmGuestProcess( object ):
             else:
                 self.cwd = '/'
 
-        self.vm      = kwargs[ 'vm' ]
-        self.environ = kwargs.get( 'environ' ) # optional
         self.auth    = vim.vm.guest.NamePasswordAuthentication(
             username = kwargs[ 'username' ],
             password = kwargs[ 'password' ], )
@@ -914,9 +917,12 @@ class vmomiVmGuestProcess( object ):
             workingDirectory = cwd,
             envVariables     = environ,
             programPath      = cmdline[ 0 ],
-            arguments        = cmdline[ 1: ], )
+            arguments        = cmdline[ 1: ] or '', )
 
-        return self.pm.StartProgramInGuest( vm=vm, auth=auth, spec=pspec )
+        try:
+            return self.pm.StartProgramInGuest( vm=vm, auth=auth, spec=pspec )
+        except vim.fault.NoPermission as e:
+            raise PermissionError( e.msg )
 
 # end class vmomiVmGuestProcess
 
