@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.36 2018/08/10 01:07:49 friedman Exp $
+# $Id: vspherelib.py,v 1.37 2018/08/10 01:20:34 friedman Exp $
 
 # Commentary:
 # Code:
@@ -913,11 +913,15 @@ class vmomiVmGuestProcess( object ):
         cwd     = kwargs.get( 'cwd' )     or self.cwd
         environ = kwargs.get( 'environ' ) or self.environ
 
+        args    = None
+        if len( cmdline ) > 1:
+            args = " ".join( cmdline[ 1: ] )
+
         pspec = vim.vm.guest.ProcessManager.ProgramSpec(
             workingDirectory = cwd,
             envVariables     = environ,
             programPath      = cmdline[ 0 ],
-            arguments        = cmdline[ 1: ] or '', )
+            arguments        = args, )
 
         try:
             return self.pm.StartProgramInGuest( vm=vm, auth=auth, spec=pspec )
