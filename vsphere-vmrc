@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vmrc,v 1.5 2018/07/21 19:38:56 friedman Exp $
+# $Id: vsphere-vmrc,v 1.6 2018/07/21 20:47:42 friedman Exp $
 
 from   __future__ import print_function
 
@@ -28,7 +28,7 @@ def spawn(*args):
 def launch( mks, vmlist ):
     for vm in vmlist:
         uri = mks.uri_vmrc( vm=vm )
-        pid = spawn( 'vmware', '--new-window', uri )
+        pid = spawn( os.getenv( 'VMRC_PROGRAM', default='vmplayer' ), uri )
     # Background ourselves for a while to keep session tickets active, then exit.
     pid = os.fork()
     if pid == 0:
