@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.37 2018/08/10 01:20:34 friedman Exp $
+# $Id: vspherelib.py,v 1.38 2018/08/15 05:37:57 friedman Exp $
 
 # Commentary:
 # Code:
@@ -24,6 +24,9 @@ import atexit
 from pyVim      import connect as pyVconnect
 from pyVmomi    import vim, vmodl
 
+import requests
+requests.packages.urllib3.disable_warnings()
+
 # Get the id for a managed object type: Folder, Datacenter, Datastore, etc.
 vim.ManagedObject.id = property( lambda self: self._moId )
 
@@ -41,15 +44,15 @@ def conditional_stacktrace( wrapped_class ):
     def conditional_stacktrace_excepthook( extype, val, bt ):
         sys.excepthook = sys.__excepthook__
         if issubclass( extype, wrapped_class ):
-            print( ': '.join( ( os.path.basename( sys.argv[0] ),
-                                str( val )) ),
-                   file=sys.stderr )
+            name = os.path.basename( sys.argv[0] ) or extype.__name__
+            print( ': '.join( ( name, str( val )) ), file=sys.stderr )
         else:
             sys.__excepthook__( extype, val, bt )
 
     class conditional_exception( wrapped_class ):
-        def __init__( self, reason ):
-            self.reason = str( reason )
+        def __init__( self, *reason ):
+            reason = map( lambda s: str( s ), reason )
+            self.reason = str.join( ': ', reason )
             if not debug and sys.excepthook is sys.__excepthook__:
                 sys.excepthook = conditional_stacktrace_excepthook
 
@@ -65,7 +68,7 @@ class NameNotFoundError(     vmomiError ): pass
 class NameNotUniqueError(    vmomiError ): pass
 class ConnectionFailedError( vmomiError ): pass
 class RequiredArgumentError( vmomiError ): pass
-
+class GuestOperationError(   vmomiError ): pass
 
 class Diag( object ):
     def __init__( self, *args, **kwargs ):
@@ -75,8 +78,8 @@ class Diag( object ):
 
     def __str__( self ):
         if not self.lines:
-            return ""
-        return "\n".join( self.lines )
+            return ''
+        return str.join( '\n', self.lines )
 
     def append( self, *args ):
         if args:
@@ -84,7 +87,7 @@ class Diag( object ):
 
 
 class Timer( object ):
-    enabled  = bool( os.getenv( "VSPHERELIB_TIMER" ))
+    enabled  = bool( os.getenv( 'VSPHERELIB_TIMER' ))
     acc_tm   = 0
     acc_cl   = 0
     fmt      = '{0:<40}: {1: > 8.4f}s / {2:> 8.4f}s'
@@ -111,7 +114,7 @@ class Timer( object ):
 
     def _atexit_report_accum():
         if not Timer.enabled: return
-        print( Timer.fmt.format( "TOTAL", Timer.acc_cl, Timer.acc_tm ),
+        print( Timer.fmt.format( 'TOTAL', Timer.acc_cl, Timer.acc_tm ),
                file=Timer.fh )
     atexit.register( _atexit_report_accum )
 
@@ -171,7 +174,7 @@ class ArgumentParser( argparse.ArgumentParser, object ):
             for env in self.searchpath:
                 if env in os.environ:
                     try:
-                        execfile( os.environ[env] + "/" + self.rcname )
+                        execfile( os.environ[env] + '/' + self.rcname )
                     except IOError:
                         continue
                     return opt
@@ -210,7 +213,7 @@ class ArgumentParser( argparse.ArgumentParser, object ):
 
 class propList( object ):
     def __new__( self, *args ):
-        """If first param is already an instance, just return previous instance"""
+        '''If first param is already an instance, just return previous instance'''
         if type( args[0] ) is propList:
             return args[0]
         else:
@@ -295,13 +298,13 @@ class _vmomiCollect( object ):
 
 
     def _get_obj_props_nofilter( self, vimtype, props=None, root=None, recursive=True ):
-        """
+        '''
         Retrieve all listed properties from objects in container (root), or
         create container out of the rootFolder.
 
         Returns an object of type vmodl.query.PropertyCollector.ObjectContent[],
         or vim.ManagedObject[] if there are no properties to collect.
-        """
+        '''
 
         gc_container = False
         if isinstance( root, ( vim.view.ListView, vim.view.ContainerView )):
@@ -330,7 +333,7 @@ class _vmomiCollect( object ):
 
 
     def get_obj_props( self, vimtype, props=None, root=None, recursive=True ):
-        """
+        '''
         If any of the properties have matching values to search for, narrow down
         the view of managed objects to retrieve the full list of attributes from.
 
@@ -341,7 +344,7 @@ class _vmomiCollect( object ):
 
         Returns a list of dict objects for each result.
 
-        """
+        '''
         if props is None or len( props ) < 1:
             return self._get_obj_props_nofilter( vimtype, props, root, recursive )
 
@@ -400,7 +403,7 @@ class _vmomiCollect( object ):
 
 class _vmomiFind( object ):
     def _get_single( self, name, mot, label, root=None ):
-        """If name is null but there is only one object of that type anyway, just return that."""
+        '''If name is null but there is only one object of that type anyway, just return that.'''
         def err( exception, msg, res=root ):
             if not isinstance( res, vim.ManagedObject.Array):
                 res = self.get_obj( mot, root=res )
@@ -409,7 +412,7 @@ class _vmomiFind( object ):
                 raise exception( diag )
             diag.append( 'Available {0}s:'.format( label ) )
             for n in sorted( [elt.name for elt in res] ):
-                diag.append( "\t" + n )
+                diag.append( '\t' + n )
             raise exception( diag )
 
         if name:
@@ -669,13 +672,13 @@ class _vmomiGuestInfo( object ):
     # a vmnic is any vim.vm.device.VirtualEthernetCard type element
     # from vm.config.hardware.device
     def vmnic_cidrs( self, vmnic ):
-        """
+        '''
         vmnic should be an object of type vim.vm.GuestInfo.NicInfo
 
 
         a vmnic is any vim.vm.device.VirtualEthernetCard type element from
         vm.config.hardware.device
-        """
+        '''
         if vmnic.ipConfig:
             return [ '{}/{}'.format( ip.ipAddress, ip.prefixLength )
                      for ip in vmnic.ipConfig.ipAddress ]
@@ -691,15 +694,15 @@ class _vmomiGuestInfo( object ):
                      'label'      : nic.deviceInfo.label,
                      'netlabel'   : self.get_nic_network_label( nic ),
                      'macAddress' : nic.macAddress, }
-            if vm.summary.runtime.powerState == "poweredOn":
+            if vm.summary.runtime.powerState == 'poweredOn':
                 gnic = filter( lambda g: g.macAddress == nic.macAddress, vm.guest.net )
                 if gnic:
                     prop[ 'ip' ] = self.vmnic_cidrs( gnic[0] )
             nics.append( prop )
         return nics
 
-    def vmguest_process( self, *args, **kwargs ):
-        return vmomiVmGuestProcess( self, *args, **kwargs )
+    def vmguest_ops( self, vm, *args, **kwargs ):
+        return vmomiVmGuestOperation( self, vm, *args, **kwargs )
 
 
 ######
@@ -881,54 +884,432 @@ class vmomiMKS( object ):
 # end class vomiMKS
 
 
-class vmomiVmGuestProcess( object ):
-    def __init__( self, vsi, *args, **kwargs ):
+POSIX = 1  # posix system, e.g. unix or osx
+WinNT = 2  # MICROS~1
+
+class vmomiVmGuestOperation( object ):
+    def __init__( self, vsi, vm, *args, **kwargs ):
         kwargs = dict( **kwargs ) # copy; destructively modified
         for arg in args:
             if isinstance( arg, argparse.Namespace ):
                 kwargs.update( vars( arg ))
 
+        content      = vsi.si.content
+        gomgr        = content.guestOperationsManager
+        self.almgr   = gomgr.aliasManager
+        self.fmgr    = gomgr.fileManager
+        self.pmgr    = gomgr.processManager
+        self.regmgr  = gomgr.guestWindowsRegistryManager
+        #self.sessid = content.sessionManager.currentSession.key
+
         self.vsi     = vsi
-        self.vm      = kwargs[ 'vm' ]
+        self.vm      = vm
+
         self.environ = kwargs.get( 'environ' ) # optional
 
-        self.cwd = kwargs.get( 'cwd' ) or kwargs.get( 'workingDirectory' )
-        if not self.cwd:
-            if self.vm.config.guestId.find( 'win' ) == 0:
-                self.cwd = 'C:\\'
-            else:
-                self.cwd = '/'
-
-        self.auth    = vim.vm.guest.NamePasswordAuthentication(
+        self.auth = vim.vm.guest.NamePasswordAuthentication(
             username = kwargs[ 'username' ],
             password = kwargs[ 'password' ], )
-        self.pm      = vsi.si.content.guestOperationsManager.processManager
 
-    def ps( self, pids=None ):
-        return self.pm.listProcesses( vm=self.vm, auth=self.auth, pids=pids )
+        if self.vm.config.guestId.find( 'win' ) == 0:
+            self.ostype = WinNT
+        else:
+            self.ostype = POSIX
 
-    def start( self, cmdline, **kwargs ):
-        vm      = self.vm
-        auth    = self.auth
-        cwd     = kwargs.get( 'cwd' )     or self.cwd
-        environ = kwargs.get( 'environ' ) or self.environ
+        # Defaults to user's homedir on linux
+        self.cwd = kwargs.get( 'cwd' ) or kwargs.get( 'workingDirectory' )
+        self.tmpfile = []
+        self.tmpdir  = []
 
-        args    = None
-        if len( cmdline ) > 1:
-            args = " ".join( cmdline[ 1: ] )
+    def __del__( self ):
+        for elt in self.tmpfile:
+            if debug:
+                print('rm', elt)
+            try:
+                self.unlink( elt )
+            except GuestOperationError:
+                pass
+        for elt in self.tmpdir:
+            if debug:
+                print('rm -rf', elt)
+            try:
+                self.rmdir( elt, recursive=True )
+            except GuestOperationError:
+                pass
 
-        pspec = vim.vm.guest.ProcessManager.ProgramSpec(
-            workingDirectory = cwd,
-            envVariables     = environ,
-            programPath      = cmdline[ 0 ],
-            arguments        = args, )
+    def ps( self, *pids ):
+        return self.pmgr.ListProcessesInGuest(
+            vm   = self.vm,
+            auth = self.auth,
+            pids = list( pids ))
 
+    def guest_environ( self ):
         try:
-            return self.pm.StartProgramInGuest( vm=vm, auth=auth, spec=pspec )
-        except vim.fault.NoPermission as e:
-            raise PermissionError( e.msg )
+            return self._guest_environ
+        except AttributeError:
+            env = self.pmgr.ReadEnvironmentVariableInGuest(
+                vm    = self.vm,
+                auth  = self.auth )
+            self._guest_environ = environ_to_dict ( env, preserve_case=False )
+            return self._guest_environ
+
+    def getenv( self, name ):
+        try:
+            return self.guest_environ()[ name ]
+        except KeyError:
+            pass
+
+    _fileAttrMap = { 'uid'      : 'ownerId',
+                     'gid'      : 'groupId',
+                     'mode'     : 'permissions',
+                     'atime'    : 'accessTime',
+                     'mtime'    : 'modificationTime',
+                     'ctime'    : 'createTime',
+                     'hidden'   : 'hidden',
+                     'readonly' : 'readOnly' }
+    def mkFileAttributes( self, *args, **kwargs ):
+        for arg in args:
+            if isinstance( arg, dict ):
+                kwargs.update( args )
+            elif isinstance( arg, (int, long) ):
+                kwargs[ 'mode' ] = arg
+
+        if self.ostype is WinNT:
+            attr = vim.vm.guest.FileManager.WindowsFileAttributes()
+        else:
+            attr = vim.vm.guest.FileManager.PosixFileAttributes()
+
+        attrmap = self._fileAttrMap
+        for k in attrmap:
+            if kwargs.get( k ) is not None:
+                setattr( attr, attrmap[ k ], kwargs[ k ] )
+        return attr
+
+    def decodeFileAttributes( self, attr ):
+        # n.b. [acm]time are datetime objects; one way to convert
+        # to unix epoch is: calendar.timegm( mtime.timetuple() )
+        rec = pseudoPropAttr()
+        attrmap = self._fileAttrMap
+        for elt in attrmap:
+            attrname = attrmap[ elt ]
+            if getattr( attr, attrname, None ):
+                rec[ elt ] = getattr( attr, attrname )
+        symlink = getattr( attr, 'symlinkTarget', None )
+        if symlink not in ( '', None ):
+            rec[ 'symlink' ] = symlink
+        return rec
+
+
+    def ls( self, path=None, pattern='^.*', long=False, max=None ):
+        if path is None:
+            path = self.cwd or '/'
+        result    = []
+        index     = 0
+        remaining = max
+        while True:
+            batch = self.fmgr.ListFilesInGuest(
+                vm           = self.vm,
+                auth         = self.auth,
+                filePath     = path,
+                index        = index,
+                maxResults   = remaining,
+                matchPattern = pattern )
+
+            result.extend( batch.files )
+            if batch.remaining == 0:
+                break
+            index     = len( result )
+            remaining = batch.remaining
+
+        if not long:
+            return [ f.path for f in result ]
+
+        record = []
+        while result:
+            st  = result.pop()
+            elt = self.decodeFileAttributes( st.attributes )
+            elt[ 'size' ] = st.size
+            record.append( elt )
+        return record
+
+    def fstat( self, guestFilePath ):
+        rec = self.ls( path=guestFilePath, long=True, max=1 )
+        return rec[0]
+
+    def chmod( self, path, **kwargs ):
+        attr = self.mkFileAttributes( **kwargs )
+        try:
+            self.fmgr.ChangeFileAttributesInGuest(
+                vm                      = self.vm,
+                auth                    = self.auth,
+                guestFilePath           = path,
+                fileAttributes          = attr )
+        except vim.fault.VimFault as e:
+            raise GuestOperationError( 'chmod', e.msg )
+
+    def mkdir( self, path, mkdirhier=False ):
+        try:
+            self.fmgr.MakeDirectoryInGuest(
+                vm                      = self.vm,
+                auth                    = self.auth,
+                directoryPath           = path,
+                createParentDirectories = mkdirhier )
+        except vim.fault.VimFault as e:
+            raise GuestOperationError( 'mkdir', e.msg )
+
+    def mkdtemp( self, prefix='', suffix='', directoryPath=None ):
+        try:
+            tmpdir = self.fmgr.CreateTemporaryDirectoryInGuest(
+                vm            = self.vm,
+                auth          = self.auth,
+                prefix        = prefix,
+                suffix        = suffix,
+                directoryPath = directoryPath )
+        except vim.fault.VimFault as e:
+            raise GuestOperationError( 'mkdtemp', e.msg )
+        self.tmpdir.append( tmpdir )
+        return tmpdir
+
+    def mvdir( self, src, dst ):
+        try:
+            self.fmgr.MoveDirectoryInGuest(
+                vm               = self.vm,
+                auth             = self.auth,
+                srcDirectoryPath = src,
+                dstDirectoryPath = dst )
+        except vim.fault.VimFault as e:
+            raise GuestOperationError( 'mvdir', e.msg )
+
+    def rmdir( self, directoryPath, recursive=False ):
+        try:
+            self.tmpdir.remove( directoryPath )
+        except ValueError:
+            pass
+        try:
+            self.fmgr.DeleteDirectoryInGuest(
+                vm            = self.vm,
+                auth          = self.auth,
+                directoryPath = directoryPath,
+                recursive     = recursive )
+        except vim.fault.VimFault as e:
+            raise GuestOperationError( 'rmdir', e.msg )
+
+    def mktemp( self, prefix='', suffix='', directoryPath=None ):
+        try:
+            tmpfile = self.fmgr.CreateTemporaryFileInGuest(
+                vm            = self.vm,
+                auth          = self.auth,
+                prefix        = prefix,
+                suffix        = suffix,
+                directoryPath = directoryPath )
+        except vim.fault.VimFault as e:
+            raise GuestOperationError( 'mktemp', e.msg )
+        self.tmpfile.append( tmpfile )
+        return tmpfile
+
+    def unlink( self, filePath ):
+        try:
+            self.tmpfile.remove( filePath )
+        except ValueError:
+            pass
+        try:
+            self.fmgr.DeleteFileInGuest(
+                vm            = self.vm,
+                auth          = self.auth,
+                filePath      = filePath )
+        except vim.fault.VimFault as e:
+            raise GuestOperationError( 'unlink', e.msg )
+
+    def get_file( self, guestFile ):
+        try:
+            ftinfo = self.fmgr.InitiateFileTransferFromGuest(
+                vm            = self.vm,
+                auth          = self.auth,
+                guestFilePath = guestFile )
+        except vim.fault.VimFault as e:
+            raise GuestOperationError( e.msg )
+        resp = requests.get( ftinfo.url, verify=False )
+        if resp.status_code != 200:
+            raise GuestOperationError( str( status_code ), resp.reason )
+        return resp.text
+
+    def put_file( self, filePath, data, perm=None, overwrite=False ):
+        attr = self.mkFileAttributes( perm )
+        try:
+            url = self.fmgr.InitiateFileTransferToGuest(
+                vm             = self.vm,
+                auth           = self.auth,
+                guestFilePath  = filePath,
+                fileAttributes = attr,
+                fileSize       = len( data ),
+                overwrite      = overwrite )
+        except vim.fault.VimFault as e:
+            raise GuestOperationError( e.args )
+
+        resp = requests.put( url, data=data, verify=False )
+        if resp.status_code != 200:
+            raise GuestOperationError( resp )
+
+    # Using self.vm.runtime.host.config.certificate directly would require
+    # retrieving all of the properties in config first.  Using the property
+    # collector retrieves just the value we want and is much faster.
+    def host_cert( self ):
+        vsi     = self.vsi
+        host    = self.vm.runtime.host
+        vimtype = type( host )
+        prop    = 'config.certificate'
+        res     = vsi.get_obj_props( [ vimtype ], [ prop ], root=[ host ] )[0]
+        return str.join( '', ( chr( c ) for c in res[ prop ] ))
+
+    def run( self, *args, **kwargs):
+        return vmomiVmGuestProcess( self, *args, **kwargs )
+
+    def kill( self, pid ):
+        try:
+            return self.pmgr.TerminateProcessInGuest(
+                vm   = self.vm,
+                auth = self.auth,
+                pid  = pid )
+        except vim.fault.GuestProcessNotFound:
+            pass
+
+# end class vmomiVmGuestOperation
+
+
+class vmomiVmGuestProcess( object ):
+    result = property( lambda self: self.wait( once=True ) )
+
+    def __init__( self, parent,
+                  script = None,
+                  output = True,
+                  wait   = False,
+                  cwd             = None,
+                  environ         = None,
+                  script_file     = None,
+                  separate_stderr = False ):
+        self.parent  = parent
+        self.cwd     = cwd or parent.cwd
+
+        self.environ = environ or parent.environ
+        # os.environ is not an instance of type dict, but it acts like one.
+        if hasattr( self.environ, '__getitem__' ):
+            self.environ = dict_to_environ( self.environ )
+
+        self.file = {}
+        if separate_stderr:
+            self.file[ 'stdout' ] = parent.mktemp()
+            self.file[ 'stderr' ] = parent.mktemp()
+        elif output:
+            self.file[ 'stdout' ] = parent.mktemp()
+
+        if script_file:
+            script = file_contents ( script_file )
+        elif script is None:
+            raise GuestOperationError( '''one of `script' or `script_file' arg is not optional''' )
+
+        scriptperm = 0o700
+        devnull    = '/dev/null'
+
+        # Use .cmd for script suffix so that it will also execute on WinNT
+        scriptfile = parent.mktemp( suffix='.cmd' )
+        script += '\n'
+        if parent.ostype is WinNT:
+            script.replace( '\n', '\r\n' )
+
+            scriptperm = None
+            devnull    = ':NUL'
+        elif script.find( '#!' ) != 0:
+            script = '#!/bin/sh\n' + script
+        parent.put_file( scriptfile, script, perm=scriptperm, overwrite=True )
+
+        self.prog = scriptfile
+        if self.file.get( 'stderr' ):
+            self.args = '>{} 2>{}'.format( self.file[ 'stdout' ], self.file[ 'stderr' ] )
+        elif self.file.get( 'stdout' ):
+            self.args = '>{} 2>&1'.format( self.file[ 'stdout' ])
+        else:
+            self.args = '>{} 2>&1'.format( devnull )
+
+        self._result = None
+        self.start()
+        if wait:
+            self.wait()
+
+    def start( self ):
+        pspec = vim.vm.guest.ProcessManager.ProgramSpec(
+            workingDirectory = self.cwd,
+            envVariables     = self.environ,
+            programPath      = self.prog,
+            arguments        = self.args )
+        try:
+            self.pid = self.parent.pmgr.StartProgramInGuest(
+                vm   = self.parent.vm,
+                auth = self.parent.auth,
+                spec = pspec )
+        except vim.fault.VimFault as e:
+            raise GuestOperationError( 'exec', e.msg )
+
+    def kill( self ):
+        self.parent.kill( self.pid )
+
+    def wait( self, once=False ):
+        if self._result:
+            return self._result
+
+        parent = self.parent
+        pid    = self.pid
+        delay  = 1
+        while True:
+            res = parent.ps( pid )
+            if not res:  # pid not found.  should we raise?
+                return
+            if res[0].exitCode is None:
+                if once:
+                    return
+                time.sleep( delay )
+                if delay < 10:
+                    delay += 1
+                continue
+
+            res = res[0]
+            result = pseudoPropAttr()
+            result.update( { 'startTime' : res.startTime,
+                             'endTime'   : res.endTime,
+                             'exit'      : res.exitCode })
+            parent = self.parent
+            if self.file.get( 'stdout' ):
+                result[ 'output' ] = parent.get_file( self.file[ 'stdout' ])
+            if self.file.get( 'stderr' ):
+                result[ 'stderr' ] = parent.get_file( self.file[ 'stderr' ])
+            self._result = result
+            break
+        return self._result
+
 
 # end class vmomiVmGuestProcess
+
+
+# This is just a dictionary but you can access
+# or assign elements as either d['x'] or d.x
+
+class pseudoPropAttr( dict ):
+    def __setattr__( self, name, value ):
+        self[ name ] = value
+        return value
+
+    def __getattr__( self, name ):
+        try:
+            return self[ name ]
+        except KeyError as e:
+            raise AttributeError( *e.args )
+
+    def __delattr__( self, name ):
+        try:
+            del self[ name ]
+        except KeyError as e:
+            raise AttributeError( *e.args )
+
+# end class pseudoPropAttr
 
 
 ######
@@ -946,7 +1327,7 @@ def attr_to_dict( obj ):
                  for o in obj )
 
 def propset_get( propset, name ):
-    if type( propset ) is vmodl.query.PropertyCollector.ObjectContent:
+    if isinstance( propset, vmodl.query.PropertyCollector.ObjectContent ):
         propset = propset.propSet
     for elt in propset:
         if elt.name == name:
@@ -955,13 +1336,15 @@ def propset_get( propset, name ):
 def propset_to_dict( propset ):
     if type( propset ) is vmodl.query.PropertyCollector.ObjectContent:
         propset = propset.propSet
-    return dict( ( p.name, p.val ) for p in propset )
+    return dict( (p.name, p.val) for p in propset )
 
 def get_seq_type( obj, typeref ):
     return filter( lambda elt: isinstance( elt , typeref ), obj )
 
-def flat_to_nested_dict( flat, sep='.' ):
-    nested = {}
+# it can be useful to use objtype=pseudoPropAttr for
+# lists of dotted obj props from managed objects.
+def flat_to_nested_dict( flat, sep='.', objtype=dict ):
+    nested = objtype()
     for k in flat:
         parts = k.split( sep )
         walk = nested
@@ -969,50 +1352,36 @@ def flat_to_nested_dict( flat, sep='.' ):
             try:
                 walk = walk[ elt ]
             except KeyError:
-                walk[ elt ] = {}
+                walk[ elt ] = objtype()
                 walk = walk[ elt ]
         walk[ parts[-1] ] = flat[ k ]
     return nested
 
+def environ_to_dict( names, preserve_case=True ):
+    res = {}
+    for elt in names:
+        k, v = elt.split( '=', 1 )
+        if preserve_case:
+            res[ k ] = v
+        else:
+            res[ k.upper() ] = v
+    return res
 
-class pseudoPropAttr( object ):
-    # Allows foo.x to be retrieved as foo[ 'x' ]
-    def __getitem__( self, key ):
-        try:
-            return getattr( self, key )
-        except AttributeError as e:
-            raise KeyError( e )
-
-    def __setitem__( self, key, val ):
-        setattr( self, key, val )
-        return val # allow passthrough assignment a = b[ c ] = d
-
-def flat_dict_to_nested_attributes( flat, sep='.' ):
-    nested = pseudoPropAttr()
-    for k in flat:
-        parts = k.split( sep )
-        walk = nested
-        for elt in parts[ :-1 ]:
-            try:
-                walk = getattr( walk, elt )
-            except AttributeError:
-                setattr( walk, elt, pseudoPropAttr() )
-                walk = getattr( walk, elt )
-        setattr( walk, parts[-1], flat[ k ] )
-    return nested
+def dict_to_environ( names ):
+    return sorted( str.join( '=', (k, names[ k ])) for k in names )
 
 
 ######
 ## generic utility routines
 ######
 
-# This doesn't just use the textwrap class because we do a few special
+# This doesn't just use the textwrap class because we can do a few special
 # things here, such as avoiding filling command examples
 def fold_text( text, maxlen=75, indent=0 ):
     text = text.expandtabs( 8 )
 
-    text      = re.sub( "\r", '', text )        # CRLF -> LF
-    paragraph = re.split( "\n\n", text, flags=re.M ) # Split into separate chunks.
+    text      = re.sub( '\r', '', text )             # CRLF -> LF
+    paragraph = re.split( '\n\n', text, flags=re.M ) # Split into separate chunks.
 
     re_ll = re.compile( '(.{1,%s})(?:\s+|$)' % maxlen, flags=re.M )
     filled = []
@@ -1023,20 +1392,20 @@ def fold_text( text, maxlen=75, indent=0 ):
 
         # Remove all newlines, replacing trailing/leading
         # whitespace with a single space.
-        #para = re.sub( "\\s*\n\\s*", ' ', para, flags=re.M )
+        #para = re.sub( '\\s*\n\\s*', ' ', para, flags=re.M )
         # Only unfill if line is >= 42 chars
-        para = re.sub( "(?<=\S{42})\\s*\n\\s*", ' ', para, flags=re.M )
+        para = re.sub( '(?<=\S{42})\\s*\n\\s*', ' ', para, flags=re.M )
 
         # split into lines no longer than maxlen but only at whitespace.
-        para = re.sub( re_ll, "\\1\n", para )
+        para = re.sub( re_ll, '\\1\n', para )
         # but remove final newline
-        para = re.sub( "\n+$", '', para, flags=re.M )
+        para = re.sub( '\n+$', '', para, flags=re.M )
         filled.append( para )
 
-    text = str.join( "\n\n", filled ) # rejoin paragraphs at the end.
+    text = str.join( '\n\n', filled ) # rejoin paragraphs at the end.
     if indent:
-        repl = "\n" + (' ' * indent)
-        text = re.sub( "\n", repl, text, flags=re.M )
+        repl = '\n' + (' ' * indent)
+        text = re.sub( '\n', repl, text, flags=re.M )
 
     return text
 
@@ -1051,7 +1420,7 @@ def scale_size( size, fmtsize=1024 ):
         return (n & (n - 1) == 0)
 
     if size == 0:
-        return "0 B"
+        return '0 B'
 
     suffix = ('', 'K', 'M', 'G', 'T', 'P', 'E')
     idx = 0
@@ -1065,24 +1434,24 @@ def scale_size( size, fmtsize=1024 ):
         idx += 1
 
     if ispow2 and fmtsize == 1024:
-        fmtstr = "%d %s%s"
-        if size < 10: # Prefer "4096M" to "4G"
+        fmtstr = '%d %s%s'
+        if size < 10: # Prefer 4096M to 4G
             size *= fmtsize
             idx -= 1
     elif size < 100 and idx > 0:
-        fmtstr = "%.2f %s%s"
+        fmtstr = '%.2f %s%s'
     else:
         size = round( size )
-        fmtstr = "%d %s%s"
+        fmtstr = '%d %s%s'
 
-    if pow2p( fmtsize ): unit = "iB"
-    else:                unit =  "B"
+    if pow2p( fmtsize ): unit = 'iB'
+    else:                unit =  'B'
 
     return fmtstr % (size, suffix[idx], unit)
 
 def printerr( *args, **kwargs ):
     sep  = kwargs.get( 'sep',  ': ' )
-    end  = kwargs.get( 'end',  "\n" )
+    end  = kwargs.get( 'end',  '\n' )
     file = kwargs.get( 'file', sys.stderr )
 
     pargs = list( args )
@@ -1090,11 +1459,17 @@ def printerr( *args, **kwargs ):
         pargs.insert( 0, progname )
     print( *pargs, sep=sep, end=end, file=file )
 
+def file_contents( filename ):
+    f = open( filename, 'r' )
+    s = f.read()
+    f.close()
+    return s
+
 
 def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
     if response is None:
         response = { 'y' : True,  'n' : False }
-    c = " ({} or {}) "
+    c = ' ({} or {}) '
     if default is None:
         choice = c.format( yes, no )
     elif default is False or default == no:
@@ -1119,12 +1494,9 @@ def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
                '\x79\x6f\x75\x20\x74\x68\x65\x6e\x2e\n' )
         sys.exit( 130 ) # WIFSIGNALED(128) + SIGINT(2)
 
-
 def yes_or_no_p( prompt, default=None ):
-    return y_or_n_p( prompt,
-                     yes='yes',
-                     no='no',
-                     response={ 'yes' : True, 'no' : False },
-                     default=default )
+    return y_or_n_p( prompt, yes = 'yes', no = 'no',
+                     response = { 'yes' : True, 'no' : False },
+                     default  = default )
 
 # eof
