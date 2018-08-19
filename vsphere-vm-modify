@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-modify,v 1.7 2018/08/09 21:41:32 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.8 2018/08/09 23:12:23 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
@@ -36,8 +36,8 @@ class mVM():
         return self.vsi.get_vm( name ).MarkAsTemplate()
 
     def to_vm( self, name ):
-        cluster = self.vsi.get_cluster( args.cluster )
-        pool    = self.vsi.get_pool( args.pool, root=cluster )
+        cluster = self.vsi.get_cluster( self.args.cluster )
+        pool    = self.vsi.get_pool( self.args.pool, root=cluster )
         return self.vsi.get_vm( name ).MarkAsVirtualMachine( pool=pool )
 
 
