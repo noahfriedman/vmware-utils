@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.24 2018/08/05 08:48:24 friedman Exp $
+# $Id: vsphere-vm-info,v 1.25 2018/08/08 12:25:24 friedman Exp $
 
 # Commentary:
 # Code:
@@ -179,7 +179,7 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
             try:    pi( farindentL, a, dic[ b ] )
             except: pass
 
-    vm = vsl.flat_dict_to_nested_attributes( vmflat )
+    vm = vsl.flat_to_nested_dict( vmflat, objtype=vsl.pseudoPropAttr )
 
     vm_conf = vm.config
     hw_conf = vm.config.hardware
