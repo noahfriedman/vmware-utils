@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-power,v 1.6 2018/07/21 20:47:17 friedman Exp $
+# $Id: vsphere-vm-power,v 1.7 2018/08/04 05:15:56 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
@@ -19,8 +19,9 @@ cmds = { 'on'          : 'PowerOn',
 
 
 def get_args():
-    p = vsl.ArgumentParser( rest='vm', required=True )
-    p.add( '-c', '--command', required=True, choices=cmds, help='Command to perform on virtual machines')
+    p = vsl.ArgumentParser()
+    p.add( 'cmd', choices=cmds,   help='Command to perform on virtual machines' )
+    p.add( 'vm',  nargs='+',      help='VM name(s)' )
     return p.parse()
 
 def main():
@@ -31,7 +32,7 @@ def main():
     if not vmlist:
         return
 
-    op = getattr( type( vmlist[ 0 ] ), cmds[ args.command ] )
+    op = getattr( type( vmlist[ 0 ] ), cmds[ args.cmd ] )
     tasklist = []
     for vm in vmlist:
         try:
