@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.39 2018/08/19 06:46:28 friedman Exp $
+# $Id: vspherelib.py,v 1.40 2018/08/19 18:12:12 friedman Exp $
 
 # Commentary:
 # Code:
@@ -949,22 +949,20 @@ class vmomiVmGuestOperation( object ):
             printerr( 'debug', self.vm.name, text )
 
     def _gc_tmpfiles( self, files=[], dirs=[] ):
-        for elt in files:
-            try:
-                self.unlink( elt )
-            except GuestOperationError:
-                pass
-        for elt in dirs:
-            try:
-                self.rmdir( elt, recursive=True )
-            except GuestOperationError:
-                pass
-
-    def ps( self, *pids ):
-        return self.pmgr.ListProcessesInGuest(
-            vm   = self.vm,
-            auth = self.auth,
-            pids = list( pids ))
+        try:
+            for elt in files:
+                try:
+                    self.unlink( elt )
+                except GuestOperationError:
+                    pass
+            for elt in dirs:
+                try:
+                    self.rmdir( elt, recursive=True )
+                except GuestOperationError:
+                    pass
+        except vim.fault.NotAuthenticated:
+            # this <- vim.fault.NoPermission <- vmodl.fault.SecurityError
+            pass
 
     def guest_environ( self ):
         try:
@@ -1167,6 +1165,9 @@ class vmomiVmGuestOperation( object ):
                 guestFilePath = guestFile )
         except vim.fault.VimFault as e:
             raise GuestOperationError( e.msg )
+        # TODO: verify the conncetion using the host cert.
+        # The urllib3 interface requires certs to be stored in a file and
+        # the location passed in, which another annoying setup nit.
         resp = requests.get( ftinfo.url, verify=False )
         if resp.status_code != 200:
             raise GuestOperationError( str( status_code ), resp.reason )
@@ -1185,7 +1186,9 @@ class vmomiVmGuestOperation( object ):
                 overwrite      = overwrite )
         except vim.fault.VimFault as e:
             raise GuestOperationError( e.args )
-
+        # TODO: verify the conncetion using the host cert.
+        # The urllib3 interface requires certs to be stored in a file and
+        # the location passed in, which another annoying setup nit.
         resp = requests.put( url, data=data, verify=False )
         if resp.status_code != 200:
             raise GuestOperationError( resp )
@@ -1199,10 +1202,17 @@ class vmomiVmGuestOperation( object ):
         vimtype = type( host )
         prop    = 'config.certificate'
         res     = vsi.get_obj_props( [ vimtype ], [ prop ], root=[ host ] )[0]
+        # convert cert from byte array to string
         return str.join( '', ( chr( c ) for c in res[ prop ] ))
 
     def run( self, *args, **kwargs):
         return vmomiVmGuestProcess( self, *args, **kwargs )
+
+    def ps( self, *pids ):
+        return self.pmgr.ListProcessesInGuest(
+            vm   = self.vm,
+            auth = self.auth,
+            pids = list( pids ))
 
     def kill( self, pid ):
         self._printdbg( 'kill', pid )
