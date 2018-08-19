@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.38 2018/08/15 05:37:57 friedman Exp $
+# $Id: vspherelib.py,v 1.39 2018/08/19 06:46:28 friedman Exp $
 
 # Commentary:
 # Code:
@@ -922,16 +922,39 @@ class vmomiVmGuestOperation( object ):
         self.tmpdir  = []
 
     def __del__( self ):
-        for elt in self.tmpfile:
-            if debug:
-                print('rm', elt)
+        self._gc_tmpfiles( files=self.tmpfile, dirs=self.tmpdir )
+
+    def _printdbg( self, *text ):
+        def expand( txt ):
+            result = []
+            for elt in txt:
+                if callable( elt ):
+                    result.extend( expand( elt() ))
+                elif isinstance( elt, vim.vm.guest.FileManager.FileAttributes ):
+                    attr = self.decodeFileAttributes( elt )
+                    p = []
+                    for k in attr:
+                        v = '0{:o}'.format( attr[ k ] ) if k == 'mode' \
+                            else str( attr[ k ] )
+                        p.append( str.join( '=', (k, v) ))
+                    s = str.join( ', ', sorted( p ))
+                    result.append( s )
+                else:
+                    result.append( str( elt ))
+            if result:
+                return result
+
+        if debug and text:
+            text = str.join( ' ', expand( text ))
+            printerr( 'debug', self.vm.name, text )
+
+    def _gc_tmpfiles( self, files=[], dirs=[] ):
+        for elt in files:
             try:
                 self.unlink( elt )
             except GuestOperationError:
                 pass
-        for elt in self.tmpdir:
-            if debug:
-                print('rm -rf', elt)
+        for elt in dirs:
             try:
                 self.rmdir( elt, recursive=True )
             except GuestOperationError:
@@ -1000,12 +1023,14 @@ class vmomiVmGuestOperation( object ):
         return rec
 
 
-    def ls( self, path=None, pattern='^.*', long=False, max=None ):
+    def ls( self, path=None, pattern='^.*', long=False, max=None, _fstat=False ):
         if path is None:
             path = self.cwd or '/'
         result    = []
         index     = 0
         remaining = max
+        if not _fstat: # fstat can override
+            self._printdbg( lambda: ('ls', path, '({})'.format( pattern )))
         while True:
             batch = self.fmgr.ListFilesInGuest(
                 vm           = self.vm,
@@ -1033,11 +1058,13 @@ class vmomiVmGuestOperation( object ):
         return record
 
     def fstat( self, guestFilePath ):
-        rec = self.ls( path=guestFilePath, long=True, max=1 )
+        self._printdbg( 'fstat', guestFilePath )
+        rec = self.ls( path=guestFilePath, long=True, max=1, _fstat=True )
         return rec[0]
 
     def chmod( self, path, **kwargs ):
         attr = self.mkFileAttributes( **kwargs )
+        self._printdbg( 'chmod', attr, path )
         try:
             self.fmgr.ChangeFileAttributesInGuest(
                 vm                      = self.vm,
@@ -1048,6 +1075,7 @@ class vmomiVmGuestOperation( object ):
             raise GuestOperationError( 'chmod', e.msg )
 
     def mkdir( self, path, mkdirhier=False ):
+        self._printdbg( 'mkdir', path )
         try:
             self.fmgr.MakeDirectoryInGuest(
                 vm                      = self.vm,
@@ -1067,10 +1095,12 @@ class vmomiVmGuestOperation( object ):
                 directoryPath = directoryPath )
         except vim.fault.VimFault as e:
             raise GuestOperationError( 'mkdtemp', e.msg )
+        self._printdbg( 'mkdtemp', tmpdir )
         self.tmpdir.append( tmpdir )
         return tmpdir
 
     def mvdir( self, src, dst ):
+        self._printdbg( 'mvdir', src, dst )
         try:
             self.fmgr.MoveDirectoryInGuest(
                 vm               = self.vm,
@@ -1081,10 +1111,16 @@ class vmomiVmGuestOperation( object ):
             raise GuestOperationError( 'mvdir', e.msg )
 
     def rmdir( self, directoryPath, recursive=False ):
+        if recursive:
+            self._printdbg( 'rmdir -r', directoryPath )
+        else:
+            self._printdbg( 'rmdir', directoryPath )
+
         try:
             self.tmpdir.remove( directoryPath )
         except ValueError:
             pass
+
         try:
             self.fmgr.DeleteDirectoryInGuest(
                 vm            = self.vm,
@@ -1104,10 +1140,12 @@ class vmomiVmGuestOperation( object ):
                 directoryPath = directoryPath )
         except vim.fault.VimFault as e:
             raise GuestOperationError( 'mktemp', e.msg )
+        self._printdbg( 'mktemp', tmpfile )
         self.tmpfile.append( tmpfile )
         return tmpfile
 
     def unlink( self, filePath ):
+        self._printdbg( 'unlink', filePath )
         try:
             self.tmpfile.remove( filePath )
         except ValueError:
@@ -1121,6 +1159,7 @@ class vmomiVmGuestOperation( object ):
             raise GuestOperationError( 'unlink', e.msg )
 
     def get_file( self, guestFile ):
+        self._printdbg( 'get_file', guestFile )
         try:
             ftinfo = self.fmgr.InitiateFileTransferFromGuest(
                 vm            = self.vm,
@@ -1135,6 +1174,7 @@ class vmomiVmGuestOperation( object ):
 
     def put_file( self, filePath, data, perm=None, overwrite=False ):
         attr = self.mkFileAttributes( perm )
+        self._printdbg( 'put_file', filePath, attr )
         try:
             url = self.fmgr.InitiateFileTransferToGuest(
                 vm             = self.vm,
@@ -1165,6 +1205,7 @@ class vmomiVmGuestOperation( object ):
         return vmomiVmGuestProcess( self, *args, **kwargs )
 
     def kill( self, pid ):
+        self._printdbg( 'kill', pid )
         try:
             return self.pmgr.TerminateProcessInGuest(
                 vm   = self.vm,
@@ -1195,12 +1236,12 @@ class vmomiVmGuestProcess( object ):
         if hasattr( self.environ, '__getitem__' ):
             self.environ = dict_to_environ( self.environ )
 
-        self.file = {}
+        self.tmpfile = {}
         if separate_stderr:
-            self.file[ 'stdout' ] = parent.mktemp()
-            self.file[ 'stderr' ] = parent.mktemp()
+            self.tmpfile[ 'stdout' ] = parent.mktemp()
+            self.tmpfile[ 'stderr' ] = parent.mktemp()
         elif output:
-            self.file[ 'stdout' ] = parent.mktemp()
+            self.tmpfile[ 'stdout' ] = parent.mktemp()
 
         if script_file:
             script = file_contents ( script_file )
@@ -1212,6 +1253,7 @@ class vmomiVmGuestProcess( object ):
 
         # Use .cmd for script suffix so that it will also execute on WinNT
         scriptfile = parent.mktemp( suffix='.cmd' )
+        self.tmpfile[ 'script' ] = scriptfile
         script += '\n'
         if parent.ostype is WinNT:
             script.replace( '\n', '\r\n' )
@@ -1222,13 +1264,13 @@ class vmomiVmGuestProcess( object ):
             script = '#!/bin/sh\n' + script
         parent.put_file( scriptfile, script, perm=scriptperm, overwrite=True )
 
-        self.prog = scriptfile
-        if self.file.get( 'stderr' ):
-            self.args = '>{} 2>{}'.format( self.file[ 'stdout' ], self.file[ 'stderr' ] )
-        elif self.file.get( 'stdout' ):
-            self.args = '>{} 2>&1'.format( self.file[ 'stdout' ])
+        if self.tmpfile.get( 'stderr' ):
+            self.args = '>{} 2>{}'.format( self.tmpfile[ 'stdout' ], self.tmpfile[ 'stderr' ] )
+        elif self.tmpfile.get( 'stdout' ):
+            self.args = '>{} 2>&1'.format( self.tmpfile[ 'stdout' ])
         else:
             self.args = '>{} 2>&1'.format( devnull )
+        self.prog = scriptfile
 
         self._result = None
         self.start()
@@ -1236,18 +1278,20 @@ class vmomiVmGuestProcess( object ):
             self.wait()
 
     def start( self ):
+        parent = self.parent
         pspec = vim.vm.guest.ProcessManager.ProgramSpec(
             workingDirectory = self.cwd,
             envVariables     = self.environ,
             programPath      = self.prog,
             arguments        = self.args )
         try:
-            self.pid = self.parent.pmgr.StartProgramInGuest(
-                vm   = self.parent.vm,
-                auth = self.parent.auth,
+            self.pid = parent.pmgr.StartProgramInGuest(
+                vm   = parent.vm,
+                auth = parent.auth,
                 spec = pspec )
         except vim.fault.VimFault as e:
             raise GuestOperationError( 'exec', e.msg )
+        parent._printdbg( 'exec', self.prog, ': pid', self.pid )
 
     def kill( self ):
         self.parent.kill( self.pid )
@@ -1261,13 +1305,15 @@ class vmomiVmGuestProcess( object ):
         delay  = 1
         while True:
             res = parent.ps( pid )
-            if not res:  # pid not found.  should we raise?
+            if not res:
+                # pid not found, process info has been lost.
+                # should we raise an exception here?
                 return
             if res[0].exitCode is None:
                 if once:
                     return
                 time.sleep( delay )
-                if delay < 10:
+                if delay < 10:  # increase delay up to 10s
                     delay += 1
                 continue
 
@@ -1277,14 +1323,14 @@ class vmomiVmGuestProcess( object ):
                              'endTime'   : res.endTime,
                              'exit'      : res.exitCode })
             parent = self.parent
-            if self.file.get( 'stdout' ):
-                result[ 'output' ] = parent.get_file( self.file[ 'stdout' ])
-            if self.file.get( 'stderr' ):
-                result[ 'stderr' ] = parent.get_file( self.file[ 'stderr' ])
+            parent._printdbg( 'pid', self.pid, 'exit code', res.exitCode )
+            if self.tmpfile.get( 'stdout' ):
+                result[ 'output' ] = parent.get_file( self.tmpfile[ 'stdout' ])
+            if self.tmpfile.get( 'stderr' ):
+                result[ 'stderr' ] = parent.get_file( self.tmpfile[ 'stderr' ])
+            parent._gc_tmpfiles( files=self.tmpfile.values() )
             self._result = result
-            break
-        return self._result
-
+            return result
 
 # end class vmomiVmGuestProcess
 
@@ -1454,8 +1500,13 @@ def printerr( *args, **kwargs ):
     end  = kwargs.get( 'end',  '\n' )
     file = kwargs.get( 'file', sys.stderr )
 
-    pargs = list( args )
-    if progname:
+    pargs = args
+    if kwargs.has_key( 'progname' ):
+        if kwargs[ 'progname' ] is not None:
+            pargs = list( args )
+            pargs.insert( 0, kwargs[ 'progname' ] )
+    elif progname:
+        pargs = list( args )
         pargs.insert( 0, progname )
     print( *pargs, sep=sep, end=end, file=file )
 
