@@ -1,0 +1,77 @@
+#!/usr/bin/env python
+# vsphere-guest-command --- run command in virtual machine via guest tools
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2018-08-20
+# Public domain
+
+# $Id$
+
+# Commentary:
+# Code:
+
+from   __future__ import print_function
+import vspherelib     as vsl
+
+import os
+import sys
+import time
+
+
+def get_args():
+    p = vsl.ArgumentParser()
+    p.add( '-U', '--guest-username',                  )
+    p.add( '-P', '--guest-password',                  )
+    p.add( '-F', '--script-file',                    default=None )
+    p.add( '-O', '--no-output',       dest='output', default=True,   action='store_false' )
+    p.add( '-E', '--separate-stderr',                default=False,  action='store_true' )
+    p.add( '-W', '--no-wait',         dest='wait',   default=True,   action='store_false' )
+    p.add( '-C', '--cwd',                            default=None )
+    p.add( '-v', '--verbose',                        default=False,  action='store_true' )
+    p.add( '-L', '--local-environ',                  default=False,  action='store_true' )
+    p.add( 'vm',   nargs=1,                          help='VM name' )
+    p.add( 'cmd',  nargs='*',                        help='Commands (one per arg)' )
+    return p.parse()
+
+
+def main():
+    args = get_args()
+    vsi  = vsl.vmomiConnect( args )
+    vm   = vsi.find_vm( args.vm )[0]
+    vop  = vsi.vmguest_ops( vm,
+                            username=args.guest_username,
+                            password=args.guest_password )
+
+    if (args.output or args.separate_stderr) and not args.wait:
+        vsl.printerr( 'cannot use --no-wait unless output is disabled' )
+        exit( 1 )
+
+    pargs = { 'wait'            : args.wait,
+              'script_file'     : args.script_file,
+              'script'          : str.join( ' ', args.cmd ),
+              'output'          : args.output,
+              'separate_stderr' : args.separate_stderr,
+              'cwd'             : args.cwd, }
+    if args.local_environ:
+        pargs[ 'environ' ] = os.environ
+
+    proc = vop.run( **pargs )
+    if not args.wait:
+        exit( 0 )
+
+    res = proc.result
+    if res.get( 'output' ):
+        print( res.output )
+    if res.get( 'stderr' ):
+        print( res.stderr, file=sys.stderr )
+    if args.verbose:
+        print( '[Exit {}]'.format( str( res.exit )), file=sys.stderr )
+        print( 'Started:', res.startTime, file=sys.stderr )
+        print( 'Ended:  ', res.endTime,   file=sys.stderr )
+    exit( res.exit )
+
+
+if __name__ == '__main__':
+    main()
+
+# eof
