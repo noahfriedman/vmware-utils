@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.40 2018/08/19 18:12:12 friedman Exp $
+# $Id: vspherelib.py,v 1.41 2018/08/19 20:39:48 friedman Exp $
 
 # Commentary:
 # Code:
@@ -124,9 +124,6 @@ class Timer( object ):
 class ArgumentParser( argparse.ArgumentParser, object ):
     class Option(): pass  # just a container
 
-    # alias
-    add        = argparse.ArgumentParser.add_argument
-
     searchpath = ['XDG_CONFIG_HOME', 'HOME']
     rcname     = '.vspherelibrc.py'
 
@@ -146,10 +143,10 @@ class ArgumentParser( argparse.ArgumentParser, object ):
             if not rest:
                 rest = 'rest'
 
-        self.add( '-s', '--host',     default=opt.host,           help='Remote esxi/vcenter host to connect to' )
-        self.add( '-o', '--port',     default=opt.port, type=int, help='Port to connect on' )
-        self.add( '-u', '--user',     default=opt.user,           help='User name for host connection' )
-        self.add( '-p', '--password', default=opt.password,       help='Server user password' )
+        self.add( '-s', '--host',     required=True,           help='Remote esxi/vcenter host to connect to' )
+        self.add( '-o', '--port',     required=True, type=int, help='Port to connect on' )
+        self.add( '-u', '--user',     required=True,           help='User name for host connection' )
+        self.add( '-p', '--password', required=True,           help='Server user password' )
         if rest:
             self.add( rest, nargs=nargs,                          help=help )
 
@@ -180,6 +177,23 @@ class ArgumentParser( argparse.ArgumentParser, object ):
                     return opt
         return opt
 
+    def add_argument( self, *args, **kwargs ):
+        'Inject any values from rc file into defaults'
+        if hasattr( self, 'opt' ):
+            for optname in args:
+                if optname.find( '--' ) != 0:
+                    continue
+                name = optname[ 2: ].replace( '-', '_' )
+                if hasattr( self.opt, name ):
+                    kwargs[ 'default' ] = getattr( self.opt, name )
+                    try:
+                        del kwargs[ 'required' ]
+                    except KeyError:
+                        pass
+                    break
+        return super( self.__class__, self ).add_argument( *args, **kwargs )
+    add = add_argument # alias
+
     def parse_args( self ):
         args = super( self.__class__, self ).parse_args()
 
@@ -200,8 +214,7 @@ class ArgumentParser( argparse.ArgumentParser, object ):
                 setattr( args, elt, extra[ elt ] )
 
         return args
-    # alias
-    parse = parse_args
+    parse = parse_args # alias
 
 
 # end class ArgumentParser
@@ -922,7 +935,10 @@ class vmomiVmGuestOperation( object ):
         self.tmpdir  = []
 
     def __del__( self ):
-        self._gc_tmpfiles( files=self.tmpfile, dirs=self.tmpdir )
+        try:
+            self._gc_tmpfiles( files=self.tmpfile, dirs=self.tmpdir )
+        except:
+            pass
 
     def _printdbg( self, *text ):
         def expand( txt ):
@@ -1270,7 +1286,7 @@ class vmomiVmGuestProcess( object ):
 
             scriptperm = None
             devnull    = ':NUL'
-        elif script.find( '#!' ) != 0:
+        elif script.find( '#!' ) != 0 and script.find( '\x7fELF' ) != 0:
             script = '#!/bin/sh\n' + script
         parent.put_file( scriptfile, script, perm=scriptperm, overwrite=True )
 
