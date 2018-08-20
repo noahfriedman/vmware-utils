@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.41 2018/08/19 20:39:48 friedman Exp $
+# $Id: vspherelib.py,v 1.42 2018/08/20 07:56:59 friedman Exp $
 
 # Commentary:
 # Code:
@@ -897,8 +897,8 @@ class vmomiMKS( object ):
 # end class vomiMKS
 
 
-POSIX = 1  # posix system, e.g. unix or osx
-WinNT = 2  # MICROS~1
+POSIX = object()  # posix system, e.g. unix or osx
+WinNT = object()  # MICROS~1
 
 class vmomiVmGuestOperation( object ):
     def __init__( self, vsi, vm, *args, **kwargs ):
@@ -920,14 +920,18 @@ class vmomiVmGuestOperation( object ):
 
         self.environ = kwargs.get( 'environ' ) # optional
 
-        self.auth = vim.vm.guest.NamePasswordAuthentication(
-            username = kwargs[ 'username' ],
-            password = kwargs[ 'password' ], )
-
         if self.vm.config.guestId.find( 'win' ) == 0:
             self.ostype = WinNT
         else:
             self.ostype = POSIX
+
+        self.auth = vim.vm.guest.NamePasswordAuthentication()
+        for authparm in ('username', 'password'):
+            val = kwargs[ authparm ]
+            if callable( val ):
+                setattr( self.auth, authparm, val( self, authparm ))
+            else:
+                setattr( self.auth, authparm, val )
 
         # Defaults to user's homedir on linux
         self.cwd = kwargs.get( 'cwd' ) or kwargs.get( 'workingDirectory' )
