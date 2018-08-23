@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.43 2018/08/20 20:52:09 friedman Exp $
+# $Id: vspherelib.py,v 1.44 2018/08/21 21:44:04 friedman Exp $
 
 # Commentary:
 # Code:
@@ -356,7 +356,7 @@ class _vmomiCollect( object ):
         return result
 
 
-    def get_obj_props( self, vimtype, props=None, root=None, recursive=True ):
+    def get_obj_props( self, vimtype, props=None, root=None, recursive=True, mustMatchAll=True ):
         '''
         If any of the properties have matching values to search for, narrow down
         the view of managed objects to retrieve the full list of attributes from.
@@ -379,11 +379,25 @@ class _vmomiCollect( object ):
             filterprops = filters.keys()
             res = self._get_obj_props_nofilter( vimtype, filterprops, root, recursive )
             match = []
-            for r in res:
-                for rprop in r.propSet:
-                    if rprop.val in filters.get( rprop.name ):
+
+            # By default, only include results for which every property name
+            # has a value included in the list of wanted values for that property.
+            # Otherwise, include results if any match is found in any property.
+            timer = Timer( 'filter preliminary results' )
+            if mustMatchAll:
+                for r in res:
+                    for rprop in r.propSet:
+                        if rprop.val not in filters.get( rprop.name ):
+                            break
+                    else: # loop did not call break
                         match.append( r )
-                        break
+            else:
+                for r in res:
+                    for rprop in r.propSet:
+                        if rprop.val in filters.get( rprop.name ):
+                            match.append( r )
+                            break
+            timer.report()
             if not match:
                 # there were filters but nothing matched.  So don't let the
                 # collector below run since it would collect *everything*
@@ -394,6 +408,9 @@ class _vmomiCollect( object ):
 
         # Now get all the props from the selected objects... if there are
         # any we don't already have.  (propnames is a superset of filters)
+        #
+        # TODO: don't refetch any properties we already have.  Strip them
+        # out, then merge this new set with the prior ones.
         propnames = props.names()
         if len( filters ) != len( propnames ):
             res = self._get_obj_props_nofilter( vimtype, propnames, match, recursive )
@@ -503,7 +520,11 @@ class _vmomiFind( object ):
                 try:
                     args.remove( vm[ 'name' ] )
                 except ValueError:
-                    printerr( vm )
+                    # This may happen if two VMs have the same name, we
+                    # already found one and removed it from the list.
+                    # Not supposed to happen, but it has on occasion.
+                    #printerr('duplicate vm name', vm )
+                    pass
 
         if len( args ) > 0:
             search = self.si.content.searchIndex
@@ -1179,12 +1200,12 @@ class _vmomiVmGuestOperation_File( object ):
 
 
 class _vmomiVmGuestOperation_Registry( object ):
-    RegValBinary    = vim.vm.guest.WindowsRegistryManager.RegistryValueBinary
-    RegValDword     = vim.vm.guest.WindowsRegistryManager.RegistryValueDword
-    RegValQword     = vim.vm.guest.WindowsRegistryManager.RegistryValueQword
-    RegValExpString = vim.vm.guest.WindowsRegistryManager.RegistryValueExpandString
-    RegValMulString = vim.vm.guest.WindowsRegistryManager.RegistryValueMultiString
-    RegValString    = vim.vm.guest.WindowsRegistryManager.RegistryValueString
+    REG_BINARY    = vim.vm.guest.WindowsRegistryManager.RegistryValueBinary
+    REG_DWORD     = vim.vm.guest.WindowsRegistryManager.RegistryValueDword
+    REG_QWORD     = vim.vm.guest.WindowsRegistryManager.RegistryValueQword
+    REG_EXPAND_SZ = vim.vm.guest.WindowsRegistryManager.RegistryValueExpandString
+    REG_MULTI_SZ  = vim.vm.guest.WindowsRegistryManager.RegistryValueMultiString
+    REG_SZ        = vim.vm.guest.WindowsRegistryManager.RegistryValueString
 
     @classmethod
     def _mkRegKeyNameSpec( self, path, wow=None ):
@@ -1267,14 +1288,15 @@ class _vmomiVmGuestOperation_Registry( object ):
 
     def reg_value_set( self, path, name, value, type=None, wow=None ):
         def guess_type():
-            m = vim.vm.guest.WindowsRegistryManager
             t = type( value )
-            if t is int:     return m.RegistryValueDword       # xsd:int
-            if t is long:    return m.RegistryValueQword       # xsd:long
-            if t is list:    return m.RegistryValueMultiString # xsd:string[]
-            if t is unicode: return m.RegistryValueString      # xsd:string
-            if value.find( '\0' ) >= 0:
-                return m.RegistryValueBinary                   # xsd:base64Binary
+            # n.b. I don't know how to infer REG_EXPAND_SZ
+            if t is int:                return self.REG_DWORD
+            if t is long:               return self.REG_QWORD
+            if t is unicode:            return self.REG_SZ
+            if t is list:               return self.REG_MULTI_SZ
+            if t is bytearray:          return self.REG_BINARY
+            # This may be wrong for raw utf16
+            if value.find( '\0' ) >= 0: return self.REG_BINARY
             raise TypeError( 'Cannot infer type for registry value' )
 
         if not type:
