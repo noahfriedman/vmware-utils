@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.25 2018/08/08 12:25:24 friedman Exp $
+# $Id: vsphere-vm-info,v 1.26 2018/08/19 06:37:54 friedman Exp $
 
 # Commentary:
 # Code:
@@ -338,7 +338,12 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
             pass
 
     try:
-        p( 'Question', rt_conf.question.text )
+        text = rt_conf.question.text
+        text = vsl.fold_text( text, maxlen=70, indent=abs( indentL ) )
+        if text.find ("\n") >= 0:
+            text = "\n" + indentS + text
+        if text != "":
+            p( 'Question', text )
     except AttributeError:
         pass
 
