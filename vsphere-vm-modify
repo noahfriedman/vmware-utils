@@ -1,21 +1,27 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-modify,v 1.9 2018/08/19 06:34:45 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.10 2018/08/23 05:49:07 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
 
-cmds = { 'to-template' : 'to_template',
-         'to-vm'       : 'to_vm',
-         'register'    : 'register',
-         'unregister'  : 'unregister',
-         'rename'      : 'rename',
+cmds = { 'to-template'   : 'to_template',
+         'to-vm'         : 'to_vm',
+         'register'      : 'register',
+         'unregister'    : 'unregister',
+         'rename'        : 'rename',
 
-         'network'     : 'network',
-         'connect'     : 'connect',
-         'disconnect'  : 'disconnect',
+         'network'       : 'network',
+         'connect'       : 'connect',
+         'disconnect'    : 'disconnect',
 
-         'annotate'    : 'annotate', }
+         'tools-mount'   : 'tools_mount',
+         'tools-unmount' : 'tools_unmount',
+         'tools-update'  : 'tools_update',
+
+         'upgrade'       : 'upgrade',
+         'resolution'    : 'resolution',
+         'annotate'      : 'annotate', }
 
 class mVM():
     def __init__( self, vsi, args ):
@@ -30,7 +36,7 @@ class mVM():
             if task:
                 self.task.append( task )
         except vmodl.MethodFault as e:
-            vsl.printerr( rest[0].name, e.msg )
+            vsl.printerr( rest[0], e.msg )
         except Exception as e:
             vsl.printerr( 'Caught Exception', str( e ))
 
@@ -77,6 +83,28 @@ class mVM():
         return self.vsi.get_vm( name ).ReconfigVM_Task( confspec )
 
 
+    def tools_mount( self, vm_name ):
+        vm = self.vsi.get_vm( vm_name )
+        vm.MountToolsInstaller()
+
+    def tools_unmount( self, vm_name ):
+        vm = self.vsi.get_vm( vm_name )
+        vm.UnmountToolsInstaller()
+
+    def tools_update( self, vm_name ):
+        vm = self.vsi.get_vm( vm_name )
+        return vm.UpgradeTools_Task()
+
+
+    def upgrade( self, vm_name, version=None ):
+        vm = self.vsi.get_vm( vm_name )
+        return vm.UpgradeVM_Task( version=version )
+
+    def resolution( self, vm_name, WxH ):
+        vm = self.vsi.get_vm( vm_name )
+        width, height = WxH.split( 'x' )
+        vm.SetScreenResolution( width=int( width ), height=int( height ))
+
     def annotate( self, name ):
         confspec = vim.vm.ConfigSpec()
         confspec.annotation = self.args.annotation
@@ -105,7 +133,7 @@ class mVM():
             port.switchUuid   = net.config.distributedVirtualSwitch.uuid
         except AttributeError:
             devspec.device.backing.network    = net
-            devspec.device.backing.deviceName = label
+            devspec.device.backing.deviceName = netlabel
 
         confspec = vim.vm.ConfigSpec( deviceChange=[ devspec ] )
         return vm.ReconfigVM_Task( confspec )
@@ -155,7 +183,7 @@ def main():
     vsi  = vsl.vmomiConnect( args )
     mi   = mVM( vsi, args )
 
-    if args.cmd == 'rename':
+    if args.cmd in ('rename', 'resolution'):
         mi.doit( args.vm[0], args.vm[1] )
     elif args.cmd == 'network':
         if len( args.vm ) < 3:
@@ -170,7 +198,7 @@ def main():
     if mi.task:
         succ = vsi.taskwait( mi.task )
         if not succ:
-            sys.exit( 1 )
+            exit( 1 )
 
         if args.cmd == 'register' and not args.as_template:
             mtask = []
@@ -180,7 +208,7 @@ def main():
             if mtask:
                 succ = vsi.taskwait( mtask )
                 if not succ:
-                    sys.exit( 1 )
+                    exit( 1 )
 
 if __name__ == '__main__':
     main()
