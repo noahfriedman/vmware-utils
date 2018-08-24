@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.44 2018/08/21 21:44:04 friedman Exp $
+# $Id: vspherelib.py,v 1.45 2018/08/23 06:11:39 friedman Exp $
 
 # Commentary:
 # Code:
@@ -1455,49 +1455,46 @@ class vmomiVmGuestProcess( object ):
                   environ         = None,
                   script_file     = None,
                   separate_stderr = False ):
-        self.parent  = parent
-        self.cwd     = cwd or parent.cwd
-
-        self.environ = environ or parent.environ
-        # os.environ is not an instance of type dict, but it acts like one.
-        if hasattr( self.environ, '__getitem__' ):
-            self.environ = dict_to_environ( self.environ )
-
-        self.tmpfile = {}
-        if separate_stderr:
-            self.tmpfile[ 'stdout' ] = parent.mktemp()
-            self.tmpfile[ 'stderr' ] = parent.mktemp()
-        elif output:
-            self.tmpfile[ 'stdout' ] = parent.mktemp()
 
         if script_file:
             script = file_contents ( script_file )
         elif script is None:
             raise GuestOperationError( '''one of `script' or `script_file' arg is not optional''' )
 
+        self.parent  = parent
+        self.cwd     = cwd or parent.cwd
+        self.environ = environ or parent.environ
+        # os.environ is not an instance of type dict, but it acts like one.
+        if hasattr( self.environ, '__getitem__' ):
+            self.environ = dict_to_environ( self.environ )
+
         scriptperm = 0o700
         devnull    = '/dev/null'
 
         # Use .cmd for script suffix so that it will also execute on WinNT
-        scriptfile = parent.mktemp( suffix='.cmd' )
-        self.tmpfile[ 'script' ] = scriptfile
+        scriptfile   = parent.mktemp( suffix='.cmd' )
+        self.prog    = scriptfile
+        self.tmpfile = { 'script' : scriptfile }
         script += '\n'
         if parent.ostype is WinNT:
             script.replace( '\n', '\r\n' )
-
             scriptperm = None
             devnull    = ':NUL'
         elif script.find( '#!' ) != 0 and script.find( '\x7fELF' ) != 0:
             script = '#!/bin/sh\n' + script
         parent.put_file( scriptfile, script, perm=scriptperm, overwrite=True )
 
-        if self.tmpfile.get( 'stderr' ):
-            self.args = '>{} 2>{}'.format( self.tmpfile[ 'stdout' ], self.tmpfile[ 'stderr' ] )
-        elif self.tmpfile.get( 'stdout' ):
+        if separate_stderr:
+            self.tmpfile[ 'stdout' ] = scriptfile + '.out'
+            self.tmpfile[ 'stderr' ] = scriptfile + '.err'
+            self.args = '>{} 2>{}'.format(
+                self.tmpfile[ 'stdout' ],
+                self.tmpfile[ 'stderr' ] )
+        elif output:
+            self.tmpfile[ 'stdout' ] = scriptfile + '.out'
             self.args = '>{} 2>&1'.format( self.tmpfile[ 'stdout' ])
         else:
             self.args = '>{} 2>&1'.format( devnull )
-        self.prog = scriptfile
 
         self._result = None
         self.start()
