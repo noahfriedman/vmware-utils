@@ -1,0 +1,86 @@
+#!/usr/bin/env python
+# vsphere-nt-frob --- do various things in MICROS~1 VMs
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2018-08-20
+# Public domain
+
+# $Id$
+
+# Commentary:
+
+# WIP
+
+# Code:
+
+from   __future__ import print_function
+import vspherelib     as vsl
+
+import os
+import sys
+import time
+
+
+# vop.reg_keys_list('HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\DataStore', match='^0$', recursive=True)
+# vop.reg_value_get('HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\DataStore\\{}\\0'.format(sid), 'szTargetName')
+# vop.reg_value_get('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\{}'.format(sid), 'ProfileImagePath' )
+
+# HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-21-1549569300-3928008043-2510577177-1003
+# HKEY_USERS\S-1-5-21-1549569300-3928008043-2510577177-1003\Volatile Environment
+
+cmd_slmgr = ( '"%SystemRoot%\System32\cscript.exe"'
+             ' "%SystemRoot%\System32\slmgr.vbs" ' )
+
+cmd_shutdown = '%SystemRoot%\\System32\\shutdown.exe /f /t {} '
+cmd_wmic     = '%SystemRoot%\\System32\\wbem\wmic.exe'
+
+cmd_template = { 'rename' : ( cmd_wmic +
+                              ' computersystem where caption="%COMPUTERNAME%"'
+                              ' rename "{}"'),
+
+                 'reboot'    : shutdown + '/r',
+                 'halt'      : shutdown + '/s',
+                 'hibernate' : shutdown + '/h',
+                 'poweroff'  : shutdown + '/p',
+
+                 'activate'  : slmgr + '/ato', }
+
+
+def get_args():
+    p = vsl.ArgumentParser()
+    p.add( '-U', '--guest-username',                  )
+    p.add( '-P', '--guest-password',                  )
+    p.add( '-v', '--verbose',                        default=False,  action='store_true' )
+    p.add( 'vm',   nargs=1,                          help='VM name' )
+    return p.parse()
+
+def main():
+    print(cmd_template['activate'])
+    exit()
+
+    args = get_args()
+    vsi  = vsl.vmomiConnect( args )
+    vm   = vsi.find_vm( args.vm )[0]
+    vop  = vsi.vmguest_ops( vm,
+                            username=args.guest_username,
+                            password=args.guest_password )
+
+    proc = vop.run( **pargs )
+    if not args.wait:
+        exit( 0 )
+    res = proc.result
+    if res.get( 'output' ):
+        print( res.output )
+    if res.get( 'stderr' ):
+        print( res.stderr, file=sys.stderr )
+    if args.verbose:
+        print( '[Exit {}]'.format( str( res.exit )), file=sys.stderr )
+        print( 'Started:', res.startTime, file=sys.stderr )
+        print( 'Ended:  ', res.endTime,   file=sys.stderr )
+    exit( res.exit )
+
+
+if __name__ == '__main__':
+    main()
+
+# eof
