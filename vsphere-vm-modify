@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-modify,v 1.10 2018/08/23 05:49:07 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.11 2018/08/24 01:36:56 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
@@ -128,11 +128,15 @@ class mVM():
         devspec.device    = nic[0]
 
         try:
-            port = devspec.device.backing.port
-            port.portgroupKey = net.key
-            port.switchUuid   = net.config.distributedVirtualSwitch.uuid
+            dvs_port = vim.dvs.PortConnection()
+            dvs_port.portgroupKey = net.key
+            dvs_port.switchUuid   = net.config.distributedVirtualSwitch.uuid
+
+            devspec.device.backing = ethernet.DistributedVirtualPortBackingInfo()
+            devspec.device.backing.port = dvs_port
         except AttributeError:
-            devspec.device.backing.network    = net
+            devspec.device.backing = ethernet.NetworkBackingInfo()
+            devspec.device.backing.network = net
             devspec.device.backing.deviceName = netlabel
 
         confspec = vim.vm.ConfigSpec( deviceChange=[ devspec ] )
