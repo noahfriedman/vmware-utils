@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.45 2018/08/23 06:11:39 friedman Exp $
+# $Id: vspherelib.py,v 1.46 2018/08/24 01:35:41 friedman Exp $
 
 # Commentary:
 # Code:
@@ -740,7 +740,8 @@ class _vmomiGuestInfo( object ):
                      'netlabel'   : self.get_nic_network_label( nic ),
                      'macAddress' : nic.macAddress, }
             if vm.summary.runtime.powerState == 'poweredOn':
-                gnic = filter( lambda g: g.macAddress == nic.macAddress, vm.guest.net )
+                gnic = filter( lambda g: g.macAddress.lower() == nic.macAddress.lower(),
+                               vm.guest.net )
                 if gnic:
                     prop[ 'ip' ] = self.vmnic_cidrs( gnic[0] )
             nics.append( prop )
@@ -1450,7 +1451,7 @@ class vmomiVmGuestProcess( object ):
     def __init__( self, parent,
                   script = None,
                   output = True,
-                  wait   = False,
+                  wait   = True,
                   cwd             = None,
                   environ         = None,
                   script_file     = None,
