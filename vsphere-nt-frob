@@ -5,7 +5,7 @@
 # Created: 2018-08-20
 # Public domain
 
-# $Id$
+# $Id: vsphere-nt-frob,v 1.1 2018/08/24 01:37:43 friedman Exp $
 
 # Commentary:
 
@@ -20,59 +20,73 @@ import os
 import sys
 import time
 
+# wmic useraccount where name="noahf" get sid
+# reg query "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\%sid%" /v ProfileImagePath
 
-# vop.reg_keys_list('HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\DataStore', match='^0$', recursive=True)
-# vop.reg_value_get('HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\DataStore\\{}\\0'.format(sid), 'szTargetName')
-# vop.reg_value_get('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\{}'.format(sid), 'ProfileImagePath' )
+# reg_keys_list('HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\DataStore', match='^0$', recursive=True)
+# reg_value_get('HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\DataStore\\{sid}\\0', 'szTargetName')
+# reg_value_get('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\{sid}', 'ProfileImagePath' )
+# 'HKEY_USERS\\{sid}\\Volatile Environment'
 
-# HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-21-1549569300-3928008043-2510577177-1003
-# HKEY_USERS\S-1-5-21-1549569300-3928008043-2510577177-1003\Volatile Environment
+cmd_slmgr          = 'cscript "%SystemRoot%\System32\slmgr.vbs" '
+cmd_shutdown       = 'shutdown /f /t {} '
+cmd_shutdown_delay = 5  # default
 
-cmd_slmgr = ( '"%SystemRoot%\System32\cscript.exe"'
-             ' "%SystemRoot%\System32\slmgr.vbs" ' )
+cmd_template = { 'rename' : ( 'wmic computersystem where caption="%COMPUTERNAME%"'
+                              ' call rename name="{}"' ),
 
-cmd_shutdown = '%SystemRoot%\\System32\\shutdown.exe /f /t {} '
-cmd_wmic     = '%SystemRoot%\\System32\\wbem\wmic.exe'
+                 'reboot'    : cmd_shutdown + '/r',
+                 'halt'      : cmd_shutdown + '/s',
+                 'hibernate' : cmd_shutdown + '/h',
+                 'poweroff'  : cmd_shutdown + '/p',
 
-cmd_template = { 'rename' : ( cmd_wmic +
-                              ' computersystem where caption="%COMPUTERNAME%"'
-                              ' rename "{}"'),
-
-                 'reboot'    : shutdown + '/r',
-                 'halt'      : shutdown + '/s',
-                 'hibernate' : shutdown + '/h',
-                 'poweroff'  : shutdown + '/p',
-
-                 'activate'  : slmgr + '/ato', }
-
+                 'activate'  : cmd_slmgr + '/ato', }
 
 def get_args():
     p = vsl.ArgumentParser()
-    p.add( '-U', '--guest-username',                  )
-    p.add( '-P', '--guest-password',                  )
-    p.add( '-v', '--verbose',                        default=False,  action='store_true' )
-    p.add( 'vm',   nargs=1,                          help='VM name' )
+    p.add( '-U', '--guest-username' )
+    p.add( '-P', '--guest-password' )
+    p.add( '-v', '--verbose', default=False,  action='store_true' )
+    p.add( 'vm',      nargs=1 )
+    p.add( 'actions', nargs='+' )
     return p.parse()
 
 def main():
-    print(cmd_template['activate'])
-    exit()
-
     args = get_args()
+    actions = args.actions
+    script = []
+    while actions:
+        cmd = actions.pop(0)
+        if cmd in ('rename'):
+            newname = actions.pop(0)
+            script.append ( cmd_template[ cmd ].format( newname ) )
+        elif cmd in ('activate'):
+            script.append( cmd_template[ cmd ] )
+        elif cmd in ('reboot', 'halt', 'hibnerate', 'poweroff'):
+            if actions: # not at end of list
+                try:
+                    # Try converting first so that we don't pop element if
+                    # this causes an exception.
+                    delay = int( actions[ 1 ])
+                    actions.pop(0)
+                except ValueError:
+                    delay = cmd_shutdown_delay
+            else:
+                delay = cmd_shutdown_delay
+            script.append( cmd_template[ cmd ].format( str( delay )))
+        else:
+            vsl.printerr( cmd, 'Undefined action' )
+            exit( 1 )
+    script = str.join( '\n', script ) + '\n'
+
     vsi  = vsl.vmomiConnect( args )
     vm   = vsi.find_vm( args.vm )[0]
     vop  = vsi.vmguest_ops( vm,
                             username=args.guest_username,
                             password=args.guest_password )
 
-    proc = vop.run( **pargs )
-    if not args.wait:
-        exit( 0 )
-    res = proc.result
-    if res.get( 'output' ):
-        print( res.output )
-    if res.get( 'stderr' ):
-        print( res.stderr, file=sys.stderr )
+    res = vop.run( script=script ).result
+    print( res.output )
     if args.verbose:
         print( '[Exit {}]'.format( str( res.exit )), file=sys.stderr )
         print( 'Started:', res.startTime, file=sys.stderr )
