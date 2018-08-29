@@ -5,7 +5,7 @@
 # Created: 2018-08-20
 # Public domain
 
-# $Id: vsphere-nt-frob,v 1.1 2018/08/24 01:37:43 friedman Exp $
+# $Id: vsphere-nt-frob,v 1.2 2018/08/25 01:18:55 friedman Exp $
 
 # Commentary:
 
@@ -28,11 +28,11 @@ import time
 # reg_value_get('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\{sid}', 'ProfileImagePath' )
 # 'HKEY_USERS\\{sid}\\Volatile Environment'
 
-cmd_slmgr          = 'cscript "%SystemRoot%\System32\slmgr.vbs" '
-cmd_shutdown       = 'shutdown /f /t {} '
+cmd_slmgr          = '@cscript "%SystemRoot%\System32\slmgr.vbs" '
+cmd_shutdown       = '@shutdown /f /t {} '
 cmd_shutdown_delay = 5  # default
 
-cmd_template = { 'rename' : ( 'wmic computersystem where caption="%COMPUTERNAME%"'
+cmd_template = { 'rename' : ( '@wmic computersystem where caption="%COMPUTERNAME%"'
                               ' call rename name="{}"' ),
 
                  'reboot'    : cmd_shutdown + '/r',
