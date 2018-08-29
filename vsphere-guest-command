@@ -5,7 +5,7 @@
 # Created: 2018-08-20
 # Public domain
 
-# $Id$
+# $Id: vsphere-guest-command,v 1.1 2018/08/20 07:57:28 friedman Exp $
 
 # Commentary:
 # Code:
@@ -16,7 +16,7 @@ import vspherelib     as vsl
 import os
 import sys
 import time
-
+import chardet
 
 def get_args():
     p = vsl.ArgumentParser()
@@ -29,10 +29,23 @@ def get_args():
     p.add( '-C', '--cwd',                            default=None )
     p.add( '-v', '--verbose',                        default=False,  action='store_true' )
     p.add( '-L', '--local-environ',                  default=False,  action='store_true' )
+    p.add( '-m', '--multi-command',   dest='multi',  default=False,  action='store_true' )
     p.add( 'vm',   nargs=1,                          help='VM name' )
     p.add( 'cmd',  nargs='*',                        help='Commands (one per arg)' )
     return p.parse()
 
+
+def output_fixup( vop, s ):
+    # Some windows commands (e.g. wmic) output utf16.
+    # Unfortunately this can be mixed with ascii,
+    # so we can't convert the entire output using a proper codec.
+    if vop.ostype is vsl.WinNT:
+        fixups = [ ('\ufeff', ''),
+                   ('\0',     ''),
+                   ('\r\n',   '\n'), ]
+        for f in fixups:
+            s = s.replace( *f )
+    return s
 
 def main():
     args = get_args()
@@ -46,9 +59,10 @@ def main():
         vsl.printerr( 'cannot use --no-wait unless output is disabled' )
         exit( 1 )
 
+    join_char = '\n' if args.multi else ' '
     pargs = { 'wait'            : args.wait,
               'script_file'     : args.script_file,
-              'script'          : str.join( ' ', args.cmd ),
+              'script'          : join_char.join( args.cmd ),
               'output'          : args.output,
               'separate_stderr' : args.separate_stderr,
               'cwd'             : args.cwd, }
@@ -61,9 +75,9 @@ def main():
 
     res = proc.result
     if res.get( 'output' ):
-        print( res.output )
+        print( output_fixup( vop, res.output ))
     if res.get( 'stderr' ):
-        print( res.stderr, file=sys.stderr )
+        print( output_fixup( vop, res.stderr ), file=sys.stderr )
     if args.verbose:
         print( '[Exit {}]'.format( str( res.exit )), file=sys.stderr )
         print( 'Started:', res.startTime, file=sys.stderr )
