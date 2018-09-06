@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.46 2018/08/24 01:35:41 friedman Exp $
+# $Id: vspherelib.py,v 1.47 2018/08/25 00:01:40 friedman Exp $
 
 # Commentary:
 # Code:
@@ -174,7 +174,8 @@ class ArgumentParser( argparse.ArgumentParser, object ):
         env_rc = os.getenv( 'VSPHERELIBRC' )
         if env_rc:
             try:
-                execfile( env_rc )
+                script = file_contents( env_rc )
+                exec( script )
             except IOError:
                 pass
             return opt
