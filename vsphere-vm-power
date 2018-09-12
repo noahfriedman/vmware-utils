@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-power,v 1.7 2018/08/04 05:15:56 friedman Exp $
+# $Id: vsphere-vm-power,v 1.8 2018/08/19 06:36:26 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
-import sys
+
 
 cmds = { 'on'          : 'PowerOn',
          'off'         : 'PowerOff',
@@ -24,6 +24,84 @@ def get_args():
     p.add( 'vm',  nargs='+',      help='VM name(s)' )
     return p.parse()
 
+
+# TODO: handle questions and arrange for answering if interactive.
+class powerOnCallback( object ):
+    def __init__( self ):
+        self.error = 0
+        self.att   = []  # attempted
+        self.natt  = []  # not attempted
+        self.rec   = []  # recommendations
+        # subtasks spawned for attempted power on of individual VMs
+        self.tasklist = []
+
+    def entry( self, change, *rest ):
+        state = None
+        res   = None
+        if   change.name == 'info.state':
+            state = change.val
+        elif change.name == 'info.result':
+            res   = change.val
+        elif change.name == 'info':
+            state = change.val.state
+            try:
+                res = change.val.result
+            except AttributeError:
+                pass
+
+        try:
+            for elt in res.attempted:
+                # For vms managed by DRS, no subtask is returned.
+                try:
+                    self.tasklist.append( elt.task )
+                except AttributeError:
+                    self.att.append( elt )
+            self.natt.extend( res.notAttempted )
+            self.rec.extend(  res.recommendations)
+        except AttributeError:
+            pass
+
+        if state in [vim.TaskInfo.State.success, vim.TaskInfo.State.error]:
+            if state == vim.TaskInfo.State.error:
+                self.error = 1
+
+            for elt in self.att:
+                print( elt.vm.name, 'Success', sep=': ' )
+
+            for elt in self.natt:
+                vsl.printerr( elt.vm.name, elt.fault.msg )
+
+            # Not sure what to do with these yet since I haven't
+            # encountered this case, so I have nothing to test.
+            for elt in self.rec:
+                vsl.printerr( 'recommendation', elt )
+
+
+# Walk up the chain of parent objects from the vm until we find a datacenter.
+def obj_datacenter( obj ):
+    while obj:
+        if isinstance( obj, vim.Datacenter ):
+            return obj
+        obj = obj.parent
+
+# For data centers, VMware recommends using this interface as of api 5.1
+# rather than powering on VMs directly one at a time, because the latter
+# method doesn't provide manual DRS recommendations.  This method also
+# involves fewer round trips with the server to launch each task.  (The
+# multi-vm method is available with standalone hosts as well.)
+def power_on( vsi, vmlist ):
+    dc = obj_datacenter( vmlist[0] )
+    tasklist = dc.PowerOnMultiVM_Task( vmlist )
+    if tasklist:
+        callback = powerOnCallback()
+        succ = vsi.taskwait( tasklist, callback=callback.entry, printsucc=False )
+        if callback.tasklist:
+            succ2 = vsi.taskwait( callback.tasklist )
+            if not succ2:
+                exit( 1 )
+        if not succ or callback.error:
+            exit( 1 )
+
 def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
@@ -31,6 +109,9 @@ def main():
     vmlist = vsi.find_vm( args.vm )
     if not vmlist:
         return
+
+    if args.cmd in ['on', 'resume']:
+        return power_on( vsi, vmlist )
 
     op = getattr( type( vmlist[ 0 ] ), cmds[ args.cmd ] )
     tasklist = []
@@ -47,7 +128,7 @@ def main():
     if tasklist:
         succ = vsi.taskwait( tasklist )
         if not succ:
-            sys.exit( 1 )
+            exit( 1 )
 
 if __name__ == '__main__':
     main()
