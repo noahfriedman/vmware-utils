@@ -5,7 +5,7 @@
 # Created: 2018-08-20
 # Public domain
 
-# $Id: vsphere-nt-frob,v 1.4 2018/08/29 06:30:16 friedman Exp $
+# $Id: vsphere-nt-frob,v 1.5 2018/08/29 07:32:17 friedman Exp $
 
 # Commentary:
 
@@ -44,12 +44,23 @@ cmd_template = { 'rename' : ( '@wmic computersystem where caption="%COMPUTERNAME
 
 def get_args():
     p = vsl.ArgumentParser()
-    p.add( '-U', '--guest-username' )
-    p.add( '-P', '--guest-password' )
+    p.add( '-U', '--guest-username', required=True )
+    p.add( '-P', '--guest-password', required=True )
     p.add( '-v', '--verbose', default=False,  action='store_true' )
     p.add( 'vm',      nargs=1 )
     p.add( 'actions', nargs='+' )
     return p.parse()
+
+def output_fixup( s ):
+    # Some windows commands (e.g. wmic) output utf16.
+    # Unfortunately this can be mixed with ascii,
+    # so we can't convert the entire output using a proper codec.
+    fixups = [ ('\ufeff', ''),
+               ('\0',     ''),
+               ('\r\n',   '\n'), ]
+    for f in fixups:
+        s = s.replace( *f )
+    return s
 
 def main():
     args = get_args()
@@ -86,7 +97,7 @@ def main():
                             password=args.guest_password )
 
     res = vop.run( script=script ).result
-    print( res.output )
+    print( output_fixup( res.output ) )
     if args.verbose:
         print( '[Exit {}]'.format( str( res.exit )), file=sys.stderr )
         print( 'Started:', res.startTime, file=sys.stderr )
