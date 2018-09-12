@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-modify,v 1.12 2018/08/25 00:35:51 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.13 2018/09/12 18:28:07 friedman Exp $
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
@@ -66,7 +66,7 @@ class mVM():
                                        path=vmx,
                                        pool=pool,
                                        asTemplate=istmpl )
-b
+
     def register_mark_moved( self, vm ):
         uuid_action = vim.option.OptionValue( key='uuid.action', value='keep' )
         cfgspec = vim.vm.ConfigSpec( changeVersion = vm.config.changeVersion )
