@@ -4,13 +4,14 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.47 2018/08/25 00:01:40 friedman Exp $
+# $Id: vspherelib.py,v 1.48 2018/09/06 00:00:00 friedman Exp $
 
 # Commentary:
 # Code:
 
 from __future__ import print_function
 
+import __builtin__
 import argparse
 import getpass
 import os
@@ -133,16 +134,14 @@ class Timer( object ):
 ######
 
 class ArgumentParser( argparse.ArgumentParser, object ):
-    class Option(): pass  # just a container
-
-    searchpath = ['XDG_CONFIG_HOME', 'HOME']
-    rcname     = '.vspherelibrc.py'
+    searchlist = [ ['XDG_CONFIG_HOME', 'vspherelibrc.py'],
+                   ['HOME',           '.vspherelibrc.py'], ]
 
     def __init__( self, rest=None, help='Remaining arguments', required=False, **kwargs ):
         super( self.__class__, self ).__init__( **kwargs )
 
         timer = Timer( 'loadrc' )
-        opt = self.opt = self.loadrc()
+        self.opt = self.loadrc()
         timer.report()
 
         nargs = '*'
@@ -157,36 +156,40 @@ class ArgumentParser( argparse.ArgumentParser, object ):
         self.add( '-s', '--host',     required=True,           help='Remote esxi/vcenter host to connect to' )
         self.add( '-o', '--port',     required=True, type=int, help='Port to connect on' )
         self.add( '-u', '--user',     required=True,           help='User name for host connection' )
-        self.add( '-p', '--password', required=True,           help='Server user password' )
+        self.add( '-p', '--password', required=False,          help='Server user password' )
         if rest:
-            self.add( rest, nargs=nargs,                          help=help )
+            self.add( rest, nargs=nargs,                       help=help )
 
     # The rc file can manipulate this 'opt' variable; for example it could
     # provide a default for the host via:
     # 	opt.host = 'vcenter1.mydomain.com'
     def loadrc( self ):
-        opt          = self.Option()
+        opt          = pseudoPropAttr()
         opt.host     = None
         opt.port     = 443
         opt.user     = os.getenv( 'LOGNAME' )
         opt.password = None
 
+        _locals = locals()
+        def source( filename ):
+            script = file_contents( filename )
+            script.replace( '\r\n', '\n' )
+            exec( script, globals(), _locals )
+
         env_rc = os.getenv( 'VSPHERELIBRC' )
         if env_rc:
             try:
-                script = file_contents( env_rc )
-                exec( script )
+                source( env_rc )
             except IOError:
                 pass
-            return opt
         else:
-            for env in self.searchpath:
-                if env in os.environ:
-                    try:
-                        execfile( os.environ[env] + '/' + self.rcname )
-                    except IOError:
-                        continue
-                    return opt
+            for elt in self.searchlist:
+                try:
+                    source( os.getenv( elt[0] ) + '/' + elt[1] )
+                    break
+                # TypeError can result if envvar is unset
+                except ( TypeError, IOError ):
+                    continue
         return opt
 
     def add_argument( self, *args, **kwargs ):
@@ -220,7 +223,7 @@ class ArgumentParser( argparse.ArgumentParser, object ):
             prompt = 'Enter password for %(user)s@%(host)s: ' % vars( args )
             args.password = getpass.getpass( prompt )
 
-        extra = vars( self.opt )
+        extra = self.opt
         for elt in extra:
             if elt.find( '_' ) != 0 and not hasattr( args, elt ):
                 setattr( args, elt, extra[ elt ] )
@@ -732,6 +735,7 @@ class _vmomiGuestInfo( object ):
             return vmnic.ipAddress
 
     def vmguest_nic_info( self, vm ):
+        pst      = vim.VirtualMachine.PowerState
         ethernet = vim.vm.device.VirtualEthernetCard
         nics = []
         for nic in get_seq_type( vm.config.hardware.device, ethernet ):
@@ -740,7 +744,7 @@ class _vmomiGuestInfo( object ):
                      'label'      : nic.deviceInfo.label,
                      'netlabel'   : self.get_nic_network_label( nic ),
                      'macAddress' : nic.macAddress, }
-            if vm.summary.runtime.powerState == 'poweredOn':
+            if vm.summary.runtime.powerState == pst.poweredOn:
                 gnic = filter( lambda g: g.macAddress.lower() == nic.macAddress.lower(),
                                vm.guest.net )
                 if gnic:
@@ -758,10 +762,11 @@ class _vmomiGuestInfo( object ):
 
 class _vmomiTask( object ):
     def taskwait( self, tasklist, printsucc=True, callback=None ):
-        class our(): pass
+        our = pseudoPropAttr()
         our.callback = callback
 
-        def diag_callback( *args ):
+        def diag_callback( err, *args ):
+            printerr( 'Callback error', err )
             print( args, file=sys.stderr )
             # Perhaps we can do something more useful here depending on the
             # type of error.  For now, just stop further callbacks
@@ -798,8 +803,7 @@ class _vmomiTask( object ):
                                 try:
                                     our.callback( change, objSet, filterSet, update )
                                 except Exception as err:
-                                    printerr( 'Callback error', err )
-                                    diag_callback( change, objSet, filterSet, update )
+                                    diag_callback( err, change, objSet, filterSet, update )
 
                             if change.name == 'info':
                                 state = change.val.state
@@ -842,10 +846,15 @@ class vmomiConnect( _vmomiCollect,
             if isinstance( arg, argparse.Namespace ):
                 kwargs.update( vars( arg ))
 
-        self.host = kwargs[ 'host' ]
-        self.user = kwargs[ 'user' ]
-        self.pwd  = kwargs[ 'password' ]
-        self.port = int( kwargs.get( 'port', 443 ))
+        self.host   = kwargs[ 'host' ]
+        self.port   = int( kwargs.get( 'port', 443 ))
+        self.user   = kwargs[ 'user' ]
+        self.pwd    = kwargs[ 'password' ]
+        del kwargs[ 'password' ]
+        # When idle is negative, no timeout is enabled.
+        # The default is (last checked) 900s.
+        self.idle   = int( kwargs.get( 'idle', pyVconnect.CONNECTION_POOL_IDLE_TIMEOUT_SEC ))
+        self.kwargs = kwargs
         self.connect()
 
     def __del__( self ):
@@ -861,11 +870,13 @@ class vmomiConnect( _vmomiCollect,
             if hasattr( ssl, '_create_unverified_context' ):
                 context = ssl._create_unverified_context()
 
-            self.si = pyVconnect.SmartConnect( host = self.host,
-                                               user = self.user,
-                                               pwd  = self.pwd,
-                                               port = self.port,
-                                               sslContext = context )
+            self.si = pyVconnect.SmartConnect(
+                                 host = self.host,
+                                 user = self.user,
+                                  pwd = self.pwd,
+                                 port = self.port,
+                connectionPoolTimeout = self.idle,
+                           sslContext = context )
         except Exception as e:
             msg = ': '.join(( self.host,
                               'Could not connect',
@@ -967,39 +978,30 @@ class _vmomiVmGuestOperation_Env( object ):
 class _vmomiVmGuestOperation_Dir( object ):
     def mkdir( self, path, mkdirhier=False ):
         self._printdbg( 'mkdir', path )
-        try:
-            self.fmgr.MakeDirectoryInGuest(
-                vm                      = self.vm,
-                auth                    = self.auth,
-                directoryPath           = path,
-                createParentDirectories = mkdirhier )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'mkdir', e.msg )
+        self.fmgr.MakeDirectoryInGuest(
+            vm                      = self.vm,
+            auth                    = self.auth,
+            directoryPath           = path,
+            createParentDirectories = mkdirhier )
 
     def mkdtemp( self, prefix='', suffix='', directoryPath=None ):
-        try:
-            tmpdir = self.fmgr.CreateTemporaryDirectoryInGuest(
-                vm            = self.vm,
-                auth          = self.auth,
-                prefix        = prefix,
-                suffix        = suffix,
-                directoryPath = directoryPath )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'mkdtemp', e.msg )
         self._printdbg( 'mkdtemp', tmpdir )
+        tmpdir = self.fmgr.CreateTemporaryDirectoryInGuest(
+            vm            = self.vm,
+            auth          = self.auth,
+            prefix        = prefix,
+            suffix        = suffix,
+            directoryPath = directoryPath )
         self.tmpdir.append( tmpdir )
         return tmpdir
 
     def mvdir( self, src, dst ):
         self._printdbg( 'mvdir', src, dst )
-        try:
-            self.fmgr.MoveDirectoryInGuest(
-                vm               = self.vm,
-                auth             = self.auth,
-                srcDirectoryPath = src,
-                dstDirectoryPath = dst )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'mvdir', e.msg )
+        self.fmgr.MoveDirectoryInGuest(
+            vm               = self.vm,
+            auth             = self.auth,
+            srcDirectoryPath = src,
+            dstDirectoryPath = dst )
 
     def rmdir( self, directoryPath, recursive=False ):
         if recursive:
@@ -1012,14 +1014,11 @@ class _vmomiVmGuestOperation_Dir( object ):
         except ValueError:
             pass
 
-        try:
-            self.fmgr.DeleteDirectoryInGuest(
-                vm            = self.vm,
-                auth          = self.auth,
-                directoryPath = directoryPath,
-                recursive     = recursive )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'rmdir', e.msg )
+        self.fmgr.DeleteDirectoryInGuest(
+            vm            = self.vm,
+            auth          = self.auth,
+            directoryPath = directoryPath,
+            recursive     = recursive )
 
 # end class _vmomiVmGuestOperation_Dir
 
@@ -1030,12 +1029,12 @@ class _vmomiVmGuestOperation_File( object ):
             for elt in files:
                 try:
                     self.unlink( elt )
-                except GuestOperationError:
+                except vim.fault.VimFault:
                     pass
             for elt in dirs:
                 try:
                     self.rmdir( elt, recursive=True )
-                except GuestOperationError:
+                except vim.fault.VimFault:
                     pass
         except vim.fault.NotAuthenticated:
             # this <- vim.fault.NoPermission <- vmodl.fault.SecurityError
@@ -1124,26 +1123,20 @@ class _vmomiVmGuestOperation_File( object ):
     def chmod( self, path, **kwargs ):
         attr = self.mkFileAttributes( **kwargs )
         self._printdbg( 'chmod', attr, path )
-        try:
-            self.fmgr.ChangeFileAttributesInGuest(
-                vm             = self.vm,
-                auth           = self.auth,
-                guestFilePath  = path,
-                fileAttributes = attr )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'chmod', e.msg )
+        self.fmgr.ChangeFileAttributesInGuest(
+            vm             = self.vm,
+            auth           = self.auth,
+            guestFilePath  = path,
+            fileAttributes = attr )
 
     def mktemp( self, prefix='', suffix='', directoryPath=None ):
-        try:
-            tmpfile = self.fmgr.CreateTemporaryFileInGuest(
-                vm            = self.vm,
-                auth          = self.auth,
-                prefix        = prefix,
-                suffix        = suffix,
-                directoryPath = directoryPath )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'mktemp', e.msg )
         self._printdbg( 'mktemp', tmpfile )
+        tmpfile = self.fmgr.CreateTemporaryFileInGuest(
+            vm            = self.vm,
+            auth          = self.auth,
+            prefix        = prefix,
+            suffix        = suffix,
+            directoryPath = directoryPath )
         self.tmpfile.append( tmpfile )
         return tmpfile
 
@@ -1153,24 +1146,19 @@ class _vmomiVmGuestOperation_File( object ):
             self.tmpfile.remove( filePath )
         except ValueError:
             pass
-        try:
-            self.fmgr.DeleteFileInGuest(
-                vm       = self.vm,
-                auth     = self.auth,
-                filePath = filePath )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'unlink', e.msg )
+        self.fmgr.DeleteFileInGuest(
+            vm       = self.vm,
+            auth     = self.auth,
+            filePath = filePath )
 
     def get_file( self, guestFile ):
         self._printdbg( 'get_file', guestFile )
-        try:
-            ftinfo = self.fmgr.InitiateFileTransferFromGuest(
-                vm            = self.vm,
-                auth          = self.auth,
-                guestFilePath = guestFile )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( e.msg )
-        # TODO: verify the conncetion using the host cert.
+        ftinfo = self.fmgr.InitiateFileTransferFromGuest(
+            vm            = self.vm,
+            auth          = self.auth,
+            guestFilePath = guestFile )
+
+        # TODO: verify the connection using the host cert.
         # The urllib3 interface requires certs to be stored in a file and
         # the location passed in, which another annoying setup nit.
         resp = requests.get( ftinfo.url, verify=False )
@@ -1181,19 +1169,15 @@ class _vmomiVmGuestOperation_File( object ):
     def put_file( self, filePath, data, perm=None, overwrite=False ):
         attr = self.mkFileAttributes( perm )
         self._printdbg( 'put_file', filePath, attr )
-        try:
-            url = self.fmgr.InitiateFileTransferToGuest(
-                vm             = self.vm,
-                auth           = self.auth,
-                guestFilePath  = filePath,
-                fileAttributes = attr,
-                fileSize       = len( data ),
-                overwrite      = overwrite )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( e.args )
-        # TODO: verify the conncetion using the host cert.
-        # The urllib3 interface requires certs to be stored in a file and
-        # the location passed in, which another annoying setup nit.
+        url = self.fmgr.InitiateFileTransferToGuest(
+            vm             = self.vm,
+            auth           = self.auth,
+            guestFilePath  = filePath,
+            fileAttributes = attr,
+            fileSize       = len( data ),
+            overwrite      = overwrite )
+
+        # TODO: verify the connection using the host cert.
         resp = requests.put( url, data=data, verify=False )
         if resp.status_code != 200:
             raise GuestOperationError( resp )
@@ -1209,8 +1193,8 @@ class _vmomiVmGuestOperation_Registry( object ):
     REG_MULTI_SZ  = vim.vm.guest.WindowsRegistryManager.RegistryValueMultiString
     REG_SZ        = vim.vm.guest.WindowsRegistryManager.RegistryValueString
 
-    @classmethod
-    def _mkRegKeyNameSpec( self, path, wow=None ):
+    @staticmethod
+    def _mkRegKeyNameSpec( path, wow=None ):
         return vim.vm.guest.WindowsRegistryManager.RegistryKeyName(
             registryPath = path,
             wowBitness   = wow or wowBitness.WOWNative )
@@ -1223,18 +1207,16 @@ class _vmomiVmGuestOperation_Registry( object ):
 
 
     def reg_keys_list( self, path, recursive=False, match='^.*', wow=None, native=False ):
-        try:
-            res = self.regmgr.ListRegistryKeysInGuest(
-                vm           = self.vm,
-                auth         = self.auth,
-                keyName      = self._mkRegKeyNameSpec( path, wow ),
-                recursive    = recursive,
-                matchPattern = match )
-            if native:
-                return res
+        res = self.regmgr.ListRegistryKeysInGuest(
+            vm           = self.vm,
+            auth         = self.auth,
+            keyName      = self._mkRegKeyNameSpec( path, wow ),
+            recursive    = recursive,
+            matchPattern = match )
+        if native:
+            return res
+        else:
             return [ elt.key.keyName.registryPath for elt in res ]
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'reg_keys_list', e.msg )
 
     def reg_key_create( self, path, volatile=False, wow=None ):
         try:
@@ -1243,9 +1225,10 @@ class _vmomiVmGuestOperation_Registry( object ):
                 auth       = self.auth,
                 keyName    = self._mkRegKeyNameSpec( path, wow ),
                 isVolatile = volatile )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'reg_key_create', e.msg )
-        pass
+        except vim.fault.GuestRegistryKeyAlreadyExists:
+            pass
+        except:
+            raise
 
     def reg_key_delete( self, path, recursive=False, wow=None ):
         try:
@@ -1254,28 +1237,30 @@ class _vmomiVmGuestOperation_Registry( object ):
                 auth      = self.auth,
                 keyName   = self._mkRegKeyNameSpec( path, wow ),
                 recursive = recursive )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'reg_key_delete', e.msg )
-        pass
+        except vim.fault.GuestRegistryKeyInvalid:
+            # TODO: this case can also occur if the path leading up to the
+            # key is badly formed; in theory we only want to ignore cases
+            # where the leaf key is not present.
+            pass
+        except:
+            raise
 
     def reg_values_list( self, path, match='^.*', expand=False, wow=None, detailed=False ):
-        try:
-            res = self.regmgr.ListRegistryValuesInGuest(
-                vm            = self.vm,
-                auth          = self.auth,
-                keyName       = self._mkRegKeyNameSpec( path, wow ),
-                expandStrings = expand,
-                matchPattern  = match )
-            if detailed:
-                return { elt.name.name :
-                         { 'path'  : elt.name.keyName.registryPath,
-                           'wow'   : elt.name.keyName.wowBitness,
-                           'type'  : type( elt.data ),
-                           'value' : elt.data.value, }
-                         for elt in res }
+        res = self.regmgr.ListRegistryValuesInGuest(
+            vm            = self.vm,
+            auth          = self.auth,
+            keyName       = self._mkRegKeyNameSpec( path, wow ),
+            expandStrings = expand,
+            matchPattern  = match )
+        if detailed:
+            return { elt.name.name :
+                     { 'path'  : elt.name.keyName.registryPath,
+                       'wow'   : elt.name.keyName.wowBitness,
+                       'type'  : type( elt.data ),
+                       'value' : elt.data.value, }
+                     for elt in res }
+        else:
             return { elt.name.name : elt.data.value for elt in res }
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'reg_values_list', e.msg )
 
     def reg_value_get( self, path, name, expand=False, wow=None, detailed=False ):
         try:
@@ -1286,18 +1271,18 @@ class _vmomiVmGuestOperation_Registry( object ):
                 wow      = wow,
                 detailed = detailed )[ name ]
         except KeyError:
-            raise NameNotFoundError( path, name, 'registry value not found' )
+            raise NameNotFoundError( name, 'value not found in ' + path )
 
     def reg_value_set( self, path, name, value, type=None, wow=None ):
         def guess_type():
-            t = type( value )
+            t = __builtin__.type( value )
             # n.b. I don't know how to infer REG_EXPAND_SZ
             if t is int:                return self.REG_DWORD
             if t is long:               return self.REG_QWORD
             if t is unicode:            return self.REG_SZ
             if t is list:               return self.REG_MULTI_SZ
             if t is bytearray:          return self.REG_BINARY
-            # This may be wrong for raw utf16
+            # This is probably for raw utf16
             if value.find( '\0' ) >= 0: return self.REG_BINARY
             raise TypeError( 'Cannot infer type for registry value' )
 
@@ -1305,18 +1290,15 @@ class _vmomiVmGuestOperation_Registry( object ):
             try:
                 prev = self.reg_value_get( path, name, wow=wow, detailed=True )
                 type = prev[ 'type' ]
-            except KeyError:
+            except ( KeyError, NameNotFoundError ):
                 type = guess_type()
         valspec = vim.vm.guest.WindowsRegistryManager.RegistryValue(
             name = self._mkRegValNameSpec( path, name, wow ),
             data = type( value = value ) )
-        try:
-            self.regmgr.SetRegistryValueInGuest(
-                vm    = self.vm,
-                auth  = self.auth,
-                value = valspec )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'reg_value_set', e.msg )
+        self.regmgr.SetRegistryValueInGuest(
+            vm    = self.vm,
+            auth  = self.auth,
+            value = valspec )
 
     def reg_value_delete( self, path, name, wow=None ):
         try:
@@ -1324,8 +1306,10 @@ class _vmomiVmGuestOperation_Registry( object ):
                 vm        = self.vm,
                 auth      = self.auth,
                 valueName = self._mkRegValNameSpec( path, name, wow ) )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'reg_value_delete', e.msg )
+        except vim.fault.GuestRegistryValueNotFound:
+            pass
+        except:
+            raise
 
 # end class _vmomiVmGuestOperation_Registry
 
@@ -1366,7 +1350,11 @@ class vmomiVmGuestOperation( _vmomiVmGuestOperation_Env,
 
         self.auth = vim.vm.guest.NamePasswordAuthentication()
         for authparm in ('username', 'password'):
-            val = kwargs[ authparm ]
+            try:
+                val = kwargs[ authparm ]
+            except KeyError:
+                val = self.vsi.kwargs[ 'guest_' + authparm ]
+
             if callable( val ):
                 setattr( self.auth, authparm, val( self, authparm ))
             else:
@@ -1588,30 +1576,37 @@ class pseudoPropAttr( dict ):
 ## vmomi utility routines
 ######
 
+def get_seq_type( obj, typeref ):
+    return filter( lambda elt: isinstance( elt , typeref ), obj )
+
+
 def attr_get( obj, name ):
     for elt in obj:
         if getattr( elt, 'key' ) == name:
             return getattr( elt, 'value' )
 
-def attr_to_dict( obj ):
-    return dict( ( getattr( o, 'key' ),
-                   getattr( o, 'value' ) )
-                 for o in obj )
+def attr_to_dict( obj, objtype=dict ):
+    return objtype( ( getattr( o, 'key' ),
+                      getattr( o, 'value' ) )
+                    for o in obj )
+
 
 def propset_get( propset, name ):
-    if isinstance( propset, vmodl.query.PropertyCollector.ObjectContent ):
+    try:
         propset = propset.propSet
+    except AttributeError:
+        pass
     for elt in propset:
         if elt.name == name:
             return elt.val
 
-def propset_to_dict( propset ):
-    if type( propset ) is vmodl.query.PropertyCollector.ObjectContent:
+def propset_to_dict( propset, objtype=dict ):
+    try:
         propset = propset.propSet
-    return dict( (p.name, p.val) for p in propset )
+    except AttributeError:
+        pass
+    return objtype( (p.name, p.val) for p in propset )
 
-def get_seq_type( obj, typeref ):
-    return filter( lambda elt: isinstance( elt , typeref ), obj )
 
 # it can be useful to use objtype=pseudoPropAttr for
 # lists of dotted obj props from managed objects.
@@ -1629,7 +1624,8 @@ def flat_to_nested_dict( flat, sep='.', objtype=dict ):
         walk[ parts[-1] ] = flat[ k ]
     return nested
 
-def environ_to_dict( names, preserve_case=True ):
+
+def environ_to_dict( names, preserve_case=False ):
     res = {}
     for elt in names:
         k, v = elt.split( '=', 1 )
