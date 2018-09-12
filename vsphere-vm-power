@@ -1,5 +1,14 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-power,v 1.8 2018/08/19 06:36:26 friedman Exp $
+# vsphere-vm-power --- virtual machine power on/off/suspend operations
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2018-03-22
+# Public domain
+
+# $Id: vsphere-vm-power,v 1.9 2018/09/12 18:30:50 friedman Exp $
+
+# Commentary:
+# Code:
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
@@ -133,4 +142,4 @@ def main():
 if __name__ == '__main__':
     main()
 
-# eof
+# vsphere-vm-power ends here

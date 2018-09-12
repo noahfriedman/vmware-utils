@@ -1,5 +1,14 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-destroy,v 1.3 2018/07/21 20:45:31 friedman Exp $
+# vsphere-vm-destroy --- unregister and completely delete virtual machines
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2018-05-08
+# Public domain
+
+# $Id: vsphere-vm-destroy,v 1.4 2018/08/10 01:03:00 friedman Exp $
+
+# Commentary:
+# Code:
 
 from   __future__ import print_function
 import vspherelib     as vsl
@@ -40,4 +49,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-# eof
+# vsphere-vm-destroy ends here

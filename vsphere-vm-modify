@@ -1,5 +1,14 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-modify,v 1.13 2018/09/12 18:28:07 friedman Exp $
+# vsphere-vm-modify --- make common modifications to virtual machine configuration
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2018-09-05
+# Public domain
+
+# $Id: vsphere-vm-modify,v 1.14 2018/09/12 18:28:29 friedman Exp $
+
+# Commentary:
+# Code:
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
@@ -221,4 +230,4 @@ def main():
 if __name__ == '__main__':
     main()
 
-# eof
+# vsphere-vm-modify ends here

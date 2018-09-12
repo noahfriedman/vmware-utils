@@ -1,5 +1,14 @@
 #!/usr/bin/env python
-# $Id: vsphere-datastores,v 1.6 2018/07/19 00:48:39 friedman Exp $
+# vsphere-datastores --- show datastore capacity and usage
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2018-03-30
+# Public domain
+
+# $Id: vsphere-datastores,v 1.7 2018/07/21 20:44:09 friedman Exp $
+
+# Commentary:
+# Code:
 
 from   __future__ import print_function
 from   pyVmomi    import vim
@@ -83,4 +92,4 @@ def main():
 if __name__ == '__main__':
     main()
 
-# eof
+# vsphere-datastores ends here
