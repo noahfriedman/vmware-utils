@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.48 2018/09/06 00:00:00 friedman Exp $
+# $Id: vspherelib.py,v 1.49 2018/09/12 19:21:48 friedman Exp $
 
 # Commentary:
 # Code:
@@ -985,13 +985,13 @@ class _vmomiVmGuestOperation_Dir( object ):
             createParentDirectories = mkdirhier )
 
     def mkdtemp( self, prefix='', suffix='', directoryPath=None ):
-        self._printdbg( 'mkdtemp', tmpdir )
         tmpdir = self.fmgr.CreateTemporaryDirectoryInGuest(
             vm            = self.vm,
             auth          = self.auth,
             prefix        = prefix,
             suffix        = suffix,
             directoryPath = directoryPath )
+        self._printdbg( 'mkdtemp', tmpdir )
         self.tmpdir.append( tmpdir )
         return tmpdir
 
@@ -1130,13 +1130,13 @@ class _vmomiVmGuestOperation_File( object ):
             fileAttributes = attr )
 
     def mktemp( self, prefix='', suffix='', directoryPath=None ):
-        self._printdbg( 'mktemp', tmpfile )
         tmpfile = self.fmgr.CreateTemporaryFileInGuest(
             vm            = self.vm,
             auth          = self.auth,
             prefix        = prefix,
             suffix        = suffix,
             directoryPath = directoryPath )
+        self._printdbg( 'mktemp', tmpfile )
         self.tmpfile.append( tmpfile )
         return tmpfile
 
