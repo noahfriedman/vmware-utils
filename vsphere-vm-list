@@ -5,7 +5,7 @@
 # Created: 2018-05-08
 # Public domain
 
-# $Id: vsphere-vm-list,v 1.4 2018/09/12 19:45:40 friedman Exp $
+# $Id: vsphere-vm-list,v 1.5 2018/09/13 19:04:39 friedman Exp $
 
 # Commentary:
 # Code:
@@ -14,33 +14,56 @@ from   __future__ import print_function
 from   pyVmomi    import vim
 import vspherelib     as vsl
 
+poweredOn  = vim.VirtualMachine.PowerState.poweredOn
+poweredOff = vim.VirtualMachine.PowerState.poweredOff
+
 def get_args():
     p = vsl.ArgumentParser()
-    p.add( '-v', '--verbose', action='store_true', help='Display extended info' )
+    p.add( '-v', '--verbose',   action='store_true', help='Display extended info' )
+    p.add( '-n', '--on',        action='store_true', default=False, help='Display VMs which are powered on' )
+    p.add( '-f', '--off',       action='store_true', default=False, help='Display VMs which are powered off' )
+    p.add( '-t', '--templates', action='store_true', default=False, help='Display templates' )
+    p.add( '-a', '--all',       action='store_true', default=False, help='Same as -o -f -t; default')
     return p.parse()
 
 def main():
     args = get_args()
-    vsi  = vsl.vmomiConnect( args )
+    if args.all:
+        args.on = args.off = args.templates = True
+    elif args.on and args.off and args.templates:
+        args.all = True
+    elif not (args.on or args.off or args.templates):
+        args.all = True
 
     proplist = [ 'name' ]
-    if args.verbose:
+    if args.verbose or not args.all:
         proplist.extend( ('config.template', 'runtime.powerState') )
 
+    vsi    = vsl.vmomiConnect( args )
     vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
-    vmlist.sort( lambda a, b: cmp( a[ 'name' ], b[ 'name' ]))
 
-    if args.verbose:
-        poweredOn = vim.VirtualMachine.PowerState.poweredOn
+    if args.all:
+        show = vmlist
+    else:
+        show = []
         for vm in vmlist:
-            flag = ' '
+            if ( (args.templates and vm[ 'config.template' ] is True)
+                 or (args.on  and vm[ 'runtime.powerState' ] == poweredOn)
+                 or (args.off and vm[ 'runtime.powerState' ] == poweredOff) ):
+                show.append( vm )
+
+    show.sort( lambda a, b: cmp( a[ 'name' ], b[ 'name' ]))
+    if args.verbose:
+        for vm in show:
             if vm[ 'config.template' ]:
                 flag = '+'
-            elif vm[ 'runtime.powerState' ] == poweredOn:
+            elif vm[ 'runtime.powerState' ] == poweredOff:
                 flag = 'o'
+            else:
+                flag = ' '
             print( flag, vm[ 'name' ] )
     else:
-        for vm in vmlist:
+        for vm in show:
             print( vm[ 'name' ] )
 
 
