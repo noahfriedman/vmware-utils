@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-tags,v 1.5 2018/08/04 05:17:15 friedman Exp $
+# $Id: vsphere-vm-tags,v 1.6 2018/09/18 01:49:59 friedman Exp $
 # This uses the vSphere Automation SDK for Python as well as pyVmomi.
 
 from __future__ import print_function
@@ -99,7 +99,6 @@ class vapiConnect():
         vm_ids = [ std_client.DynamicID( type = 'VirtualMachine',
                                          id   = str( vm['obj'].id ) )
                    for vm in self.vmlist ]
-
         tags = self.tag_assoc.list_attached_tags_on_objects( vm_ids )
         print( tags )
 
@@ -107,9 +106,8 @@ class vapiConnect():
     def vmid_tags_fast2( self ):
         tag_ids = []
         for cat_id in self.cat_svc.list():
-            tag_ids.extend( self.tag_svc.list_tags_for_category( cat.id ))
-
-        vm_ids = tag_assoc.list_attached_objects_on_tags( tag_ids )
+            tag_ids.extend( self.tag_svc.list_tags_for_category( cat_id ))
+        vm_ids = self.tag_assoc.list_attached_objects_on_tags( tag_ids )
         print( vm_ids )
 
 def main():
