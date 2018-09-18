@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.49 2018/09/12 19:21:48 friedman Exp $
+# $Id: vspherelib.py,v 1.50 2018/09/13 01:50:52 friedman Exp $
 
 # Commentary:
 # Code:
@@ -607,7 +607,7 @@ class _vmomiFolderMap( object ):
 
     def folder_to_path_map( self ):
         try:
-            return self._path_to_path_map
+            return self._folder_to_path_map
         except AttributeError:
             self._init_folder_path_maps()
             return self._folder_to_path_map
