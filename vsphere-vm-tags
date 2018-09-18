@@ -1,6 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-tags,v 1.4 2018/07/24 01:51:21 friedman Exp $
-
+# $Id: vsphere-vm-tags,v 1.5 2018/08/04 05:17:15 friedman Exp $
 # This uses the vSphere Automation SDK for Python as well as pyVmomi.
 
 from __future__ import print_function
@@ -11,6 +10,11 @@ import simplejson                               as json
 
 import com.vmware.cis_client                    as cis_client
 import com.vmware.cis.tagging_client            as tagging_client
+
+import com.vmware.vapi.std.errors_client        as errors_client
+import com.vmware.vapi.std_client               as std_client
+
+import com.vmware.vapi.metadata.metamodel.resource_client as resource_client
 
 from   vmware.vapi.lib.connect              import get_requests_connector
 from   vmware.vapi.security.session         import create_session_security_context
@@ -24,11 +28,18 @@ import vspherelib                               as vsl
 from   pyVmomi                              import vim
 
 class vapiConnect():
-    def __init__( self, host=None, user=None, passwd=None ):
+    def __init__( self, host=None, user=None, passwd=None, vmlist=None ):
+        self.vmlist = vmlist
         self.host   = host
         self.user   = user
         self.passwd = passwd
+
         self.connect()
+
+        self.cat_svc   = tagging_client.Category(       self.stub_config )
+        self.tag_svc   = tagging_client.Tag(            self.stub_config )
+        self.tag_assoc = tagging_client.TagAssociation( self.stub_config )
+
 
     def connect( self ):
         host_url = "https://{}/api".format( self.host )
@@ -58,48 +69,52 @@ class vapiConnect():
     def __del__( self ):
         self.logout()
 
-    def vmid_to_owner_tag_map( self ):
-        cat_svc   = tagging_client.Category(       self.stub_config )
-        tag_svc   = tagging_client.Tag(            self.stub_config )
-        tag_assoc = tagging_client.TagAssociation( self.stub_config )
+    def vmid_tags( self ):
         result = {}
+        for cat_id in self.cat_svc.list():
+            cat = self.cat_svc.get( cat_id )
+            cat_name = cat.name
 
-        cats = [ cat_svc.get( cat ) for cat in cat_svc.list() ]
-        for cat in cats:
-            if cat.name == 'Owners':
-                owners_id = cat.id
-                break
+            for tag_id in self.tag_svc.list_tags_for_category( cat_id ):
+                tag = self.tag_svc.get( tag_id )
+                tag_name = tag.name
 
-        tag_ids = tag_svc.list_tags_for_category( owners_id )
-        for tag_id in tag_ids:
-            tag = tag_svc.get( tag_id )
-            owner = tag.name
-            # Calling list_attached_objects per tag is slow.
-            # vsphere 6.0 doesn't support
-            vm_ids = map( lambda obj: obj.id,
-                          filter( lambda obj: obj.type == 'VirtualMachine',
-                                  tag_assoc.list_attached_objects( tag_id )))
-            for vm_id in vm_ids:
-                try:
-                    result[ vm_id ] += ", " + owner
-                except KeyError:
-                    result[ vm_id ] = owner
+                vm_ids = map( lambda obj: obj.id,
+                              filter( lambda obj: obj.type == 'VirtualMachine',
+                                      self.tag_assoc.list_attached_objects( tag_id )))
+                for vm_id in vm_ids:
+                    try:
+                        vm_result = result[ vm_id ]
+                    except KeyError:
+                        vm_result = result[ vm_id ] = {}
+                    try:
+                        vm_cat = vm_result[ cat.name ]
+                    except KeyError:
+                        vm_cat = vm_result[ cat.name ] = []
+                    vm_cat.append( tag.name )
         return result
 
+    # WIP
+    def vmid_tags_fast1( self ):
+        vm_ids = [ std_client.DynamicID( type = 'VirtualMachine',
+                                         id   = str( vm['obj'].id ) )
+                   for vm in self.vmlist ]
+
+        tags = self.tag_assoc.list_attached_tags_on_objects( vm_ids )
+        print( tags )
+
+    # WIP
+    def vmid_tags_fast2( self ):
+        tag_ids = []
+        for cat_id in self.cat_svc.list():
+            tag_ids.extend( self.tag_svc.list_tags_for_category( cat.id ))
+
+        vm_ids = tag_assoc.list_attached_objects_on_tags( tag_ids )
+        print( vm_ids )
 
 def main():
     args = vsl.ArgumentParser().parse_args()
     vsi  = vsl.vmomiConnect( args )
-
-    t = vsl.Timer('vapiConnect')
-    vpi  = vapiConnect( host   = args.host,
-                        user   = args.user,
-                        passwd = args.password )
-    t.report()
-
-    t = vsl.Timer('vmid_to_owner_tag_map')
-    vmid2owner = vpi.vmid_to_owner_tag_map()
-    t.report()
 
     obj_props = [ 'name',
                   #'config.template',
@@ -108,10 +123,20 @@ def main():
                   'guest.hostName',
                   'guest.ipAddress', ]
 
-    t = vsl.Timer("get_obj_props")
+    t = vsl.Timer('get_obj_props')
     vmlist = vsi.get_obj_props( [vim.VirtualMachine], obj_props )
     t.report()
-    #print(vmlist)
+
+    t = vsl.Timer('vapiConnect')
+    vpi  = vapiConnect( vmlist = vmlist,
+                        host   = args.host,
+                        user   = args.user,
+                        passwd = args.password )
+    t.report()
+
+    t = vsl.Timer('vmid_tags')
+    vm_tags = vpi.vmid_tags()
+    t.report()
 
     t = vsl.Timer('make vmtbl')
     vmtbl = {}
@@ -124,7 +149,7 @@ def main():
         vmid = vm.pop( 'obj' )._moId
 
         try:
-            vm[ 'owner'    ] = vmid2owner[ vmid ]
+            vm.update( vm_tags[ vmid ] )
         except KeyError:
             pass
 
@@ -134,14 +159,19 @@ def main():
             pass
 
         try:
-            vm[ 'ip'       ] = vm.pop( 'guest.ipAddress' )
+            vm[ 'ip' ] = vm.pop( 'guest.ipAddress' )
         except KeyError:
             pass
 
     t.report()
 
     t = vsl.Timer("generate json")
-    out = json.dumps( vmtbl, sort_keys=True, indent='    ', check_circular=False)
+    out = json.dumps( vmtbl,
+                      sort_keys      = True,
+                      #indent        = None,
+                      indent         = 4,
+                      separators     = (',', ' : '),
+                      check_circular = False )
     t.report()
 
     print( out )
