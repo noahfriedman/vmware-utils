@@ -5,7 +5,7 @@
 # Created: 2018-05-04
 # Public domain
 
-# $Id: vsphere-folder-tree,v 1.4 2018/08/09 01:45:08 friedman Exp $
+# $Id: vsphere-folder-tree,v 1.5 2018/09/12 19:45:40 friedman Exp $
 
 # Commentary:
 # Code:
@@ -14,11 +14,59 @@ from __future__ import print_function
 from pyVmomi    import vim
 import vspherelib as vsl
 import re
+import sys
+
+poweredOff = vim.VirtualMachine.PowerState.poweredOff
+
+slash  = '/'
+indent = '    '
 
 def get_args():
     p = vsl.ArgumentParser()
-    p.add( '-v', '--verbose', action='store_true', help='Display extended info' )
+    p.add( '-v', '--verbose',               action='store_true', help='Display extended info' )
     return p.parse()
+
+def print_hier( folder_to_path, path_to_folder, vm_table ):
+    def print_vms( folder, depth ):
+        vmlist = map( lambda vm: vm_table[ vm.id ],
+                      vsl.get_seq_type( folder.childEntity, vim.VirtualMachine ))
+        # Display virtual machines before templates,
+        # but within each group display in alphabetical order.
+        vmlist.sort( lambda a, b: (
+            cmp( a[ 'config.template' ], b[ 'config.template' ] )
+            or cmp( a[ 'name' ].lower(), b[ 'name' ].lower() )))
+        ws = indent * depth
+        for vm in vmlist:
+            if vm[ 'config.template' ]:
+                flag = '+ '
+            elif vm[ 'runtime.powerState' ] == poweredOff:
+                flag = 'o '
+            else:
+                flag = '  '
+            print( ws, flag, vm[ 'name' ], sep='' )
+
+    def print_folder( path, depth ):
+        last = path[ path.rfind( slash ) + 1 : ]
+        print( depth * indent, last, slash, sep='' )
+
+        folder = path_to_folder[ path ]
+        del path_to_folder[ path ]
+        subpaths = [ folder_to_path[ obj.id ] for obj in
+                     vsl.get_seq_type( folder.childEntity, vim.Folder ) ]
+        subpaths.sort()
+        for subpath in subpaths:
+            print_folder( subpath, depth + 1 )
+
+        if vm_table:
+            print_vms( folder, depth + 1 )
+
+    path_list = path_to_folder.keys()
+    path_list.sort( cmp=lambda a, b: cmp( a.lower(), b.lower() ) )
+    for path in path_list:
+        if path in path_to_folder:
+            depth = path.count( slash ) - 1
+            print_folder( path, depth )
+
 
 def main():
     args = get_args()
@@ -26,39 +74,19 @@ def main():
 
     if args.verbose:
         props = [ 'name', 'config.template', 'runtime.powerState' ]
-        vmcfg = { vm[ 'obj' ].id : [ vm[ p ] for p in props ]
-                  for vm in vsi.get_obj_props( [vim.VirtualMachine], props ) }
+        vm_table = { vm[ 'obj' ].id : vm for vm in
+                     vsi.get_obj_props( [vim.VirtualMachine], props ) }
 
-    ptbl = vsi.path_to_folder_map()
-    plst = sorted( ptbl.keys() )
-    ldc = ""
-    for p in plst:
-        mp = p[1:]
-        dirs = mp.split( '/' )
-        dc   = dirs[ 0 ]
-        last = dirs[ -1 ]
-        indent = '    ' * len( dirs )
+        folder_to_path = vsi.folder_to_path_map()
+        path_to_folder = dict( vsi.path_to_folder_map() ) # copy
+        print_hier( folder_to_path, path_to_folder, vm_table )
+    else:
+        path_list = sorted( vsi.path_to_folder_map().keys() )
+        for path in path_list:
+            depth = path.count( slash )
+            last = path[ path.rfind( slash ) + 1 : ]
+            print( depth * indent, last, slash, sep='' )
 
-        if dc != ldc:
-            print( dc )
-            ldc = dc
-
-        if args.verbose:
-            print( indent, last, '/', sep='' )
-
-            folder = ptbl[ p ]
-            vmlist = map( lambda vm: vmcfg[ vm.id ],
-                          vsl.get_seq_type( folder.childEntity, vim.VirtualMachine ))
-            vmlist.sort( lambda a, b: cmp( a[1], b[1]) or cmp( a[0], b[0] ) )
-            for vm in vmlist:
-                flag = '  '
-                if vm[1]:
-                    flag = '+ '
-                elif vm[2] == 'poweredOn':
-                    flag = 'o '
-                print( indent, '    ', flag, vm[0], sep='' )
-        else:
-            print( indent, last, sep='' )
 
 if __name__ == '__main__':
     main()
