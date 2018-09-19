@@ -5,11 +5,18 @@
 # Created: 2018-08-20
 # Public domain
 
-# $Id: vsphere-nt-frob,v 1.5 2018/08/29 07:32:17 friedman Exp $
+# $Id: vsphere-nt-frob,v 1.6 2018/09/12 18:25:51 friedman Exp $
 
 # Commentary:
 
 # WIP
+
+# Features to add:
+#	change passwords
+#	enable/disable/create accounts  (with specific SID if possible)
+#	enable/disable firewalls
+#	enable/disable remote desktop
+#	enable/disable remote administration
 
 # Code:
 
@@ -18,7 +25,6 @@ import vspherelib     as vsl
 
 import os
 import sys
-import time
 
 # wmic useraccount where name="noahf" get sid
 # reg query "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\%sid%" /v ProfileImagePath
@@ -64,6 +70,12 @@ def output_fixup( s ):
 
 def main():
     args = get_args()
+    vsi  = vsl.vmomiConnect( args )
+    vm   = vsi.find_vm( args.vm )[0]
+    vop  = vsi.vmguest_ops( vm,
+                            username=args.guest_username,
+                            password=args.guest_password )
+
     actions = args.actions
     script = []
     while actions:
@@ -89,12 +101,6 @@ def main():
             vsl.printerr( cmd, 'Undefined action' )
             exit( 1 )
     script = str.join( '\n', script ) + '\n'
-
-    vsi  = vsl.vmomiConnect( args )
-    vm   = vsi.find_vm( args.vm )[0]
-    vop  = vsi.vmguest_ops( vm,
-                            username=args.guest_username,
-                            password=args.guest_password )
 
     res = vop.run( script=script ).result
     print( output_fixup( res.output ) )
