@@ -5,7 +5,7 @@
 # Created: 2018-08-20
 # Public domain
 
-# $Id: vsphere-guest-command,v 1.2 2018/08/29 06:13:00 friedman Exp $
+# $Id: vsphere-guest-command,v 1.3 2018/09/12 18:24:39 friedman Exp $
 
 # Commentary:
 # Code:
@@ -15,8 +15,6 @@ import vspherelib     as vsl
 
 import os
 import sys
-import time
-import chardet
 
 def get_args():
     p = vsl.ArgumentParser()
