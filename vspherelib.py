@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.50 2018/09/13 01:50:52 friedman Exp $
+# $Id: vspherelib.py,v 1.51 2018/09/18 00:02:32 friedman Exp $
 
 # Commentary:
 # Code:
@@ -21,6 +21,7 @@ import ssl
 import re
 import time
 import atexit
+import functools
 
 from pyVim      import connect as pyVconnect
 from pyVmomi    import vim, vmodl
@@ -46,38 +47,75 @@ wowBitness = vim.vm.guest.WindowsRegistryManager.RegistryKeyName.RegistryKeyWowB
 debug = bool( os.getenv( 'VSPHERELIB_DEBUG' ))
 
 
-# Class decorator to avoid stacktraces on uncaught exceptions
-# in the decorated class unless debugging is enabled.
-def conditional_stacktrace( wrapped_class ):
-    def conditional_stacktrace_excepthook( extype, val, bt ):
+def with_conditional_stacktrace( *exceptions ):
+    def print_exception( exc, val, sta ):
+        try:
+            msg = val.msg
+        except KeyError:
+            msg = str( val )
+        name = os.path.basename( sys.argv[0] ) or exc.__name__
+        print( name, msg, sep=': ', file=sys.stderr )
+
+        exclude = [ 'dynamicType',
+                    'dynamicProperty',
+                    'msg',
+                    'faultCause',
+                    'faultMessage',
+                    'object',
+                    'windowsSystemErrorCode', ]
+        for attr in sorted( val.__dict__ ):
+            if attr not in exclude:
+                print( attr, getattr( val, attr ), sep=' = ', file=sys.stderr )
+
+    def excepthook( exc, val, sta ):
         sys.excepthook = sys.__excepthook__
-        if issubclass( extype, wrapped_class ):
-            name = os.path.basename( sys.argv[0] ) or extype.__name__
-            print( ': '.join( ( name, str( val )) ), file=sys.stderr )
+        if not debug and issubclass( exc, tuple( exceptions )):
+            print_exception( exc, val, sta )
         else:
-            sys.__excepthook__( extype, val, bt )
+            return sys.__excepthook__( exc, val, sta )
 
-    class conditional_exception( wrapped_class ):
-        def __init__( self, *reason ):
-            reason = map( lambda s: str( s ), reason )
-            self.reason = str.join( ': ', reason )
-            if not debug and sys.excepthook is sys.__excepthook__:
-                sys.excepthook = conditional_stacktrace_excepthook
+    def class_decorator( wrapped_class ):
+        class conditional_stacktrace_wrapper( wrapped_class ):
+            def __init__( self, *args, **kwargs ):
+                sys.excepthook = excepthook
+                self.reason = str.join( ': ', (str( s ) for s in args) )
+            def __str__( self ):
+                return self.reason
+        conditional_stacktrace_wrapper.__name__ = wrapped_class.__name__
+        return conditional_stacktrace_wrapper
 
-        def __str__( self ):
-            return self.reason
+    def decorator( fn ):
+        if getattr( fn, '__bases__', None ):
+            return class_decorator( fn )
+        else:
+            @functools.wraps( fn )
+            def wrapper( *args, **kwargs ):
+                sys.excepthook = excepthook
+                return fn( *args, **kwargs )
+            return wrapper
 
-    return conditional_exception
+    return decorator
 
-@conditional_stacktrace
+def tidy_vimfaults( fn ):
+    decorator = with_conditional_stacktrace(
+        vim.fault.GuestRegistryKeyInvalid,
+        vim.fault.NoPermission,
+        vim.fault.InvalidGuestLogin )
+    return decorator( fn )
+
+def conditional_stacktrace_exception( wrapped_class ):
+    decorator = with_conditional_stacktrace( wrapped_class )
+    return decorator( wrapped_class )
+
+@conditional_stacktrace_exception
 class vmomiError( Exception ): pass
-class PermissionError(       vmomiError ): pass
 class NameNotFoundError(     vmomiError ): pass
 class NameNotUniqueError(    vmomiError ): pass
 class ConnectionFailedError( vmomiError ): pass
 class RequiredArgumentError( vmomiError ): pass
 class GuestOperationError(   vmomiError ): pass
 
+
 class Diag( object ):
     def __init__( self, *args, **kwargs ):
         self.sep    = kwargs.get( 'sep',  ': ' )
@@ -92,6 +130,29 @@ class Diag( object ):
     def append( self, *args ):
         if args:
             self.lines.append( self.sep.join( args ))
+
+
+# This is just a dictionary but you can access
+# or assign elements as either d['x'] or d.x
+
+class pseudoPropAttr( dict ):
+    def __setattr__( self, name, value ):
+        self[ name ] = value
+        return value
+
+    def __getattr__( self, name ):
+        try:
+            return self[ name ]
+        except KeyError as e:
+            raise AttributeError( *e.args )
+
+    def __delattr__( self, name ):
+        try:
+            del self[ name ]
+        except KeyError as e:
+            raise AttributeError( *e.args )
+
+# end class pseudoPropAttr
 
 
 class Timer( object ):
@@ -292,18 +353,18 @@ class propList( object ):
 
 class _vmomiCollect( object ):
     def create_filter_spec( self, vimtype, container, props ):
-        props      = propList( props )
+        props    = propList( props )
 
-        vpc        = vmodl.query.PropertyCollector
-        travSpec   = vpc.TraversalSpec( name = 'traverseEntities',
-                                        path = 'view',
-                                        skip = False,
-                                        type = type( container ) )
-        objSpec    = vpc.ObjectSpec( obj=container, skip=True, selectSet=[ travSpec ] )
-        propSet    = [ vpc.PropertySpec( type    = vimt,
-                                         pathSet = props.names(),
-                                         all     = not len( props ) )
-                       for vimt in vimtype ]
+        vpc      = vmodl.query.PropertyCollector
+        travSpec = vpc.TraversalSpec( name = 'traverseEntities',
+                                      path = 'view',
+                                      skip = False,
+                                      type = type( container ) )
+        objSpec  = vpc.ObjectSpec( obj=container, skip=True, selectSet=[ travSpec ] )
+        propSet  = [ vpc.PropertySpec( type    = vimt,
+                                       pathSet = props.names(),
+                                       all     = not len( props ) )
+                     for vimt in vimtype ]
         return vpc.FilterSpec( objectSet=[ objSpec ], propSet=propSet )
 
 
@@ -373,7 +434,7 @@ class _vmomiCollect( object ):
         Returns a list of dict objects for each result.
 
         '''
-        if props is None or len( props ) < 1:
+        if not props:
             return self._get_obj_props_nofilter( vimtype, props, root, recursive )
 
         # First get the subset of managed objects we want
@@ -530,7 +591,7 @@ class _vmomiFind( object ):
                     #printerr('duplicate vm name', vm )
                     pass
 
-        if len( args ) > 0:
+        if args:
             search = self.si.content.searchIndex
             for vmname in args:
                 i = sortord.index( vmname )
@@ -557,7 +618,7 @@ class _vmomiFind( object ):
         return found
 
     def vmlist_sort_by_args( self, vmlist, args ):
-        if not vmlist or len( vmlist ) < 1:
+        if not vmlist:
             return
         vmorder = dict( (elt[ 1 ], elt[ 0 ]) for elt in enumerate( args ) )
         cmp_fn = lambda a, b: cmp( vmorder[ a.name ], vmorder[ b.name ] )
@@ -857,10 +918,18 @@ class vmomiConnect( _vmomiCollect,
         self.kwargs = kwargs
         self.connect()
 
+    # for `with' statements
+    def __enter__( self ): return self
+    def __exit__( self, *exc_info ): self.close()
+
     def __del__( self ):
+        self.close()
+
+    def close( self ):
         try:
             pyVconnect.Disconnect( self.si )
-        except AttributeError:
+            self.si = None
+        except:
             pass
 
     def connect( self ):
@@ -956,6 +1025,7 @@ class vmomiMKS( object ):
 ######
 
 class _vmomiVmGuestOperation_Env( object ):
+    @tidy_vimfaults
     def guest_environ( self ):
         try:
             return self._guest_environ
@@ -976,6 +1046,7 @@ class _vmomiVmGuestOperation_Env( object ):
 
 
 class _vmomiVmGuestOperation_Dir( object ):
+    @tidy_vimfaults
     def mkdir( self, path, mkdirhier=False ):
         self._printdbg( 'mkdir', path )
         self.fmgr.MakeDirectoryInGuest(
@@ -984,6 +1055,7 @@ class _vmomiVmGuestOperation_Dir( object ):
             directoryPath           = path,
             createParentDirectories = mkdirhier )
 
+    @tidy_vimfaults
     def mkdtemp( self, prefix='', suffix='', directoryPath=None ):
         tmpdir = self.fmgr.CreateTemporaryDirectoryInGuest(
             vm            = self.vm,
@@ -995,6 +1067,7 @@ class _vmomiVmGuestOperation_Dir( object ):
         self.tmpdir.append( tmpdir )
         return tmpdir
 
+    @tidy_vimfaults
     def mvdir( self, src, dst ):
         self._printdbg( 'mvdir', src, dst )
         self.fmgr.MoveDirectoryInGuest(
@@ -1003,6 +1076,7 @@ class _vmomiVmGuestOperation_Dir( object ):
             srcDirectoryPath = src,
             dstDirectoryPath = dst )
 
+    @tidy_vimfaults
     def rmdir( self, directoryPath, recursive=False ):
         if recursive:
             self._printdbg( 'rmdir -r', directoryPath )
@@ -1025,20 +1099,16 @@ class _vmomiVmGuestOperation_Dir( object ):
 
 class _vmomiVmGuestOperation_File( object ):
     def _gc_tmpfiles( self, files=[], dirs=[] ):
-        try:
-            for elt in files:
-                try:
-                    self.unlink( elt )
-                except vim.fault.VimFault:
-                    pass
-            for elt in dirs:
-                try:
-                    self.rmdir( elt, recursive=True )
-                except vim.fault.VimFault:
-                    pass
-        except vim.fault.NotAuthenticated:
-            # this <- vim.fault.NoPermission <- vmodl.fault.SecurityError
-            pass
+        for elt in files:
+            try:
+                self.unlink( elt )
+            except vim.fault.VimFault:
+                pass
+        for elt in dirs:
+            try:
+                self.rmdir( elt, recursive=True )
+            except vim.fault.VimFault:
+                pass
 
     _fileAttrMap = { 'uid'      : 'ownerId',
                      'gid'      : 'groupId',
@@ -1080,7 +1150,7 @@ class _vmomiVmGuestOperation_File( object ):
             rec[ 'symlink' ] = symlink
         return rec
 
-
+    @tidy_vimfaults
     def ls( self, path=None, pattern='^.*', long=False, max=None, _fstat=False ):
         if path is None:
             path = self.cwd or '/'
@@ -1120,6 +1190,7 @@ class _vmomiVmGuestOperation_File( object ):
         rec = self.ls( path=guestFilePath, long=True, max=1, _fstat=True )
         return rec[0]
 
+    @tidy_vimfaults
     def chmod( self, path, **kwargs ):
         attr = self.mkFileAttributes( **kwargs )
         self._printdbg( 'chmod', attr, path )
@@ -1129,6 +1200,7 @@ class _vmomiVmGuestOperation_File( object ):
             guestFilePath  = path,
             fileAttributes = attr )
 
+    @tidy_vimfaults
     def mktemp( self, prefix='', suffix='', directoryPath=None ):
         tmpfile = self.fmgr.CreateTemporaryFileInGuest(
             vm            = self.vm,
@@ -1140,6 +1212,7 @@ class _vmomiVmGuestOperation_File( object ):
         self.tmpfile.append( tmpfile )
         return tmpfile
 
+    @tidy_vimfaults
     def unlink( self, filePath ):
         self._printdbg( 'unlink', filePath )
         try:
@@ -1151,6 +1224,7 @@ class _vmomiVmGuestOperation_File( object ):
             auth     = self.auth,
             filePath = filePath )
 
+    @tidy_vimfaults
     def get_file( self, guestFile ):
         self._printdbg( 'get_file', guestFile )
         ftinfo = self.fmgr.InitiateFileTransferFromGuest(
@@ -1166,6 +1240,7 @@ class _vmomiVmGuestOperation_File( object ):
             raise GuestOperationError( str( status_code ), resp.reason )
         return resp.text
 
+    @tidy_vimfaults
     def put_file( self, filePath, data, perm=None, overwrite=False ):
         attr = self.mkFileAttributes( perm )
         self._printdbg( 'put_file', filePath, attr )
@@ -1205,7 +1280,7 @@ class _vmomiVmGuestOperation_Registry( object ):
             keyName = self._mkRegKeyNameSpec( path, wow=None ),
             name    = name )
 
-
+    @tidy_vimfaults
     def reg_keys_list( self, path, recursive=False, match='^.*', wow=None, native=False ):
         res = self.regmgr.ListRegistryKeysInGuest(
             vm           = self.vm,
@@ -1218,6 +1293,7 @@ class _vmomiVmGuestOperation_Registry( object ):
         else:
             return [ elt.key.keyName.registryPath for elt in res ]
 
+    @tidy_vimfaults
     def reg_key_create( self, path, volatile=False, wow=None ):
         try:
             self.regmgr.CreateRegistryKeyInGuest(
@@ -1230,6 +1306,7 @@ class _vmomiVmGuestOperation_Registry( object ):
         except:
             raise
 
+    @tidy_vimfaults
     def reg_key_delete( self, path, recursive=False, wow=None ):
         try:
             self.regmgr.DeleteRegistryKeyInGuest(
@@ -1245,6 +1322,7 @@ class _vmomiVmGuestOperation_Registry( object ):
         except:
             raise
 
+    @tidy_vimfaults
     def reg_values_list( self, path, match='^.*', expand=False, wow=None, detailed=False ):
         res = self.regmgr.ListRegistryValuesInGuest(
             vm            = self.vm,
@@ -1273,6 +1351,7 @@ class _vmomiVmGuestOperation_Registry( object ):
         except KeyError:
             raise NameNotFoundError( name, 'value not found in ' + path )
 
+    @tidy_vimfaults
     def reg_value_set( self, path, name, value, type=None, wow=None ):
         def guess_type():
             t = __builtin__.type( value )
@@ -1282,7 +1361,7 @@ class _vmomiVmGuestOperation_Registry( object ):
             if t is unicode:            return self.REG_SZ
             if t is list:               return self.REG_MULTI_SZ
             if t is bytearray:          return self.REG_BINARY
-            # This is probably for raw utf16
+            # This is probably wrong for raw utf16
             if value.find( '\0' ) >= 0: return self.REG_BINARY
             raise TypeError( 'Cannot infer type for registry value' )
 
@@ -1300,6 +1379,7 @@ class _vmomiVmGuestOperation_Registry( object ):
             auth  = self.auth,
             value = valspec )
 
+    @tidy_vimfaults
     def reg_value_delete( self, path, name, wow=None ):
         try:
             self.regmgr.DeleteRegistryValueInGuest(
@@ -1308,8 +1388,6 @@ class _vmomiVmGuestOperation_Registry( object ):
                 valueName = self._mkRegValNameSpec( path, name, wow ) )
         except vim.fault.GuestRegistryValueNotFound:
             pass
-        except:
-            raise
 
 # end class _vmomiVmGuestOperation_Registry
 
@@ -1410,12 +1488,14 @@ class vmomiVmGuestOperation( _vmomiVmGuestOperation_Env,
     def run( self, *args, **kwargs):
         return vmomiVmGuestProcess( self, *args, **kwargs )
 
+    @tidy_vimfaults
     def ps( self, *pids ):
         return self.pmgr.ListProcessesInGuest(
             vm   = self.vm,
             auth = self.auth,
             pids = list( pids ))
 
+    @tidy_vimfaults
     def kill( self, pid ):
         self._printdbg( 'kill', pid )
         try:
@@ -1491,6 +1571,7 @@ class vmomiVmGuestProcess( object ):
         if wait:
             self.wait()
 
+    @tidy_vimfaults
     def start( self ):
         parent = self.parent
         pspec = vim.vm.guest.ProcessManager.ProgramSpec(
@@ -1498,13 +1579,11 @@ class vmomiVmGuestProcess( object ):
             envVariables     = self.environ,
             programPath      = self.prog,
             arguments        = self.args )
-        try:
-            self.pid = parent.pmgr.StartProgramInGuest(
-                vm   = parent.vm,
-                auth = parent.auth,
-                spec = pspec )
-        except vim.fault.VimFault as e:
-            raise GuestOperationError( 'exec', e.msg )
+
+        self.pid = parent.pmgr.StartProgramInGuest(
+            vm   = parent.vm,
+            auth = parent.auth,
+            spec = pspec )
         parent._printdbg( 'exec', self.prog, ': pid', self.pid )
 
     def kill( self ):
@@ -1547,29 +1626,6 @@ class vmomiVmGuestProcess( object ):
             return result
 
 # end class vmomiVmGuestProcess
-
-
-# This is just a dictionary but you can access
-# or assign elements as either d['x'] or d.x
-
-class pseudoPropAttr( dict ):
-    def __setattr__( self, name, value ):
-        self[ name ] = value
-        return value
-
-    def __getattr__( self, name ):
-        try:
-            return self[ name ]
-        except KeyError as e:
-            raise AttributeError( *e.args )
-
-    def __delattr__( self, name ):
-        try:
-            del self[ name ]
-        except KeyError as e:
-            raise AttributeError( *e.args )
-
-# end class pseudoPropAttr
 
 
 ######
@@ -1765,7 +1821,7 @@ def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
     except KeyboardInterrupt:
         print( '\n\x57\x65\x6c\x6c\x20\x66\x75\x63\x6b',
                '\x79\x6f\x75\x20\x74\x68\x65\x6e\x2e\n' )
-        sys.exit( 130 ) # WIFSIGNALED(128) + SIGINT(2)
+        exit( 130 ) # WIFSIGNALED(128) + SIGINT(2)
 
 def yes_or_no_p( prompt, default=None ):
     return y_or_n_p( prompt, yes = 'yes', no = 'no',
