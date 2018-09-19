@@ -5,36 +5,47 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id$
+# $Id: vsphere-repl,v 1.1 2018/09/12 19:44:43 friedman Exp $
 
 # Commentary:
 # Code:
 
 from   __future__ import print_function
 
+import sys
 import code
 import subprocess
+import pprint
 import vspherelib     as vsl
 from   pyVmomi    import vim, vmodl
 
+
 args = vsl.ArgumentParser().parse()
-vsi  = vsl.vmomiConnect( args, idle=-1 )
+args.idle = -1
+
+vsi  = vsl.vmomiConnect( args )
 
 def restart():
     reload( vsl )
     global vsi
-    vsi = vsl.vmomiConnect( args, idle=-1 )
+    vsi = vsl.vmomiConnect( args )
 
-# Not used here, but comes in handy.
+repl_pp = pprint.PrettyPrinter( indent=2, width=40 )
+def pp( *args, **kwargs ):
+    for arg in args:
+        repl_pp.pprint( arg, **kwargs )
+
 def bt( cmd ):
     return subprocess.check_output( [cmd] ).rstrip( ' \t\r\n' )
 
 if __name__ == '__main__':
-    # Avoid polluting local namespace
+    # Don't display 'None' if there is nothing to display.
+    sys.displayhook = lambda arg: (arg is None) or pp( arg )
     code.interact(
-        banner = '{} {} | {}'.format( vsi.si.content.about.apiType,
-                                      vsi.si.content.about.apiVersion,
-                                      vsi.si.content.about.fullName ),
+        banner = '{} {} | {}'.format(
+            vsi.si.content.about.apiType,
+            vsi.si.content.about.apiVersion,
+            vsi.si.content.about.fullName ),
         local = locals() )
 
 # vsphere-repl ends here
