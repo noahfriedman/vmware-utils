@@ -5,7 +5,7 @@
 # Created: 2018-03-09
 # Public domain
 
-# $Id: vsphere-vm-clone,v 1.11 2018/08/08 12:29:00 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.12 2018/09/12 19:45:40 friedman Exp $
 
 # Commentary:
 # Code:
@@ -58,7 +58,8 @@ def make_nic_changespec( vsi, template, label, root=None ):
 
 def vmclone( vsi, template, opt ):
     if opt.folder:
-        folder = vsi.path_to_folder( opt.folder )
+        p2sfm  = vsi.path_to_subfolder_map( 'vm' )
+        folder = p2sfm[ opt.folder ]
     else:
         folder = template.parent
 
@@ -163,13 +164,13 @@ def main():
 
     template = vsi.find_vm( args.template )
     if template:
-        task = vmclone( vsi, template[0], args )
+        task = vmclone( vsi, template[ 0 ], args )
         if task:
             vsi.taskwait( task,
-                          printsucc=False,
-                          callback=myCallback( args.vm_name ).callback )
+                          printsucc = False,
+                          callback  = myCallback( args.vm_name ).callback )
     else:
-        print( 'template not found' )
+        vsl.printerr( args.template, 'template not found' )
 
 
 if __name__ == "__main__":
