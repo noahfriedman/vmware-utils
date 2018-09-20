@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.51 2018/09/18 00:02:32 friedman Exp $
+# $Id: vspherelib.py,v 1.52 2018/09/19 06:25:31 friedman Exp $
 
 # Commentary:
 # Code:
@@ -40,6 +40,7 @@ except:
 
 POSIX = object()  # posix system, e.g. unix or osx
 WinNT = object()  # MICROS~1
+Undef = object()  # distinct default from None since None is hashable
 
 # WOW32, WOW64, WOWNative; methods use Native by default
 wowBitness = vim.vm.guest.WindowsRegistryManager.RegistryKeyName.RegistryKeyWowBitness
@@ -634,68 +635,86 @@ class _vmomiFind( object ):
 ##
 
 class _vmomiFolderMap( object ):
-    # Generate a complete map of full paths to corresponding vsphere folder objects
+    # Generate a complete map of paths to server folder objects.
+    # These are cached because round trips to the server are slow.
+    # They can be refreshed with refresh=True keyarg to public methods.
     def _init_folder_path_maps( self ):
         mtbl = {}
-        for elt in self.get_obj_props( [vim.Folder, vim.Datacenter], ['name', 'parent'] ):
+        for elt in self.get_obj_props( [vim.Folder, vim.Datacenter],
+                                       ['name', 'parent'] ):
             obj = elt[ 'obj' ]
-            mtbl[ obj._moId ] = [ elt[ 'name' ], elt[ 'parent' ]._moId , obj ]
-
+            mtbl[ obj ] = [ elt[ 'name' ], elt[ 'parent' ] ]
         p2f = self._path_to_folder_map = {}
         f2p = self._folder_to_path_map = {}
-        for moId in mtbl:
+        for obj in mtbl:
             name = []
-            obj = mtbl[ moId ][ 2 ]
-            while mtbl.has_key( moId ):
-                node = mtbl[ moId ]
+            start_obj = obj
+            while mtbl.has_key( obj ):
+                node = mtbl[ obj ]
                 name.insert( 0, node[ 0 ] )
-                moId = node[ 1 ]
+                obj = node[ 1 ]
                 # See if we've already computed the rest of the parent path.
                 # If so, prepend it and stop.
                 try:
-                    name.insert( 0, f2p[ moId ] )
+                    name.insert( 0, f2p[ obj ] )
                     break
                 except KeyError:
                     pass
-
-            if len( name ) > 1:
+            if name:
                 if name[0][0] is not '/':
-                    name.pop( 1 )  # remove vmFolder
                     name.insert( 0, '' )
                 name = str.join( '/', name )
-                p2f[ name ] = obj
-                f2p[ obj._moId ] = name
+                p2f[ name ]      = start_obj
+                f2p[ start_obj ] = name
 
-    def folder_to_path_map( self ):
+    def _folder_path_map( self, attr, item=Undef, refresh=False ):
+        if refresh:
+            self._init_folder_path_maps()
         try:
-            return self._folder_to_path_map
+            mapping = getattr( self, attr )
         except AttributeError:
             self._init_folder_path_maps()
-            return self._folder_to_path_map
+            mapping = getattr( self, attr )
+        if item is Undef:
+            return mapping
+        else:
+            try:
+                return mapping[ item ]
+            except KeyError:
+                pass
 
-    # Return the path name of the folder object
-    def folder_to_path( self, folder ):
-        try:
-            return self.folder_to_path_map()[ folder._moId ]
-        except KeyError:
-            pass
+    def folder_to_path_map( self, item=Undef, refresh=False ):
+        return self._folder_path_map( '_folder_to_path_map', item, refresh )
 
-    def path_to_folder_map( self ):
-        try:
-            return self._path_to_folder_map
-        except AttributeError:
-            self._init_folder_path_maps()
-            return self._path_to_folder_map
+    def path_to_folder_map( self, item=Undef, refresh=False ):
+        return self._folder_path_map( '_path_to_folder_map', item, refresh )
 
-    # Return the folder object located at path
-    def path_to_folder( self, path ):
-        try:
-            return self.path_to_folder_map()[ path ]
-        except KeyError:
-            pass
+    # Prunes folder tree to just the vm, host, network, datastore,
+    # etc. subtree.  The datacenter is still prefixed to all the folders
+    # but the intermediate subfolder name and all other folders are removed.
+    # The default 'vm' subtree is usually the only interesting one.
+    #
+    # To get the inverse of this map, use the 'inverted_dict' function below.
+    def path_to_subfolder_map( self, subfolder='vm' ):
+        p2sf = {}
+        for path, obj in self.path_to_folder_map().iteritems():
+            try:
+                beg = path.index( '/', 1 )
+            except ValueError:
+                continue
 
-    def get_vm_folder_path( self, vm ):
-        return self.folder_to_path( vm.parent )
+            try:
+                end = path.index( '/', beg + 1 )
+            except ValueError:
+                end = len( path )
+
+            sub = path[ beg + 1 : end ]
+            if sub != subfolder:
+                continue
+
+            sfpath = path[ 0 : beg ] + path[ end : ]
+            p2sf[ sfpath ] = obj
+        return p2sf
 
 # end class _vmomiFolderMap
 
@@ -1666,18 +1685,23 @@ def propset_to_dict( propset, objtype=dict ):
 
 # it can be useful to use objtype=pseudoPropAttr for
 # lists of dotted obj props from managed objects.
+#
+# n.b. this will error if there are keys which are
+# prefixes of other keys, since the shorter key cannot
+# have both an end value and a link to subkeys.
 def flat_to_nested_dict( flat, sep='.', objtype=dict ):
     nested = objtype()
     for k in flat:
         parts = k.split( sep )
         walk = nested
-        for elt in parts[ :-1 ]:
+        for elt in parts[ 0 : -1 ]: # all but last
             try:
                 walk = walk[ elt ]
             except KeyError:
                 walk[ elt ] = objtype()
                 walk = walk[ elt ]
-        walk[ parts[-1] ] = flat[ k ]
+        assert parts[ -1 ] not in walk, (parts, flat[ k ], walk[ parts[ -1 ]])
+        walk[ parts[ -1 ] ] = flat[ k ]
     return nested
 
 
@@ -1693,6 +1717,10 @@ def environ_to_dict( names, preserve_case=False ):
 
 def dict_to_environ( names ):
     return sorted( str.join( '=', (k, names[ k ])) for k in names )
+
+# n.b. this only works if values are hashable
+def inverted_dict( d ):
+    return { v : k for k, v in d.iteritems() }
 
 
 ######
@@ -1821,7 +1849,7 @@ def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
     except KeyboardInterrupt:
         print( '\n\x57\x65\x6c\x6c\x20\x66\x75\x63\x6b',
                '\x79\x6f\x75\x20\x74\x68\x65\x6e\x2e\n' )
-        exit( 130 ) # WIFSIGNALED(128) + SIGINT(2)
+        sys.exit( 130 ) # WIFSIGNALED(128) + SIGINT(2)
 
 def yes_or_no_p( prompt, default=None ):
     return y_or_n_p( prompt, yes = 'yes', no = 'no',
