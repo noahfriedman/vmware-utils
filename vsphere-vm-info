@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.26 2018/08/19 06:37:54 friedman Exp $
+# $Id: vsphere-vm-info,v 1.27 2018/08/24 01:36:09 friedman Exp $
 
 # Commentary:
 # Code:
@@ -50,6 +50,7 @@ proplist = [
     'guest.net',
 
     'name',
+    'parent',
 
     #'resourcePool.name',         # separate MO, can't fetch from vm proplist
     'resourcePool',
@@ -84,12 +85,10 @@ proplist_verbose = [
     'config.flags.faultToleranceType',
     'config.flags.htSharing',
     'config.flags.monitorType',
-    'config.flags.recordReplayEnabled',
     'config.flags.runWithDebugInfo',
     'config.flags.snapshotDisabled',
     'config.flags.snapshotLocked',
     'config.flags.snapshotPowerOffBehavior',
-    'config.flags.useToe',
     'config.flags.virtualExecUsage',
     'config.flags.virtualMmuUsage',
     'config.defaultPowerOps.defaultPowerOffType',
@@ -102,6 +101,7 @@ proplist_verbose = [
 
 moId_types = [ vim.HostSystem, vim.ResourcePool ]
 moId_map   = {}
+folder_map = None
 
 
 def get_args():
@@ -113,7 +113,7 @@ def get_args():
     args = p.parse()
     if not args.all and not args.vm:
         vsl.printerr( 'Specify VM names or -a (--all)' )
-        sys.exit (1)
+        sys.exit( 1 )
     return args
 
 
@@ -126,146 +126,202 @@ def plural( text, n ):
         text += 's'
     return text
 
-def print_vm( vsi, vmflat, verbose, sep="" ):
-    stdindent =  -17
-    indentL    = stdindent - 3
-    indentS    = " " * abs( indentL )
-    farindentL = stdindent - 10
-    farindentS = " " * abs( farindentL )
+
+stdindent  =  -17
+indentL    = stdindent - 3
+indentS    = " " * abs( indentL )
+farindentL = stdindent - 10
+farindentS = " " * abs( farindentL )
 
-    def p( *parm ):
-        if parm[1] is None: return
-        w = stdindent
-        if type( parm[0] ) is int:
-            w = parm[0]
-            parm = parm[1:]
-        nl = 1
-        if type(parm[-1]) is str and parm[-1] == "":
-            nl   = 0
-            parm = parm[0:-1]
-        s = '%*s : %s' % (w, parm[0], str.join( " ", map( str, parm[1:] ) ))
-        if nl: print( s )
-        else:  print( s, end="" )
+def p( *parm ):
+    if parm[ 1 ] is None:
+        return
+    w = stdindent
+    if isinstance( parm[ 0 ], (int, long) ):
+        w = parm[ 0 ]
+        parm = parm[ 1: ]
+    end = '\n'
+    if isinstance( parm[ -1 ], (str, unicode) ) and parm[ -1 ] == "":
+        end  = ''
+        parm = parm[ : -1 ]
+    s = '%*s : %s' % (w, parm[ 0 ], str.join( " ", map( str, parm[ 1: ] ) ))
+    print( s, end=end )
 
-    def pi( *parm ):
-        print( indentS, end="" )
-        p( *parm )
+def pi( *parm ):
+    print( indentS, end="" )
+    p( *parm )
 
-    def pf( label, extra, dic, attrs ):
-        idx = 0
-        if extra:
-            p( label, extra )
-        else:
-            try:
-                # Look up key before writing, in case of exception.
-                val = dic[ attrs[ 0 ]]
-                p( label, '' )
-                p( farindentL, attrs[ 0 ], val )
-                idx = 1
-            except KeyError:
-                pass
-        for attr in attrs[ idx: ]:
-            try:
-                pi( farindentL, attr, dic[ attr ] )
-            except KeyError:
-                pass
-            except:
-                pi( farindentL, attr, dic.__dict__[ attr ] )
-
-    def pf2( label, dic, attrs ):
-        p( label, '' )
-        p( farindentL, attrs[0][0], dic[ attrs[0][1] ] )
-        for a, b in attrs[1:]:
-            try:    pi( farindentL, a, dic[ b ] )
-            except: pass
-
-    vm = vsl.flat_to_nested_dict( vmflat, objtype=vsl.pseudoPropAttr )
-
-    vm_conf = vm.config
-    hw_conf = vm.config.hardware
-    gu_conf = vm.guest
-    su_conf = vm.summary
-    rt_conf = vm.summary.runtime
-    ex_conf = getattr( vm.config, 'extraConfig', None )
-
-    numCPU = hw_conf.numCPU
-    coreargs = [plural( 'core', numCPU )]
-    if getattr( hw_conf, 'numCoresPerSocket', None ):
-        nsockets = numCPU / hw_conf.numCoresPerSocket
-        coreargs.append( plural('%d socket' % nsockets, nsockets ))
-    if getattr( vm_conf, 'cpuHotAddEnabled', False ):
-        coreargs.append( 'hot add enabled' )
-    if getattr( vm_conf, 'cpuHotRemoveEnabled', False ):
-        coreargs.append( 'hot remove enabled' )
-
-    memargs = [vsl.scale_size( hw_conf.memoryMB * 1024 * 1024)]
-    if getattr( vm_conf, 'memoryHotAddEnabled', False ):
-        memargs.append( 'hot add enabled' )
-
-    if vm_conf.template:
-        p( 'VM Name', vm.name, '    [TEMPLATE]' )
+def pf( label, extra, dic, attrs ):
+    idx = 0
+    if extra:
+        p( label, extra )
     else:
-        p( 'VM Name', vm.name )
-        hn = getattr( gu_conf, 'hostName', None )
-        if hn and hn != vm.name:
-            p( 'VM Guest Name', hn )
+        try:
+            # Look up key before writing, in case of exception.
+            val = dic[ attrs[ 0 ]]
+            p( label, '' )
+            p( farindentL, attrs[ 0 ], val )
+            idx = 1
+        except KeyError:
+            pass
+    for attr in attrs[ idx : ]:
+        try:
+            pi( farindentL, attr, dic[ attr ] )
+        except KeyError:
+            pass
+        except:
+            pi( farindentL, attr, getattr( dic, attr ))
 
-    p( 'VM moId', vm.obj._moId )
-    p( 'VM UUID', vm_conf.uuid)
-    if verbose:
-        p( 'Instance Id',    vm_conf.instanceUuid )
-        p( 'Location Id',    getattr( vm_conf, 'locationId', None ))
-        p( 'Config modtime', vm_conf.changeVersion )
-    p( 'VMX', vm_conf.files.vmPathName )
+def pf2( label, dic, attrs ):
+    p( label, '' )
+    p( farindentL, attrs[0][0], dic[ attrs[0][1] ] )
+    for a, b in attrs[ 1: ]:
+        try:
+            pi( farindentL, a, dic[ b ] )
+        except:
+            pass
 
-    try:
-        folder = vsi.get_vm_folder_path( vm.obj )
-        p( 'Folder', folder )
-    except KeyError:
-        pass
+
+class DisplayVM( object ):
+    def __init__( self, vsi, vmprops, verbose=False, sep="" ):
+        self.vsi = vsi
+        self.vm = vsl.flat_to_nested_dict( vmprops, objtype=vsl.pseudoPropAttr )
+        self.verbose = verbose
+        self.sep = sep
+        self.display()
 
-    resourcePool = getattr( vm, 'resourcePool', None )
-    try:
-        p( 'Resource Pool', moId_map[ resourcePool._moId ] )
-    except KeyError:
-        p( 'Resource Pool', resourcePool._moId )
-    except AttributeError:
-        pass
+    def display( self ):
+        vm      = self.vm
+        vm_conf = vm.config
+        hw_conf = vm.config.hardware
+        gu_conf = vm.guest
+        su_conf = vm.summary
+        rt_conf = vm.summary.runtime
+        ex_conf = getattr( vm.config, 'extraConfig', None )
 
-    p( 'Guest type',  vm_conf.guestFullName )
+        self.display_name()
+        self.display_location()
+        self.display_resource_pool()
+        p( 'Guest type', vm_conf.guestFullName )
+        self.display_hw_ver()
+        self.display_cpu()
+        self.display_mem()
+        p( 'NICs',    su_conf.config.numEthernetCards )
+        p( 'Disks',   su_conf.config.numVirtualDisks )
+        p( 'Storage', storage_size( su_conf.storage ))
+        self.display_host()
+        self.display_power_state()
 
-    hw_ver = vm_conf.version[4:]  # skip 'vmx-'
-    if hw_ver[0] == '0': hw_ver = hw_ver[1:]
-    try:
-        hw_desc = '\t({})'.format( hw_compat[ hw_ver ][0] )
-    except KeyError:
-        hw_desc = ""
-    hw_ver += hw_desc
-    p( 'HW version',  hw_ver )
+        if self.verbose:
+            self.display_tools()
+            self.display_flags()
+            self.display_power_ops()
 
-    p( 'CPU',         numCPU, str.join( ', ', coreargs ) )
-    p( 'Memory',      str.join( ', ', memargs ))
+        self.display_networks()
 
-    p( 'NICs',        su_conf.config.numEthernetCards )
-    p( 'Disks',       su_conf.config.numVirtualDisks )
-    p( 'Storage',     storage_size( su_conf.storage ))
+        # This is a custom key I insert into my VMs
+        if self.verbose:
+            try:
+                p( 'Guest json', ex_conf.guestinfo.json )
+            except:
+                pass
 
-    host = rt_conf.host
-    try:
-        p( 'Hypervisor',  moId_map[ host._moId ] )
-    except KeyError:
-        p( 'Hypervisor',  host._moId )
+            self.display_annotation()
 
-    p( 'Boot delay',  vm_conf.bootOptions.bootDelay, "ms" )
-    p( 'State',       rt_conf.powerState )
+        self.display_question()
+        print( self.sep )
 
-    try:
-        p( 'Boot time', rt_conf.bootTime )
-    except AttributeError:
-        pass
+    def display_name( self ):
+        if self.vm.config.template:
+            p( 'VM Name', self.vm.name, '    [TEMPLATE]' )
+        else:
+            p( 'VM Name', self.vm.name )
+            try:
+                hn = self.vm.guest.hostName
+                if hn and hn != self.vm.name:
+                    p( 'VM Guest Name', hn )
+            except AttributeError:
+                pass
 
-    if verbose:
-        pf2( 'Tools ', vm_conf.tools,
+    def display_location( self ):
+        vm      = self.vm
+        vm_conf = self.vm.config
+
+        p( 'VM moId', vm.obj._moId )
+        p( 'VM UUID', vm_conf.uuid)
+        if self.verbose:
+            p( 'Instance Id',    vm_conf.instanceUuid )
+            p( 'Location Id',    getattr( vm_conf, 'locationId', None ))
+            p( 'Config modtime', vm_conf.changeVersion )
+        p( 'VMX', vm_conf.files.vmPathName )
+
+        try:
+            folder = folder_map[ vm.parent ]
+            p( 'Folder', folder )
+        except KeyError:
+            pass
+
+    def display_resource_pool( self ):
+        try:
+            resourcePool = self.vm.resourcePool
+            p( 'Resource Pool', moId_map[ resourcePool._moId ] )
+        except KeyError:
+            p( 'Resource Pool', resourcePool._moId )
+        except AttributeError:
+            pass
+
+    def display_hw_ver( self ):
+        hw_ver = self.vm.config.version[ 4: ]  # skip 'vmx-'
+        if hw_ver[ 0 ] == '0':
+            hw_ver = hw_ver[ 1: ]
+        try:
+            hw_desc = '\t({})'.format( hw_compat[ hw_ver ][0] )
+        except KeyError:
+            hw_desc = ""
+        hw_ver += hw_desc
+        p( 'HW version',  hw_ver )
+
+    def display_cpu( self ):
+        vm_conf = self.vm.config
+        hw_conf = self.vm.config.hardware
+        numCPU  = hw_conf.numCPU
+
+        coreargs = [plural( 'core', numCPU )]
+        if getattr( hw_conf, 'numCoresPerSocket', None ):
+            nsockets = numCPU / hw_conf.numCoresPerSocket
+            coreargs.append( plural('%d socket' % nsockets, nsockets ))
+        if getattr( vm_conf, 'cpuHotAddEnabled', False ):
+            coreargs.append( 'hot add enabled' )
+        if getattr( vm_conf, 'cpuHotRemoveEnabled', False ):
+            coreargs.append( 'hot remove enabled' )
+
+        p( 'CPU', numCPU, str.join( ', ', coreargs ) )
+
+    def display_mem( self ):
+        memoryMB = self.vm.config.hardware.memoryMB
+        memargs = [ vsl.scale_size( memoryMB * 1024 * 1024) ]
+        if getattr( self.vm.config, 'memoryHotAddEnabled', False ):
+            memargs.append( 'hot add enabled' )
+        p( 'Memory', str.join( ', ', memargs ))
+
+    def display_host( self ):
+        host = self.vm.summary.runtime.host
+        try:
+            p( 'Hypervisor', moId_map[ host._moId ] )
+        except KeyError:
+            p( 'Hypervisor', host._moId )
+
+    def display_power_state( self ):
+        rt_conf = self.vm.summary.runtime
+        p( 'Boot delay',  self.vm.config.bootOptions.bootDelay, "ms" )
+        p( 'State',       rt_conf.powerState )
+        try:
+            p( 'Boot time', rt_conf.bootTime )
+        except AttributeError:
+            pass
+
+    def display_tools( self ):
+        pf2( 'Tools ', self.vm.config.tools,
              ( ('Power On' , 'afterPowerOn'),
                ('Resume'   , 'afterResume'),
                ('Standby'  , 'beforeGuestStandby'),
@@ -274,11 +330,10 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
                ('Upgrade'  , 'toolsUpgradePolicy'),
                ('syncTime' , 'syncTimeWithHost'), ))
 
-    if verbose:
-        pf( 'Flags', '', vm_conf.flags,
+    def display_flags( self ):
+        pf( 'Flags', '', self.vm.config.flags,
             sorted( ( 'disableAcceleration',
                       'enableLogging',
-                      'useToe',
                       'runWithDebugInfo',
                       'monitorType',
                       'htSharing',
@@ -288,12 +343,10 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
                       'virtualMmuUsage',
                       'virtualExecUsage',
                       'snapshotPowerOffBehavior',
-                      'recordReplayEnabled',
-                      'faultToleranceType',
-                      'cbrcCacheEnabled', )))
+                      'faultToleranceType', )))
 
-    if verbose:
-        pf( 'Power Ops', '', vm_conf.defaultPowerOps,
+    def display_power_ops( self ):
+        pf( 'Power Ops', '', self.vm.config.defaultPowerOps,
             sorted( ( 'powerOffType',
                       'suspendType',
                       'resetType',
@@ -302,12 +355,12 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
                       'defaultResetType',
                       'standbyAction', )))
 
-    if True:
-        for nic in vsi.vmguest_nic_info( vm ):
+    def display_networks( self ):
+        for nic in self.vsi.vmguest_nic_info( self.vm ):
             pf( nic[ 'label' ], '{} on "{}"'.format( nic[ 'type' ], nic[ 'netlabel' ] ),
                 nic, ( 'macAddress', ) )
 
-            if verbose:
+            if self.verbose:
                 obj = nic[ 'obj' ]
                 pi( farindentL, 'wakeOnLanEnabled',  obj.wakeOnLanEnabled )
                 pi( farindentL, 'startConnected',    obj.connectable.startConnected )
@@ -321,33 +374,32 @@ def print_vm( vsi, vmflat, verbose, sep="" ):
                 for ip in cidr[1:]:
                     print( spc, ip )
 
-    # This is a custom key I insert into my VMs
-    if verbose:
-        try:    p( 'Guest json', ex_conf.guestinfo.json )
-        except: pass
-
-    if verbose:
-        try:
-            annot = vm.config.annotation
-            annot = vsl.fold_text( annot, maxlen=70, indent=abs( indentL ) )
-            if annot.find ("\n") >= 0:
-                annot = "\n" + indentS + annot
-            if annot != "":
-                p( 'Annotation', annot )
-        except:
-            pass
-
-    try:
-        text = rt_conf.question.text
+    def _display_text( self, label, text ):
         text = vsl.fold_text( text, maxlen=70, indent=abs( indentL ) )
         if text.find ("\n") >= 0:
             text = "\n" + indentS + text
         if text != "":
-            p( 'Question', text )
-    except AttributeError:
-        pass
+            p( label, text )
 
-    print( sep )
+    def display_annotation( self ):
+        try:
+            self._display_text( 'Annotation', self.vm.config.annotation )
+        except:
+            pass
+
+    def display_question( self ):
+        try:
+            self._display_text( 'Question', self.vm.summary.runtime.question.text )
+        except AttributeError:
+            pass
+
+
+def init_folder_map( vsi ):
+    timer = vsl.Timer('init folder map')
+    p2f = vsi.path_to_subfolder_map( 'vm' )
+    global folder_map
+    folder_map = vsl.inverted_dict ( p2f )
+    timer.report()
 
 def init_moId_map( vsi ):
     timer = vsl.Timer('init moId map')
@@ -356,45 +408,38 @@ def init_moId_map( vsi ):
                           vsi.get_obj_props( moId_types, [ 'name' ] )))
     timer.report()
 
+
+def display_vmlist( vsi, vmlist, verbose ):
+    sep = '-' * 78
+    timer = vsl.Timer('print')
+    n = len( vmlist )
+    for vm in vmlist:
+        n -= 1
+        if not n:
+            sep = ""
+        DisplayVM( vsi, vm, verbose, sep=sep )
+    timer.report()
+
 def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
 
+    init_folder_map( vsi )
     init_moId_map( vsi )
 
     if args.verbose:
         proplist.extend( proplist_verbose )
 
-    sep = '-' * 78
     if args.vm:
-        # Get matching VMs by name.
         vmlist = vsi.find_vm( args.vm )
         if not vmlist:
             return
-
-        # Get the properties we want from the resulting maetches
         vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, vmlist )
-        n = len( vmlist )
-        for vm in vmlist:
-            n -= 1
-            if not n:
-                sep = ""
-            print_vm( vsi, vm, args.verbose, sep=sep )
     else:
         vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
-
-        timer = vsl.Timer('sort')
         vmlist.sort( cmp=lambda a, b: cmp( a[ 'name' ], b[ 'name' ] ))
-        timer.report()
 
-        timer = vsl.Timer('print')
-        n = len( vmlist )
-        for vm in vmlist:
-            n -= 1
-            if not n:
-                sep = ""
-            print_vm( vsi, vm, args.verbose, sep=sep )
-        timer.report()
+    display_vmlist( vsi, vmlist, args.verbose )
 
 
 ##########
