@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.14 2018/09/12 18:28:29 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.15 2018/09/12 19:45:40 friedman Exp $
 
 # Commentary:
 # Code:
@@ -13,6 +13,7 @@
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
+import sys
 
 cmds = { 'to-template'   : 'to_template',
          'to-vm'         : 'to_vm',
@@ -215,7 +216,7 @@ def main():
     if mi.task:
         succ = vsi.taskwait( mi.task )
         if not succ:
-            exit( 1 )
+            sys.exit( 1 )
 
         if args.cmd == 'register' and not args.as_template:
             mtask = []
@@ -225,7 +226,7 @@ def main():
             if mtask:
                 succ = vsi.taskwait( mtask )
                 if not succ:
-                    exit( 1 )
+                    sys.exit( 1 )
 
 if __name__ == '__main__':
     main()

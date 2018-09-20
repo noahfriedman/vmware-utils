@@ -5,7 +5,7 @@
 # Created: 2018-03-22
 # Public domain
 
-# $Id: vsphere-vm-power,v 1.9 2018/09/12 18:30:50 friedman Exp $
+# $Id: vsphere-vm-power,v 1.10 2018/09/12 19:45:40 friedman Exp $
 
 # Commentary:
 # Code:
@@ -13,7 +13,7 @@
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
-
+import sys
 
 cmds = { 'on'          : 'PowerOn',
          'off'         : 'PowerOff',
@@ -107,9 +107,9 @@ def power_on( vsi, vmlist ):
         if callback.tasklist:
             succ2 = vsi.taskwait( callback.tasklist )
             if not succ2:
-                exit( 1 )
+                sys.exit( 1 )
         if not succ or callback.error:
-            exit( 1 )
+            sys.exit( 1 )
 
 def main():
     args = get_args()
@@ -137,7 +137,7 @@ def main():
     if tasklist:
         succ = vsi.taskwait( tasklist )
         if not succ:
-            exit( 1 )
+            sys.exit( 1 )
 
 if __name__ == '__main__':
     main()

@@ -5,7 +5,7 @@
 # Created: 2018-08-20
 # Public domain
 
-# $Id: vsphere-guest-command,v 1.3 2018/09/12 18:24:39 friedman Exp $
+# $Id: vsphere-guest-command,v 1.4 2018/09/19 06:25:59 friedman Exp $
 
 # Commentary:
 # Code:
@@ -55,7 +55,7 @@ def main():
 
     if (args.output or args.separate_stderr) and not args.wait:
         vsl.printerr( 'cannot use --no-wait unless output is disabled' )
-        exit( 1 )
+        sys.exit( 1 )
 
     join_char = '\n' if args.multi else ' '
     pargs = { 'wait'            : args.wait,
@@ -69,7 +69,7 @@ def main():
 
     proc = vop.run( **pargs )
     if not args.wait:
-        exit( 0 )
+        sys.exit( 0 )
 
     res = proc.result
     if res.get( 'output' ):
@@ -80,7 +80,7 @@ def main():
         print( '[Exit {}]'.format( str( res.exit )), file=sys.stderr )
         print( 'Started:', res.startTime, file=sys.stderr )
         print( 'Ended:  ', res.endTime,   file=sys.stderr )
-    exit( res.exit )
+    sys.exit( res.exit )
 
 
 if __name__ == '__main__':

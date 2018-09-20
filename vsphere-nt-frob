@@ -5,7 +5,7 @@
 # Created: 2018-08-20
 # Public domain
 
-# $Id: vsphere-nt-frob,v 1.6 2018/09/12 18:25:51 friedman Exp $
+# $Id: vsphere-nt-frob,v 1.7 2018/09/19 06:29:33 friedman Exp $
 
 # Commentary:
 
@@ -85,7 +85,7 @@ def main():
             script.append ( cmd_template[ cmd ].format( newname ) )
         elif cmd in ('activate'):
             script.append( cmd_template[ cmd ] )
-        elif cmd in ('reboot', 'halt', 'hibnerate', 'poweroff'):
+        elif cmd in ('reboot', 'halt', 'hibernate', 'poweroff'):
             if actions: # not at end of list
                 try:
                     # Try converting first so that we don't pop element if
@@ -99,7 +99,7 @@ def main():
             script.append( cmd_template[ cmd ].format( str( delay )))
         else:
             vsl.printerr( cmd, 'Undefined action' )
-            exit( 1 )
+            sys.exit( 1 )
     script = str.join( '\n', script ) + '\n'
 
     res = vop.run( script=script ).result
@@ -108,7 +108,7 @@ def main():
         print( '[Exit {}]'.format( str( res.exit )), file=sys.stderr )
         print( 'Started:', res.startTime, file=sys.stderr )
         print( 'Ended:  ', res.endTime,   file=sys.stderr )
-    exit( res.exit )
+    sys.exit( res.exit )
 
 
 if __name__ == '__main__':
