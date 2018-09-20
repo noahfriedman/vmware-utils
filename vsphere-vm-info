@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.27 2018/08/24 01:36:09 friedman Exp $
+# $Id: vsphere-vm-info,v 1.28 2018/09/20 16:28:20 friedman Exp $
 
 # Commentary:
 # Code:
@@ -258,7 +258,7 @@ class DisplayVM( object ):
         try:
             folder = folder_map[ vm.parent ]
             p( 'Folder', folder )
-        except KeyError:
+        except (AttributeError, KeyError):
             pass
 
     def display_resource_pool( self ):
