@@ -5,9 +5,12 @@
 # Created: 2018-05-04
 # Public domain
 
-# $Id: vsphere-folder-tree,v 1.5 2018/09/12 19:45:40 friedman Exp $
+# $Id: vsphere-folder-tree,v 1.6 2018/09/18 00:52:19 friedman Exp $
 
 # Commentary:
+
+# TODO: display other objects besides virtual machines in verbose+all mode.
+
 # Code:
 
 from __future__ import print_function
@@ -23,13 +26,17 @@ indent = '    '
 
 def get_args():
     p = vsl.ArgumentParser()
-    p.add( '-v', '--verbose',               action='store_true', help='Display extended info' )
+    p.add( '-a', '--all',     action='store_true', help='Display all folder hierarchies; default is vm-only' )
+    p.add( '-v', '--verbose', action='store_true', help='Display extended info' )
     return p.parse()
 
 def print_hier( folder_to_path, path_to_folder, vm_table ):
     def print_vms( folder, depth ):
-        vmlist = map( lambda vm: vm_table[ vm.id ],
-                      vsl.get_seq_type( folder.childEntity, vim.VirtualMachine ))
+        try:
+            vmlist = map( lambda vm: vm_table[ vm.id ],
+                          vsl.get_seq_type( folder.childEntity, vim.VirtualMachine ))
+        except AttributeError:
+            return
         # Display virtual machines before templates,
         # but within each group display in alphabetical order.
         vmlist.sort( lambda a, b: (
@@ -51,8 +58,17 @@ def print_hier( folder_to_path, path_to_folder, vm_table ):
 
         folder = path_to_folder[ path ]
         del path_to_folder[ path ]
-        subpaths = [ folder_to_path[ obj.id ] for obj in
-                     vsl.get_seq_type( folder.childEntity, vim.Folder ) ]
+        if isinstance( folder, vim.Datacenter ):
+            # Datastore objects have no childEntity attr
+            subpaths = [ folder_to_path[ obj ] for obj in
+                         ( getattr( folder, attr ) for attr in
+                           ( 'datastoreFolder',
+                             'hostFolder',
+                             'networkFolder',
+                             'vmFolder') ) ]
+        else:
+            subpaths = [ folder_to_path[ obj ] for obj in
+                         vsl.get_seq_type( folder.childEntity, vim.Folder ) ]
         subpaths.sort()
         for subpath in subpaths:
             print_folder( subpath, depth + 1 )
@@ -72,18 +88,22 @@ def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
 
+    if args.all:
+        path_to_folder = vsi.path_to_folder_map().copy()
+        folder_to_path = vsi.folder_to_path_map()
+    else:
+        path_to_folder = vsi.path_to_subfolder_map( 'vm' )
+        folder_to_path = vsl.inverted_dict( path_to_folder )
+
     if args.verbose:
         props = [ 'name', 'config.template', 'runtime.powerState' ]
         vm_table = { vm[ 'obj' ].id : vm for vm in
                      vsi.get_obj_props( [vim.VirtualMachine], props ) }
-
-        folder_to_path = vsi.folder_to_path_map()
-        path_to_folder = dict( vsi.path_to_folder_map() ) # copy
         print_hier( folder_to_path, path_to_folder, vm_table )
     else:
-        path_list = sorted( vsi.path_to_folder_map().keys() )
+        path_list = sorted( path_to_folder.keys() )
         for path in path_list:
-            depth = path.count( slash )
+            depth = path.count( slash ) - 1
             last = path[ path.rfind( slash ) + 1 : ]
             print( depth * indent, last, slash, sep='' )
 
