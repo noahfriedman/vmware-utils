@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.52 2018/09/19 06:25:31 friedman Exp $
+# $Id: vspherelib.py,v 1.53 2018/09/20 16:51:28 friedman Exp $
 
 # Commentary:
 # Code:
@@ -596,18 +596,17 @@ class _vmomiFind( object ):
             search = self.si.content.searchIndex
             for vmname in args:
                 i = sortord.index( vmname )
-
-                res = search.FindByDnsName( vmSearch=True, dnsName=vmname )
-                if res:
-                    found.append( res )
-                    sortord.pop( i )
-                    sortord.insert( i, res.name )
-                else:
-                    res = search.FindByIp( vmSearch=True, ip=vmname )
+                searchfns = [
+                    lambda: search.FindAllByDnsName( vmSearch=True, dnsName=vmname ),
+                    lambda: search.FindAllByIp(      vmSearch=True,      ip=vmname ),
+                    lambda: search.FindAllByUuid(    vmSearch=True,    uuid=vmname ), ]
+                for searchfn in searchfns:
+                    res = searchfn()
                     if res:
-                        found.append( res )
+                        found.extend( res )
                         sortord.pop( i )
-                        sortord.insert( i, res.name )
+                        sortord.insert( i, res[0].name )
+                        break
 
         if kwargs.get( 'showerrors', True ) and len( found ) < len( sortord ):
             found_names = map( lambda o: o.name, found )
@@ -622,9 +621,21 @@ class _vmomiFind( object ):
         if not vmlist:
             return
         vmorder = dict( (elt[ 1 ], elt[ 0 ]) for elt in enumerate( args ) )
-        cmp_fn = lambda a, b: cmp( vmorder[ a.name ], vmorder[ b.name ] )
+
+        def vmlist_cmp( a, b ):
+            try:
+                return cmp( vmorder[ a ], vmorder[ b ] )
+            except KeyError:
+                if a in vmorder:
+                    return -1
+                elif b in vmorder:
+                    return 1
+                else:
+                    return cmp( a, b )
+
+        cmp_fn = lambda a, b: vmlist_cmp( a.name, b.name )
         if type( vmlist[ 0 ] ) is vmodl.query.PropertyCollector.ObjectContent:
-            cmp_fn = lambda a, b: cmp( vmorder[ a.obj.name ], vmorder[ b.obj.name ] )
+            cmp_fn = lambda a, b: vmlist_cmp( a.obj.name, b.obj.name )
         vmlist.sort( cmp=cmp_fn )
 
 # end class _vmomiFinder
