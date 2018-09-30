@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.54 2018/09/28 02:37:13 friedman Exp $
+# $Id: vspherelib.py,v 1.55 2018/09/30 20:09:53 friedman Exp $
 
 # Commentary:
 # Code:
@@ -371,7 +371,7 @@ class Cache( object ):
             # Double check it's still the same value
             cv = self.table[ k ]
         except KeyError:
-            cv = v
+            return # key is gone already
         finally:
             self.mutex.release()
         # Double check it's still the same value
@@ -392,12 +392,13 @@ class Cache( object ):
                 pass
 
             self.table[ k ] = v
-            timer = self.timer[ k ] = threading.Timer(
+            self.timer[ k ] = threading.Timer(
                 self.ttl,
                 lambda: self._expire( k, v ) )
             # No need to finish this thread if main thread exits
-            timer.daemon = True
-            timer.start()
+            self.timer[ k ].daemon = True
+            self.timer[ k ].start()
+            time.sleep( 0.0001 ) # let thread have some time to init
         finally:
             self.mutex.release()
         return v # for passthrough
