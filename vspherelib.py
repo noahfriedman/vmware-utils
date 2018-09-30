@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.53 2018/09/20 16:51:28 friedman Exp $
+# $Id: vspherelib.py,v 1.54 2018/09/28 02:37:13 friedman Exp $
 
 # Commentary:
 # Code:
@@ -22,6 +22,7 @@ import re
 import time
 import atexit
 import functools
+import threading
 
 from pyVim      import connect as pyVconnect
 from pyVmomi    import vim, vmodl
@@ -348,6 +349,78 @@ class propList( object ):
 # end class propList
 
 
+class Cache( object ):
+    valid_table_methods = [ 'get', 'has_key', 'keys', 'values', 'items' ]
+
+    def __init__( self, **kwargs ):
+        self.ttl   = kwargs.get( 'ttl', None ) or 60
+        self.table = {}
+        self.timer = {}
+        self.mutex = threading.Lock()
+
+        for method in self.valid_table_methods:
+            setattr( self, method, getattr( self.table, method ))
+
+    def clear( self ):
+        for k in self.table.keys():
+            del self[ k ]
+
+    def _expire( self, k, v ):
+        self.mutex.acquire()
+        try:
+            # Double check it's still the same value
+            cv = self.table[ k ]
+        except KeyError:
+            cv = v
+        finally:
+            self.mutex.release()
+        # Double check it's still the same value
+        if cv is v:
+            del self[ k ]
+
+    def __getitem__( self, k ):
+        # No mutex needed for this; it's either expired or it isn't.
+        return self.table[ k ]
+
+    def __setitem__( self, k, v ):
+        self.mutex.acquire()
+        try:
+            try:
+                self.timer[ k ].cancel()
+                del self.timer[ k ]
+            except KeyError: # no prior timer
+                pass
+
+            self.table[ k ] = v
+            timer = self.timer[ k ] = threading.Timer(
+                self.ttl,
+                lambda: self._expire( k, v ) )
+            # No need to finish this thread if main thread exits
+            timer.daemon = True
+            timer.start()
+        finally:
+            self.mutex.release()
+        return v # for passthrough
+
+    def __delitem__( self, k ):
+        self.mutex.acquire()
+        try:
+            try:
+                self.timer[ k ].cancel()
+                del self.timer[ k ]
+            except KeyError:
+                pass
+
+            if debug:
+                v = self.table[ k ]
+                printerr('debug', self,
+                         'delete {1:#x} {0!r}'.format( k, id( v )))
+            del self.table[ k ]
+        finally:
+            self.mutex.release()
+
+
+
 ##
 ## Mixins for collecting managed objects and properties
 ##
@@ -483,7 +556,7 @@ class _vmomiCollect( object ):
         else:
             res = match
 
-        if res and len( res ) > 0:
+        if res:
             result = []
             for r in res:
                 elt = propset_to_dict( r.propSet )
@@ -509,40 +582,75 @@ class _vmomiCollect( object ):
 ##
 
 class _vmomiFind( object ):
+    def name_to_mo_map( self, typelist, root=None ):
+        if root is None:
+            root = self.si.content.rootFolder
+        typestr  = str.join( ', ', sorted( [elt.__name__ for elt in typelist] ))
+        map_name = 'name to mo map: type=[{}] root={}'.format( typestr, root._moId )
+        try:
+            return self.cache[ map_name ]
+        except KeyError:
+            pass
+
+        result = {}
+        mo_list = self._get_obj_props_nofilter( typelist, ['name'], root=root )
+        for mo in mo_list:
+            name = mo.propSet[0].val
+            try:
+                result[ name ].append( mo.obj )
+            except KeyError:
+                result[ name ] = [ mo.obj ]
+        self.cache[ map_name ] = result
+        return result
+
     def _get_single( self, name, mot, label, root=None ):
         '''If name is null but there is only one object of that type anyway, just return that.'''
         def err( exception, msg, res=root ):
-            if not isinstance( res, vim.ManagedObject.Array):
-                res = self.get_obj( mot, root=res )
+            try:
+                names = [ elt.name for elt in res ]
+                if len( set( names ) ) != len( names ):
+                    # Names are not unique; show their object id.
+                    names = [ '{} ({})'.format( elt.name, elt._moId )
+                              for elt in res ]
+            except TypeError as e:
+                if not res or isinstance( res, vim.ManagedObject ):
+                    names = self.name_to_mo_map( mot, res ).keys()
+                else:
+                    names = res
+
             diag = Diag( msg )
-            if not res:
-                raise exception( diag )
-            diag.append( 'Available {0}s:'.format( label ) )
-            for n in sorted( [elt.name for elt in res] ):
-                diag.append( '\t' + n )
+            if names:
+                diag.append( 'Available {0}s:'.format( label ) )
+                for n in sorted( names ):
+                    diag.append( '\t' + n )
             raise exception( diag )
 
         if name:
-            if type( root ) is vim.ManagedObject.Array:
+            if isinstance( root, vim.ManagedObject.Array ):
                 found = filter( lambda o: o.name == name, root )
             else:
-                found = self.get_obj( mot, { 'name' : name }, root=root )
+                try:
+                    found = self.name_to_mo_map( mot, root )[ name ]
+                except KeyError:
+                    found = None
 
             if not found:
                  err( NameNotFoundError, '{}: {} not found or not available.'.format( name, label ) )
             elif len( found ) > 1:
                 err( NameNotUniqueError, '{}: name is not unique.'.format( name ), found )
         else:
-            if type( root ) is vim.ManagedObject.Array:
+            if isinstance( root, vim.ManagedObject.Array ):
                 found = root
             else:
-                found = self.get_obj( mot, root=root )
+                found = []
+                for val in self.name_to_mo_map( mot, root ).values():
+                    found.extend( val )
 
             if not found:
                 raise NameNotFoundError( 'No {0}s found!'.format( label ))
             elif len( found ) > 1:
                 err( NameNotUniqueError,
-                     'More than one {0}s exists; specify {0}s to use.'.format( label, label ),
+                     'More than one {0} exists; specify {0}s to use.'.format( label, label ),
                      found )
         return found[0]
 
@@ -568,75 +676,44 @@ class _vmomiFind( object ):
     def get_vm( self, name, root=None ):
         return self._get_single( name, [vim.VirtualMachine], 'virtual machine', root=root )
 
-    # TODO: for hosts which still can't be found from the searchindex,
-    # try a substring match on all host names.
     def find_vm( self, *names, **kwargs ):
         args = None # make copy of names since we alter
         if type( names[0] ) is not str:
             args = list( names[0] )
         else:
             args = list( names )
-        sortord = list( args )
-        found = []
 
-        vmlist = self.get_obj_props( [vim.VirtualMachine], { 'name' : args } )
-        if vmlist:
-            for vm in vmlist:
-                found.append( vm[ 'obj' ] )
-                try:
-                    args.remove( vm[ 'name' ] )
-                except ValueError:
-                    # This may happen if two VMs have the same name, we
-                    # already found one and removed it from the list.
-                    # Not supposed to happen, but it has on occasion.
-                    #printerr('duplicate vm name', vm )
-                    pass
+        root   = kwargs.get( 'root', None )
+        vm_map = self.name_to_mo_map( [vim.VirtualMachine], root )
+        def find_by_name( name ):
+            try:
+                return vm_map[ name ]
+            except KeyError:
+                pass
 
-        if args:
-            search = self.si.content.searchIndex
-            for vmname in args:
-                i = sortord.index( vmname )
-                searchfns = [
-                    lambda: search.FindAllByDnsName( vmSearch=True, dnsName=vmname ),
-                    lambda: search.FindAllByIp(      vmSearch=True,      ip=vmname ),
-                    lambda: search.FindAllByUuid(    vmSearch=True,    uuid=vmname ), ]
-                for searchfn in searchfns:
-                    res = searchfn()
-                    if res:
-                        found.extend( res )
-                        sortord.pop( i )
-                        sortord.insert( i, res[0].name )
-                        break
+        idx = self.si.content.searchIndex
+        searchfns = [
+            lambda pat: find_by_name( pat ),
+            lambda pat: idx.FindAllByDnsName( vmSearch=True, dnsName=pat ),
+            lambda pat: idx.FindAllByIp(      vmSearch=True,      ip=pat ),
+            lambda pat: idx.FindAllByUuid(    vmSearch=True,    uuid=pat ) ]
 
-        if kwargs.get( 'showerrors', True ) and len( found ) < len( sortord ):
-            found_names = map( lambda o: o.name, found )
-            for name in sortord:
-                if name not in found_names:
+        found    = []
+        notfound = []
+        for name in args:
+            for fn in searchfns:
+                res = fn( name )
+                if res:
+                    found.extend( res )
+                    break
+            else:
+                notfound.append( name )
+
+        if kwargs.get( 'showerrors', True ):
+            for name in notfound:
                     printerr( '"{}"'.format( name ), 'virtual machine not found.' )
 
-        self.vmlist_sort_by_args( found, sortord )
         return found
-
-    def vmlist_sort_by_args( self, vmlist, args ):
-        if not vmlist:
-            return
-        vmorder = dict( (elt[ 1 ], elt[ 0 ]) for elt in enumerate( args ) )
-
-        def vmlist_cmp( a, b ):
-            try:
-                return cmp( vmorder[ a ], vmorder[ b ] )
-            except KeyError:
-                if a in vmorder:
-                    return -1
-                elif b in vmorder:
-                    return 1
-                else:
-                    return cmp( a, b )
-
-        cmp_fn = lambda a, b: vmlist_cmp( a.name, b.name )
-        if type( vmlist[ 0 ] ) is vmodl.query.PropertyCollector.ObjectContent:
-            cmp_fn = lambda a, b: vmlist_cmp( a.obj.name, b.obj.name )
-        vmlist.sort( cmp=cmp_fn )
 
 # end class _vmomiFinder
 
@@ -648,15 +725,14 @@ class _vmomiFind( object ):
 class _vmomiFolderMap( object ):
     # Generate a complete map of paths to server folder objects.
     # These are cached because round trips to the server are slow.
-    # They can be refreshed with refresh=True keyarg to public methods.
     def _init_folder_path_maps( self ):
         mtbl = {}
         for elt in self.get_obj_props( [vim.Folder, vim.Datacenter],
                                        ['name', 'parent'] ):
             obj = elt[ 'obj' ]
             mtbl[ obj ] = [ elt[ 'name' ], elt[ 'parent' ] ]
-        p2f = self._path_to_folder_map = {}
-        f2p = self._folder_to_path_map = {}
+        p2f = {}
+        f2p = {}
         for obj in mtbl:
             name = []
             start_obj = obj
@@ -677,15 +753,15 @@ class _vmomiFolderMap( object ):
                 name = str.join( '/', name )
                 p2f[ name ]      = start_obj
                 f2p[ start_obj ] = name
+        self.cache[ 'path_to_folder_map' ] = p2f
+        self.cache[ 'folder_to_path_map' ] = f2p
 
-    def _folder_path_map( self, attr, item=Undef, refresh=False ):
-        if refresh:
-            self._init_folder_path_maps()
+    def _folder_path_map( self, attr, item=Undef ):
         try:
-            mapping = getattr( self, attr )
-        except AttributeError:
+            mapping = self.cache[ attr ]
+        except KeyError:
             self._init_folder_path_maps()
-            mapping = getattr( self, attr )
+            mapping = self.cache[ attr ]
         if item is Undef:
             return mapping
         else:
@@ -694,11 +770,11 @@ class _vmomiFolderMap( object ):
             except KeyError:
                 pass
 
-    def folder_to_path_map( self, item=Undef, refresh=False ):
-        return self._folder_path_map( '_folder_to_path_map', item, refresh )
+    def folder_to_path_map( self, item=Undef ):
+        return self._folder_path_map( 'folder_to_path_map', item )
 
-    def path_to_folder_map( self, item=Undef, refresh=False ):
-        return self._folder_path_map( '_path_to_folder_map', item, refresh )
+    def path_to_folder_map( self, item=Undef ):
+        return self._folder_path_map( 'path_to_folder_map', item )
 
     # Prunes folder tree to just the vm, host, network, datastore,
     # etc. subtree.  The datacenter is still prefixed to all the folders
@@ -737,8 +813,13 @@ class _vmomiFolderMap( object ):
 
 class _vmomiNetworkMap( object ):
     def _get_network_moId_label_map( self ):
-        return dict( ( x[ 'obj' ]._moId, x[ 'name' ] ) for x in
-                     self.get_obj_props( [vim.Network], [ 'name' ] ) )
+        try:
+            return self.cache[ 'network_moId_label_map' ]
+        except KeyError:
+            nets = self._get_obj_props_nofilter( [vim.Network], ['name'] )
+            mapping = {  x.obj._moId : x.propSet[ 0 ].val for x in nets }
+            self.cache[ 'network_moId_label_map' ] = mapping
+            return mapping
 
     def get_nic_network_label( self, nic ):
         try:
@@ -750,11 +831,8 @@ class _vmomiNetworkMap( object ):
             groupKey = nic.backing.port.portgroupKey
         except AttributeError:
             return
-        try:
-            return self._network_moId_label_map.get( groupKey, groupKey )
-        except AttributeError:
-            self._network_moId_label_map = self._get_network_moId_label_map()
-            return self._network_moId_label_map.get( groupKey, groupKey )
+        mapping = self._get_network_moId_label_map()
+        return mapping.get( groupKey, groupKey )
 
 # end of class _vmomiNetworkMap
 
@@ -943,9 +1021,10 @@ class vmomiConnect( _vmomiCollect,
         self.pwd    = kwargs[ 'password' ]
         del kwargs[ 'password' ]
         # When idle is negative, no timeout is enabled.
-        # The default is (last checked) 900s.
+        # The default is (last I checked) 900s.
         self.idle   = int( kwargs.get( 'idle', pyVconnect.CONNECTION_POOL_IDLE_TIMEOUT_SEC ))
         self.kwargs = kwargs
+        self.cache  = Cache( ttl=kwargs.get( 'cacheTimeout', None ) )
         self.connect()
 
     # for `with' statements
@@ -965,17 +1044,21 @@ class vmomiConnect( _vmomiCollect,
     def connect( self ):
         timer = Timer( 'vmomiConnect.connect' )
         try:
-            context = None
+            sslContext = None
             if hasattr( ssl, '_create_unverified_context' ):
-                context = ssl._create_unverified_context()
+                sslContext = ssl._create_unverified_context()
 
-            self.si = pyVconnect.SmartConnect(
+            # These stubs enable automatic reconnection if a session times out.
+            smart_stub = pyVconnect.SmartStubAdapter(
                                  host = self.host,
-                                 user = self.user,
-                                  pwd = self.pwd,
                                  port = self.port,
                 connectionPoolTimeout = self.idle,
-                           sslContext = context )
+                           sslContext = sslContext )
+            vsos = pyVconnect.VimSessionOrientedStub
+            login_method = vsos.makeUserLoginMethod( self.user, self.pwd )
+            session_stub = vsos( smart_stub, login_method )
+
+            self.si = vim.ServiceInstance( 'ServiceInstance', session_stub )
         except Exception as e:
             msg = ': '.join(( self.host,
                               'Could not connect',
