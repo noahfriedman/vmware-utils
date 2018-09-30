@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.28 2018/09/20 16:28:20 friedman Exp $
+# $Id: vsphere-vm-info,v 1.29 2018/09/20 16:59:18 friedman Exp $
 
 # Commentary:
 # Code:
@@ -97,7 +97,17 @@ proplist_verbose = [
     'config.defaultPowerOps.powerOffType',
     'config.defaultPowerOps.resetType',
     'config.defaultPowerOps.standbyAction',
-    'config.defaultPowerOps.suspendType', ]
+    'config.defaultPowerOps.suspendType',
+
+    'guest.toolsStatus',
+    'guest.toolsRunningStatus',
+    'guest.toolsVersionStatus',
+    'guest.toolsVersionStatus2',
+    'guest.toolsVersion',
+    'guest.guestState',
+    'guest.screen.width',
+    'guest.screen.height',
+]
 
 moId_types = [ vim.HostSystem, vim.ResourcePool ]
 moId_map   = {}
@@ -214,6 +224,7 @@ class DisplayVM( object ):
 
         if self.verbose:
             self.display_tools()
+            self.display_guest()
             self.display_flags()
             self.display_power_ops()
 
@@ -329,6 +340,20 @@ class DisplayVM( object ):
                ('Reboot'   , 'beforeGuestReboot'),
                ('Upgrade'  , 'toolsUpgradePolicy'),
                ('syncTime' , 'syncTimeWithHost'), ))
+
+    def display_guest( self ):
+        pf2( 'Guest Tools', self.vm.guest,
+             ( ('Tools Status',    'toolsStatus'),
+               ('Running Status',  'toolsRunningStatus'),
+               ('Version Status',  'toolsVersionStatus'),
+               ('Version Status2', 'toolsVersionStatus2'),
+               ('Version',         'toolsVersion'),
+               ('State',           'guestState'),
+             ))
+        pf2( 'Screen', self.vm.guest.screen,
+             ( ('Width',    'width'),
+               ('Height',  'height'),
+             ))
 
     def display_flags( self ):
         pf( 'Flags', '', self.vm.config.flags,
