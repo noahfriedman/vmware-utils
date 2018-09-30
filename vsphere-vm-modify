@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.15 2018/09/12 19:45:40 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.16 2018/09/20 16:33:13 friedman Exp $
 
 # Commentary:
 # Code:
@@ -61,8 +61,9 @@ class mVM():
 
 
     def register( self, vmx ):
-        folder     = self.vsi.path_to_folder( self.args.folder)
-        cluster    = self.vsi.get_cluster(    self.args.cluster )
+        folder_map = self.vsi.path_to_subfolder_map()
+        folder     = folder_map[ self.args.folder ]
+        cluster    = self.vsi.get_cluster( self.args.cluster )
         if self.args.pool:
             pool = self.vsi.get_pool( self.args.pool, cluster.resourcePool.resourcePool )
         else:
@@ -190,8 +191,9 @@ def get_args():
     p.add( '-n', '--name',         default=None )
     p.add( '-t', '--as-template',                                       action='store_true' )
     p.add( '-a', '--annotation',   default=None )
-    p.add( '--start-connected',    default=None, dest='startConnected', action='store_true' )
-    p.add( '--start-disconnected', default=None, dest='startConnected', action='store_false' )
+    p.add( '--start-connected',    default=None,  dest='startConnected', action='store_true' )
+    p.add( '--start-disconnected', default=None,  dest='startConnected', action='store_false' )
+    p.add( '-k', '--keep-uuid',    default=False, dest='keep_uuid',      action='store_true' )
     p.add( 'cmd', choices=cmds,   help='Command to perform on virtual machines' )
     p.add( 'vm',  nargs='+',      help='VM name(s) and/or modification parameters' )
     return p.parse()
@@ -218,7 +220,7 @@ def main():
         if not succ:
             sys.exit( 1 )
 
-        if args.cmd == 'register' and not args.as_template:
+        if args.cmd == 'register' and args.keep_uuid and not args.as_template:
             mtask = []
             for task in mi.task:
                 vm = task.info.result
