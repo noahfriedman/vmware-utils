@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.16 2018/09/20 16:33:13 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.17 2018/09/30 22:53:08 friedman Exp $
 
 # Commentary:
 # Code:
@@ -109,8 +109,22 @@ class mVM():
 
 
     def upgrade( self, vm_name, version=None ):
-        vm = self.vsi.get_vm( vm_name )
-        return vm.UpgradeVM_Task( version=version )
+        pst = vim.VirtualMachine.PowerState
+        vm  = self.vsi.get_vm( vm_name )
+        if vm.runtime.powerState == pst.poweredOn:
+            # Cannot upgrade vm while powered on.
+            # Schedule upgrade instead.
+            o_ver = config.vm.ScheduledHardwareUpgradeInfo
+            n_ver = vim.vm.ScheduledHardwareUpgradeInfo()
+            n_ver.versionKey = version
+            if not o_ver.upgradePolicy:
+                n_ver.upgradePolicy = 'onSoftPowerOff'
+            cfgspec = vim.vm.ConfigSpec(
+                scheduledHardwareUpgradeInfo = n_ver,
+                changeVersion = vm.config.changeVersion )
+            return vm.ReconfigVM_Task( cfgspec )
+        else:
+            return vm.UpgradeVM_Task( version=version )
 
     def resolution( self, vm_name, WxH ):
         vm = self.vsi.get_vm( vm_name )
@@ -203,15 +217,23 @@ def main():
     vsi  = vsl.vmomiConnect( args )
     mi   = mVM( vsi, args )
 
-    if args.cmd in ('rename', 'resolution'):
+    if args.cmd in ['rename', 'resolution']:
         mi.doit( args.vm[0], args.vm[1] )
     elif args.cmd == 'network':
         if len( args.vm ) < 3:
             mi.doit( args.vm[ 0 ], '1', args.vm[ 1 ] )
         else:
             mi.doit( *args.vm[ 0:3 ] )
-    elif args.cmd in ('connect', 'disconnect'):
+    elif args.cmd in ['connect', 'disconnect']:
         mi.doit( *args.vm[ 0:2 ], startConnected=args.startConnected )
+    elif args.cmd in ['upgrade']:
+        try: # Try int coercion to check for valid number
+            version = 'vmx-{:02d}'.format( int( args.vm[ 0 ] ) )
+            args.vm.pop( 0 )
+        except ValueError:
+            version = None
+        for vm in args.vm:
+            mi.doit( vm, version=version )
     else:
         for vm in args.vm:
             mi.doit( vm )
