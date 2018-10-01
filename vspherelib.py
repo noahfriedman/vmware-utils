@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.55 2018/09/30 20:09:53 friedman Exp $
+# $Id: vspherelib.py,v 1.56 2018/09/30 22:47:20 friedman Exp $
 
 # Commentary:
 # Code:
@@ -351,9 +351,11 @@ class propList( object ):
 
 class Cache( object ):
     valid_table_methods = [ 'get', 'has_key', 'keys', 'values', 'items' ]
+    ttl = 60
 
     def __init__( self, **kwargs ):
-        self.ttl   = kwargs.get( 'ttl', None ) or 60
+        if kwargs.get( 'ttl', None ):
+            self.ttl = int( kwargs[ 'ttl' ] )
         self.table = {}
         self.timer = {}
         self.mutex = threading.Lock()
@@ -368,18 +370,20 @@ class Cache( object ):
     def _expire( self, k, v ):
         self.mutex.acquire()
         try:
-            # Double check it's still the same value
             cv = self.table[ k ]
         except KeyError:
-            return # key is gone already
+            try: # key is gone already, but gc timer
+                del self.timer[ k ]
+            except KeyError:
+                pass
+            return
         finally:
             self.mutex.release()
-        # Double check it's still the same value
+        # Double check it's still the same object
         if cv is v:
             del self[ k ]
 
     def __getitem__( self, k ):
-        # No mutex needed for this; it's either expired or it isn't.
         return self.table[ k ]
 
     def __setitem__( self, k, v ):
