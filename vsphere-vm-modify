@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.17 2018/09/30 22:53:08 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.18 2018/10/01 21:00:38 friedman Exp $
 
 # Commentary:
 # Code:
@@ -15,23 +15,25 @@ from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
 import sys
 
-cmds = { 'to-template'   : 'to_template',
-         'to-vm'         : 'to_vm',
-         'register'      : 'register',
-         'unregister'    : 'unregister',
-         'rename'        : 'rename',
+cmds = { 'to-template'      : 'to_template',
+         'to-vm'            : 'to_vm',
+         'register'         : 'register',
+         'unregister'       : 'unregister',
+         'reload'           : 'reload',
+         'rename'           : 'rename',
+         'reset-guest-info' : 'reset_guest_info',
 
-         'network'       : 'network',
-         'connect'       : 'connect',
-         'disconnect'    : 'disconnect',
+         'network'          : 'network',
+         'connect'          : 'connect',
+         'disconnect'       : 'disconnect',
 
-         'tools-mount'   : 'tools_mount',
-         'tools-unmount' : 'tools_unmount',
-         'tools-update'  : 'tools_update',
+         'tools-mount'      : 'tools_mount',
+         'tools-unmount'    : 'tools_unmount',
+         'tools-update'     : 'tools_update',
 
-         'upgrade'       : 'upgrade',
-         'resolution'    : 'resolution',
-         'annotate'      : 'annotate', }
+         'upgrade'          : 'upgrade',
+         'resolution'       : 'resolution',
+         'annotate'         : 'annotate', }
 
 class mVM():
     def __init__( self, vsi, args ):
@@ -87,12 +89,19 @@ class mVM():
     def unregister( self, name ):
         return self.vsi.get_vm( name ).UnregisterVM()
 
+    def reload( self, vm_name ):
+        vm = self.vsi.get_vm( vm_name )
+        vm.Reload()
 
     def rename( self, name, newname ):
         vm = self.vsi.get_vm( vm_name )
         cfgspec = vim.vm.ConfigSpec( name          = newname,
                                      changeVersion = vm.config.changeVersion )
         return vm.ReconfigVM_Task( cfgspec )
+
+    def reset_guest_info( self, vm_name ):
+        vm = self.vsi.get_vm( vm_name )
+        vm.ResetGuestInformation()
 
 
     def tools_mount( self, vm_name ):
