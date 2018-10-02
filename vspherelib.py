@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.56 2018/09/30 22:47:20 friedman Exp $
+# $Id: vspherelib.py,v 1.57 2018/10/01 21:40:00 friedman Exp $
 
 # Commentary:
 # Code:
@@ -53,7 +53,7 @@ def with_conditional_stacktrace( *exceptions ):
     def print_exception( exc, val, sta ):
         try:
             msg = val.msg
-        except KeyError:
+        except AttributeError:
             msg = str( val )
         name = os.path.basename( sys.argv[0] ) or exc.__name__
         print( name, msg, sep=': ', file=sys.stderr )
@@ -432,7 +432,7 @@ class Cache( object ):
 
 class _vmomiCollect( object ):
     def create_filter_spec( self, vimtype, container, props ):
-        props    = propList( props )
+        props    = propList( props or [] )
 
         vpc      = vmodl.query.PropertyCollector
         travSpec = vpc.TraversalSpec( name = 'traverseEntities',
@@ -442,7 +442,7 @@ class _vmomiCollect( object ):
         objSpec  = vpc.ObjectSpec( obj=container, skip=True, selectSet=[ travSpec ] )
         propSet  = [ vpc.PropertySpec( type    = vimt,
                                        pathSet = props.names(),
-                                       all     = not len( props ) )
+                                       all     = bool( not props ) )
                      for vimt in vimtype ]
         return vpc.FilterSpec( objectSet=[ objSpec ], propSet=propSet )
 
@@ -931,76 +931,55 @@ class _vmomiGuestInfo( object ):
 
 
 ##
-## Task-related mixins
+## Monitor-related mixins
 ##
 
-class _vmomiTask( object ):
-    def taskwait( self, tasklist, printsucc=True, callback=None ):
-        our = pseudoPropAttr()
-        our.callback = callback
-
-        def diag_callback( err, *args ):
-            printerr( 'Callback error', err )
-            print( args, file=sys.stderr )
-            # Perhaps we can do something more useful here depending on the
-            # type of error.  For now, just stop further callbacks
-            our.callback = None
-
+class _vmomiMonitor( object ):
+    # This method will keep running until the callback returns any value other than 'None',
+    # or an exception occurs (including any unhandled exception in the callback).
+    # Otherwise the return value is the final return value of the callback.
+    def monitor_property_changes( self, objlist, proplist, callback ):
         spc = self.si.content.propertyCollector
         vpc = vmodl.query.PropertyCollector
 
+        types = set( type( obj ) for obj in objlist )
+        if isinstance( objlist, ( vim.view.ListView, vim.view.ContainerView )):
+            container    = objlist
+            gc_container = False
+        elif isinstance( objlist, list ):
+            container    = self.create_list_view( objlist )
+            gc_container = True
+        else:
+            container    = self.create_container_view( types, objlist )
+            gc_container = True
+
         try:
-            isiterable = iter( tasklist )
-        except TypeError:
-            tasklist = [ tasklist ]
+            filter_spec = self.create_filter_spec( types, container, proplist )
+            filter_obj  = spc.CreateFilter( filter_spec, True )
 
-        objSpecs   = [ vpc.ObjectSpec( obj=task ) for task in tasklist ]
-        propSpec   = vpc.PropertySpec( type=vim.Task, pathSet=[], all=True )
-        filterSpec = vpc.FilterSpec( objectSet=objSpecs, propSet=[ propSpec ] )
-        filter     = spc.CreateFilter( filterSpec, True )
-
-        succ     = 1
-        taskleft = [ task.info.key for task in tasklist ]
-        try:
-            version, state = None, None
-
-            while len( taskleft ):
-                update  = spc.WaitForUpdates( version )
-                version = update.version
-
+            result, version  = None, None
+            while result is None:
+                update = spc.WaitForUpdatesEx( version )
                 for filterSet in update.filterSet:
                     for objSet in filterSet.objectSet:
-                        info = objSet.obj.info
-
                         for change in objSet.changeSet:
-                            if our.callback:
-                                try:
-                                    our.callback( change, objSet, filterSet, update )
-                                except Exception as err:
-                                    diag_callback( err, change, objSet, filterSet, update )
-
-                            if change.name == 'info':
-                                state = change.val.state
-                            elif change.name == 'info.state':
-                                state = change.val
-                            else:
-                                continue
-
-                            if state == vim.TaskInfo.State.success:
-                                taskleft.remove( info.key )
-                                if printsucc:
-                                    print( info.entityName, 'Success', sep=': ' )
-                            elif state == vim.TaskInfo.State.error:
-                                taskleft.remove( info.key )
-                                succ = 0
-                                if not our.callback:
-                                    printerr( info.entityName, info.error.msg )
+                            result = callback( change, objSet, filterSet, update )
+                            if result is not None:
+                                return result
+                version = update.version
         finally:
-            if filter:
-                filter.Destroy()
-        return succ
+            try:
+                # might be unbound if an error occurs in create_filter_spec
+                filter_obj.Destroy()
+            except NameError:
+                pass
+            if gc_container:
+                container.Destroy()
 
-# end class _vmomiTask
+    def taskwait( self, *args, **kwargs ):
+        return vmomiTaskWait( self, *args, **kwargs ).wait()
+
+# end class _vmomiMonitor
 
 
 ##
@@ -1012,7 +991,7 @@ class vmomiConnect( _vmomiCollect,
                     _vmomiFolderMap,
                     _vmomiNetworkMap,
                     _vmomiGuestInfo,
-                    _vmomiTask, ):
+                    _vmomiMonitor ):
 
     def __init__( self, *args, **kwargs ):
         kwargs = dict( **kwargs ) # copy; destructively modified
@@ -1744,6 +1723,64 @@ class vmomiVmGuestProcess( object ):
             return result
 
 # end class vmomiVmGuestProcess
+
+
+######
+##
+######
+
+class vmomiTaskWait( object ):
+    def __init__( self, tasklist, printsucc=True, callback=None ):
+        try:
+            isiterable = iter( tasklist )
+        except TypeError:
+            tasklist = [ tasklist ]
+        self.callback  = callback
+        self.succ      = 1
+
+        self.parent    = parent
+        self.tasklist  = tasklist
+        self.taskleft  = [ task.info.key for task in tasklist ]
+        self.printsucc = printsucc
+
+    def diag_callback( self, err, *args ):
+        printerr( 'Callback error', err )
+        print( args, file=sys.stderr )
+        # Perhaps we can do something more useful here depending on the
+        # type of error.  For now, just stop further callbacks
+        self.callback = None
+
+    def tw_callback( self, change, objSet, filterSet, update ):
+        if self.callback:
+            try:
+                self.callback( change, objSet, filterSet, update )
+            except Exception as err:
+                self.diag_callback( err, change, objSet, filterSet, update )
+
+        if change.name == 'info':
+            state = change.val.state
+        elif change.name == 'info.state':
+            state = change.val
+        else:
+            return
+
+        info = objSet.obj.info
+        if state == vim.TaskInfo.State.success:
+            self.taskleft.remove( info.key )
+            if self.printsucc:
+                print( info.entityName, 'Success', sep=': ' )
+        elif state == vim.TaskInfo.State.error:
+            self.taskleft.remove( info.key )
+            self.succ = 0
+            if not self.callback:
+                printerr( info.entityName, info.error.msg )
+
+        if not self.taskleft:
+            return self.succ
+
+    def wait( self ):
+        return self.parent.monitor_property_changes( self.tasklist, [], self.tw_callback )
+
 
 
 ######
