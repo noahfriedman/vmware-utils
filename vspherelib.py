@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.57 2018/10/01 21:40:00 friedman Exp $
+# $Id: vspherelib.py,v 1.58 2018/10/02 07:54:34 friedman Exp $
 
 # Commentary:
 # Code:
@@ -196,12 +196,29 @@ class Timer( object ):
 ## ArgumentParser subclass with special handling
 ######
 
-class ArgumentParser( argparse.ArgumentParser, object ):
+class _super( object ):
+    super = property( lambda self: super( type( self ), self ) )
+
+class ArgumentParser( argparse.ArgumentParser, _super ):
     searchlist = [ ['XDG_CONFIG_HOME', 'vspherelibrc.py'],
                    ['HOME',           '.vspherelibrc.py'], ]
 
-    def __init__( self, rest=None, help='Remaining arguments', required=False, **kwargs ):
-        super( self.__class__, self ).__init__( **kwargs )
+    class _SubParsersAction( argparse._SubParsersAction, _super ):
+        def add_parser( self, *args, **kwargs ):
+            'Overload: copy description from help if the former is not specified'
+            kwargs.setdefault( 'description', kwargs.get( 'help', None ) )
+            return self.super.add_parser( *args, **kwargs)
+
+    def __init__( self, loadrc=False, rest=None, help='Remaining arguments', required=False, **kwargs ):
+        self.is_subparser = bool( not loadrc )
+        self.super.__init__( **kwargs )
+
+        # override the default subparser so we can insert default
+        # descriptions based on help strings..
+        self.register( 'action', 'parsers', self._SubParsersAction )
+
+        if self.is_subparser:
+            return
 
         timer = Timer( 'loadrc' )
         self.opt = self.loadrc()
@@ -255,25 +272,53 @@ class ArgumentParser( argparse.ArgumentParser, object ):
                     continue
         return opt
 
+    def _arg_dest_default( self, *args ):
+        for optname in args:
+            if optname.find( '--' ) != 0:
+                continue
+            return optname[ 2: ].replace( '-', '_' )
+        return args[0][ 1: ]
+
     def add_argument( self, *args, **kwargs ):
-        'Inject any values from rc file into defaults'
-        if hasattr( self, 'opt' ):
-            for optname in args:
-                if optname.find( '--' ) != 0:
-                    continue
-                name = optname[ 2: ].replace( '-', '_' )
-                if hasattr( self.opt, name ):
-                    kwargs[ 'default' ] = getattr( self.opt, name )
-                    try:
-                        del kwargs[ 'required' ]
-                    except KeyError:
-                        pass
-                    break
-        return super( self.__class__, self ).add_argument( *args, **kwargs )
+        if not self.is_subparser:
+            # Inject any values from rc file into defaults
+            name = self._arg_dest_default( *args )
+            try:
+                kwargs[ 'default' ] = self.opt[ name ]
+                try:
+                    del kwargs[ 'required' ]
+                except KeyError:
+                    pass
+            except (KeyError, AttributeError):
+                pass
+        return self.super.add_argument( *args, **kwargs )
     add = add_argument # alias
 
+    def add_bool( self, *args, **kwargs ):
+        kwargs.setdefault( 'action', 'store_true' )
+        kwargs.setdefault( 'default', None )
+        return self.add_argument( *args, **kwargs )
+
+    def add_mxbool( self, opt_true, opt_false, help_true=None, help_false=None, **kwargs ):
+        'Add mutually exclusive pair of boolean arguments'
+        if not isinstance( opt_true,  list ): opt_true  = [opt_true]
+        if not isinstance( opt_false, list ): opt_false = [opt_false]
+
+        kwargs.setdefault( 'dest',    self._arg_dest_default( *opt_true ) )
+        kwargs.setdefault( 'default', None )
+        if kwargs.get( 'help', None ):
+            if help_true  is None: help_true  = kwargs[ 'help' ]
+            if help_false is None: help_false = kwargs[ 'help' ]
+            del kwargs[ 'help' ]
+
+        group = self.add_mutually_exclusive_group()
+        group.add_argument( *opt_true,  action='store_true',  help=help_true, **kwargs )
+        group.add_argument( *opt_false, action='store_false', help=help_false, **kwargs )
+
     def parse_args( self ):
-        args = super( self.__class__, self ).parse_args()
+        args = self.super.parse_args()
+        if self.is_subparser:
+            return args
 
         if not args.host:
             raise RequiredArgumentError( 'Server host is required' )
@@ -294,7 +339,6 @@ class ArgumentParser( argparse.ArgumentParser, object ):
         return args
     parse = parse_args # alias
 
-
 # end class ArgumentParser
 
 
@@ -305,10 +349,11 @@ class ArgumentParser( argparse.ArgumentParser, object ):
 class propList( object ):
     def __new__( self, *args ):
         '''If first param is already an instance, just return previous instance'''
-        if type( args[0] ) is propList:
+        # n.b. in __new__, self is a class, not an instance
+        if isinstance( args[0], self ):
             return args[0]
         else:
-            return super( self.__class__, self ).__new__( propList, *args )
+            return super( self, self ).__new__( self, *args )
 
     def __init__( self, *args ):
         if type( args[0] ) is propList:
@@ -446,7 +491,6 @@ class _vmomiCollect( object ):
                      for vimt in vimtype ]
         return vpc.FilterSpec( objectSet=[ objSpec ], propSet=propSet )
 
-
     def create_container_view( self, vimtype, root=None, recursive=True ):
         if root is None:
             root = self.si.content.rootFolder
@@ -455,7 +499,6 @@ class _vmomiCollect( object ):
             type      = vimtype,
             recursive = recursive )
 
-
     def create_list_view( self, objs ):
         if type( objs ) is not vim.ManagedObject.Array:
             try:
@@ -463,7 +506,6 @@ class _vmomiCollect( object ):
             except AttributeError:
                 pass
         return self.si.content.viewManager.CreateListView( obj=objs )
-
 
     def _get_obj_props_nofilter( self, vimtype, props=None, root=None, recursive=True ):
         '''
@@ -498,7 +540,6 @@ class _vmomiCollect( object ):
         if gc_container:
             container.Destroy()
         return result
-
 
     def get_obj_props( self, vimtype, props=None, root=None, recursive=True, mustMatchAll=True ):
         '''
@@ -568,7 +609,6 @@ class _vmomiCollect( object ):
                 elt[ 'obj' ] = r.obj
                 result.append( elt )
             return result
-
 
     def get_obj( self, *args, **kwargs):
         result = self.get_obj_props( *args, **kwargs )
@@ -1730,7 +1770,7 @@ class vmomiVmGuestProcess( object ):
 ######
 
 class vmomiTaskWait( object ):
-    def __init__( self, tasklist, printsucc=True, callback=None ):
+    def __init__( self, parent, tasklist, printsucc=True, callback=None ):
         try:
             isiterable = iter( tasklist )
         except TypeError:
