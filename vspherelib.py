@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.58 2018/10/02 07:54:34 friedman Exp $
+# $Id: vspherelib.py,v 1.59 2018/10/04 15:48:25 friedman Exp $
 
 # Commentary:
 # Code:
@@ -64,6 +64,7 @@ def with_conditional_stacktrace( *exceptions ):
                     'faultCause',
                     'faultMessage',
                     'object',
+                    'reason',
                     'windowsSystemErrorCode', ]
         for attr in sorted( val.__dict__ ):
             if attr not in exclude:
