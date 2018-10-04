@@ -5,7 +5,7 @@
 # Created: 2018-03-22
 # Public domain
 
-# $Id: vsphere-vm-power,v 1.10 2018/09/12 19:45:40 friedman Exp $
+# $Id: vsphere-vm-power,v 1.11 2018/09/20 16:33:13 friedman Exp $
 
 # Commentary:
 # Code:
@@ -28,7 +28,7 @@ cmds = { 'on'          : 'PowerOn',
 
 
 def get_args():
-    p = vsl.ArgumentParser()
+    p = vsl.ArgumentParser( loadrc=True )
     p.add( 'cmd', choices=cmds,   help='Command to perform on virtual machines' )
     p.add( 'vm',  nargs='+',      help='VM name(s)' )
     return p.parse()
@@ -86,6 +86,33 @@ class powerOnCallback( object ):
                 vsl.printerr( 'recommendation', elt )
 
 
+class monitorChangeCallback( object ):
+    def __init__( self, vmlist ):
+        self.succ     = 1
+        self.vm_table = { vm : {} for vm in vmlist }
+
+    def entry( self, change, objSet, *rest ):
+        name    = change.name
+        val     = change.val
+        vm      = objSet.obj
+        vm_prop = self.vm_table[ vm ]
+
+        if objSet.kind == 'enter':
+            vm_prop[ name ] = val
+        elif vm_prop.get( name, None ) != val:
+            # Only one prop has to change state to consider
+            # the operation complete for our purposes.
+            if vsl.debug:
+                print( '{}: {}: {} => {}'.format(
+                    vm.name, name, vm_prop[ name ], val ))
+            else:
+                print( vm.name, 'Success', sep=': ' )
+            del self.vm_table[ vm ]
+
+        if not self.vm_table:
+            return self.succ
+
+
 # Walk up the chain of parent objects from the vm until we find a datacenter.
 def obj_datacenter( obj ):
     while obj:
@@ -124,22 +151,40 @@ def main():
 
     op = getattr( type( vmlist[ 0 ] ), cmds[ args.cmd ] )
     tasklist = []
+    monilist = []
     for vm in vmlist:
         try:
             task = op( vm )
             if task:
                 tasklist.append( task )
+            else:
+                monilist.append( vm )
         except vmodl.MethodFault as e:
             vsl.printerr( vm.name, e.msg )
         except Exception as e:
             vsl.printerr( 'Caught Exception', str( e ))
 
+    tsucc, msucc = 1, 1
     if tasklist:
-        succ = vsi.taskwait( tasklist )
-        if not succ:
-            sys.exit( 1 )
+        tsucc = vsi.taskwait( tasklist )
+    if monilist:
+        if args.cmd in ['vm-reboot']:
+            prop = 'runtime.bootTime'
+
+        msucc = vsi.monitor_property_changes(
+            monilist,
+            [ 'runtime.bootTime',   # for vm-reboot
+              'runtime.powerState' ],
+            monitorChangeCallback( monilist ).entry )
+
+    if not (tsucc and msucc):
+        sys.exit( 1 )
+
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
 
 # vsphere-vm-power ends here
