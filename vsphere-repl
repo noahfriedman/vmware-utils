@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-repl,v 1.2 2018/09/19 06:28:28 friedman Exp $
+# $Id: vsphere-repl,v 1.3 2018/09/29 02:51:57 friedman Exp $
 
 # Commentary:
 # Code:
@@ -20,7 +20,7 @@ import vspherelib     as vsl
 from   pyVmomi    import vim, vmodl
 
 
-args = vsl.ArgumentParser().parse()
+args = vsl.ArgumentParser( loadrc=True ).parse()
 vsi  = vsl.vmomiConnect( args )
 
 def restart():

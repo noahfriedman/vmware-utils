@@ -5,7 +5,7 @@
 # Created: 2018-08-20
 # Public domain
 
-# $Id: vsphere-guest-command,v 1.4 2018/09/19 06:25:59 friedman Exp $
+# $Id: vsphere-guest-command,v 1.5 2018/09/20 16:33:13 friedman Exp $
 
 # Commentary:
 # Code:
@@ -17,7 +17,7 @@ import os
 import sys
 
 def get_args():
-    p = vsl.ArgumentParser()
+    p = vsl.ArgumentParser( loadrc=True )
     p.add( '-U', '--guest-username',  required=True )
     p.add( '-P', '--guest-password',  required=True )
     p.add( '-F', '--script-file',                    default=None )

@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.29 2018/09/20 16:59:18 friedman Exp $
+# $Id: vsphere-vm-info,v 1.30 2018/09/30 19:49:18 friedman Exp $
 
 # Commentary:
 # Code:
@@ -115,7 +115,7 @@ folder_map = None
 
 
 def get_args():
-    p = vsl.ArgumentParser()
+    p = vsl.ArgumentParser( loadrc=True )
     p.add( '-a', '--all',     action='store_true', help='Retrieve all known VMs' )
     p.add( '-v', '--verbose', action='store_true', help='Display extended info' )
     p.add( 'vm', nargs='*',                        help='VM names, if not all' )

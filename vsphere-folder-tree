@@ -5,7 +5,7 @@
 # Created: 2018-05-04
 # Public domain
 
-# $Id: vsphere-folder-tree,v 1.6 2018/09/18 00:52:19 friedman Exp $
+# $Id: vsphere-folder-tree,v 1.7 2018/09/20 16:31:39 friedman Exp $
 
 # Commentary:
 
@@ -25,9 +25,9 @@ slash  = '/'
 indent = '    '
 
 def get_args():
-    p = vsl.ArgumentParser()
-    p.add( '-a', '--all',     action='store_true', help='Display all folder hierarchies; default is vm-only' )
-    p.add( '-v', '--verbose', action='store_true', help='Display extended info' )
+    p = vsl.ArgumentParser( loadrc=True )
+    p.add_bool( '-a', '--all',     help='Display all folder hierarchies; default is vm-only' )
+    p.add_bool( '-v', '--verbose', help='Display extended info' )
     return p.parse()
 
 def print_hier( folder_to_path, path_to_folder, vm_table ):

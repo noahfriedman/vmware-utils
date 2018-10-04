@@ -5,7 +5,7 @@
 # Created: 2018-05-08
 # Public domain
 
-# $Id: vsphere-vm-list,v 1.6 2018/09/14 19:15:28 friedman Exp $
+# $Id: vsphere-vm-list,v 1.7 2018/09/18 01:05:38 friedman Exp $
 
 # Commentary:
 # Code:
@@ -18,12 +18,12 @@ poweredOn  = vim.VirtualMachine.PowerState.poweredOn
 poweredOff = vim.VirtualMachine.PowerState.poweredOff
 
 def get_args():
-    p = vsl.ArgumentParser()
-    p.add( '-v', '--verbose',   action='store_true', help='Display extended info' )
-    p.add( '-n', '--on',        action='store_true', default=False, help='Display VMs which are powered on' )
-    p.add( '-f', '--off',       action='store_true', default=False, help='Display VMs which are powered off' )
-    p.add( '-t', '--templates', action='store_true', default=False, help='Display templates' )
-    p.add( '-a', '--all',       action='store_true', default=False, help='Same as -o -f -t; default')
+    p = vsl.ArgumentParser( loadrc=True )
+    p.add_bool( '-v', '--verbose',   help='Display extended info' )
+    p.add_bool( '-n', '--on',        help='Display VMs which are powered on' )
+    p.add_bool( '-f', '--off',       help='Display VMs which are powered off' )
+    p.add_bool( '-t', '--templates', help='Display templates' )
+    p.add_bool( '-a', '--all',       help='Same as -o -f -t; default')
     return p.parse()
 
 def main():

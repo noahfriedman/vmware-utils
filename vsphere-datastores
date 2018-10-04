@@ -5,7 +5,7 @@
 # Created: 2018-03-30
 # Public domain
 
-# $Id: vsphere-datastores,v 1.7 2018/07/21 20:44:09 friedman Exp $
+# $Id: vsphere-datastores,v 1.8 2018/09/12 19:45:40 friedman Exp $
 
 # Commentary:
 # Code:
@@ -21,8 +21,8 @@ props = [ 'summary.name',
           'summary.uncommitted' ]
 
 def get_args():
-    p = vsl.ArgumentParser()
-    p.add( '-H', '--header', action='store_true', help='Show column headers' )
+    p = vsl.ArgumentParser( loadrc=True )
+    p.add_bool( '-H', '--header', help='Show column headers' )
     return p.parse()
 
 

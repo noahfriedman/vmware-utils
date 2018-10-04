@@ -5,7 +5,7 @@
 # Created: 2018-04-03
 # Public domain
 
-# $Id: vsphere-vmrc,v 1.7 2018/08/16 03:03:52 friedman Exp $
+# $Id: vsphere-vmrc,v 1.8 2018/09/12 19:45:40 friedman Exp $
 
 # Commentary:
 # Code:
@@ -20,8 +20,8 @@ import sys
 import time
 
 def get_args():
-    p = vsl.ArgumentParser( rest='vmname', required=True )
-    p.add( '--uri', action='store_true', help='display URIs instead of launching' )
+    p = vsl.ArgumentParser( loadrc=True, rest='vmname', required=True )
+    p.add_bool( '--uri', help='display URIs instead of launching' )
     return p.parse()
 
 

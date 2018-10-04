@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-tags,v 1.6 2018/09/18 01:49:59 friedman Exp $
+# $Id: vsphere-vm-tags,v 1.7 2018/09/18 01:57:23 friedman Exp $
 # This uses the vSphere Automation SDK for Python as well as pyVmomi.
 
 from __future__ import print_function
@@ -111,7 +111,7 @@ class vapiConnect():
         print( vm_ids )
 
 def main():
-    args = vsl.ArgumentParser().parse_args()
+    args = vsl.ArgumentParser( loadrc=True ).parse_args()
     vsi  = vsl.vmomiConnect( args )
 
     obj_props = [ 'name',

@@ -5,7 +5,7 @@
 # Created: 2018-05-08
 # Public domain
 
-# $Id: vsphere-vm-destroy,v 1.4 2018/08/10 01:03:00 friedman Exp $
+# $Id: vsphere-vm-destroy,v 1.5 2018/09/12 19:45:40 friedman Exp $
 
 # Commentary:
 # Code:
@@ -36,7 +36,7 @@ def nuke( vsi, vm ):
     return True
 
 def main():
-    args = vsl.ArgumentParser( rest='vm', required=True ).parse()
+    args = vsl.ArgumentParser( loadrc=True, rest='vm', required=True ).parse()
     vsi  = vsl.vmomiConnect( args )
 
     vmlist = vsi.find_vm( args.vm )

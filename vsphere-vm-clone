@@ -5,7 +5,7 @@
 # Created: 2018-03-09
 # Public domain
 
-# $Id: vsphere-vm-clone,v 1.12 2018/09/12 19:45:40 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.13 2018/09/20 19:24:27 friedman Exp $
 
 # Commentary:
 # Code:
@@ -18,7 +18,7 @@ import sys
 
 ##########
 def get_args():
-    p = vsl.ArgumentParser()
+    p = vsl.ArgumentParser( loadrc=True )
     p.add( '-t', '--template',     required=True, help='Name of template or vm to clone from' )
     p.add( '-v', '--vm-name',      required=True, help='Name for new vm' )
     p.add( '-f', '--folder',                      help='Path of vSphere folder for vm to appear' )
