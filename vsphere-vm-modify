@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.19 2018/10/02 07:43:56 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.20 2018/10/05 00:18:57 friedman Exp $
 
 # Commentary:
 
@@ -105,7 +105,15 @@ def get_args():
 
     ## upgrade
     p_upgrade = p_sub.add_parser( 'upgrade', parents=[p_com_vm], help='Upgrade guest hardware version' )
-    p_upgrade.add( '-v', '--version', type=int, default=None,    help='Upgrade to specific version' )
+    p_upgrade.add( '-v', '--version', type=int, default=None, metavar='N',   help='Upgrade to version N' )
+    p_upgrade.add( '-a', '--always',
+                   dest   = 'upgradePolicy', default = 'onSoftPowerOff',
+                   action = 'store_const',   const   = 'always',
+                   help = ( '''
+             If the machine is currently powered on, virtual hardware
+             upgrades will normally be scheduled after the VM guest shuts
+             down cleanly.  Using this option means schedule the upgrade no
+             matter how the VM might be reset, including host faults. ''' ) )
 
     ## vcpu
     p_vcpu = p_sub.add_parser( 'vcpu', parents=[p_com_vm], help='Configure number of virtual processors' )
@@ -114,7 +122,7 @@ def get_args():
     p_vcpu.add_mxbool( ['-A', '--enable-hot-add'],    ['-D', '--disable-hot-add'],    dest='enable_hot_add' )
     p_vcpu.add_mxbool( ['-R', '--enable-hot-remove'], ['-S', '--disable-hot-remove'], dest='enable_hot_remove' )
     #vvtdEnabled vim.vm.FlagInfo()
-    p_vcpu.add_mxbool( ['-V', '--enable-vvtd'], ['-W', '--disable-vvtd'], dest='enable_vvtd' )
+    #p_vcpu.add_mxbool( ['-V', '--enable-vvtd'], ['-W', '--disable-vvtd'], dest='enable_vvtd' )
 
     return p.parse()
 
@@ -298,14 +306,11 @@ class mVM():
             version = None
         pst = vim.VirtualMachine.PowerState
         if vm.runtime.powerState == pst.poweredOn:
-            # Cannot upgrade vm while powered on.
-            # Schedule upgrade instead.
-            o_ver = vm.config.ScheduledHardwareUpgradeInfo
-            n_ver = vim.vm.ScheduledHardwareUpgradeInfo()
-            n_ver.versionKey = version
-            if not o_ver.upgradePolicy:
-                n_ver.upgradePolicy = 'onSoftPowerOff'
-            cfgspec.scheduledHardwareUpgradeInfo = n_ver
+            # Cannot upgrade vm while powered on; schedule upgrade instead.
+            hui = vim.vm.ScheduledHardwareUpgradeInfo(
+                versionKey    = version,
+                upgradePolicy = self.args.upgradePolicy )
+            cfgspec.scheduledHardwareUpgradeInfo = hui
             return vm.ReconfigVM_Task( cfgspec )
         else:
             return vm.UpgradeVM_Task( version=version )
