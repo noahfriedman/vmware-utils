@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.59 2018/10/04 15:48:25 friedman Exp $
+# $Id: vspherelib.py,v 1.60 2018/10/04 22:59:25 friedman Exp $
 
 # Commentary:
 # Code:
@@ -703,8 +703,17 @@ class _vmomiFind( object ):
     def get_datacenter( self, name, root=None ):
         return self._get_single( name, [vim.Datacenter], 'datacenter', root=root )
 
-    def get_cluster( self, name, root=None ):
-        return self._get_single( name, [vim.ComputeResource], 'cluster', root=root )
+    # results may include ClusterComputeResource
+    def get_compute_resource( self, name, root=None ):
+        return self._get_single( name, [vim.ComputeResource], 'compute resource', root=root )
+    get_cluster = get_compute_resource # legacy; name was poorly chosen.
+
+    # excludes ComputeResource objects
+    def get_cluster_compute_resource( self, name, root=None ):
+        return self._get_single( name, [vim.ClusterComputeResource], 'cluster compute resource', root=root )
+
+    def get_host( self, name, root=None ):
+        return self._get_single( name, [vim.HostSystem], 'host', root=root )
 
     def get_datastore( self, name, root=None ):
         return self._get_single( name, [vim.Datastore], 'datastore', root=root )
