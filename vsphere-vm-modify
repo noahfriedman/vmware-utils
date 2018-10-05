@@ -5,9 +5,13 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.18 2018/10/01 21:00:38 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.19 2018/10/02 07:43:56 friedman Exp $
 
 # Commentary:
+
+# TODO: customize taskwait success status depending on operation.
+# We'll need a custom callback to do this, and suppress the default output.
+
 # Code:
 
 from   __future__ import print_function
@@ -15,149 +19,194 @@ from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
 import sys
 
-cmds = { 'to-template'      : 'to_template',
-         'to-vm'            : 'to_vm',
-         'register'         : 'register',
-         'unregister'       : 'unregister',
-         'reload'           : 'reload',
-         'rename'           : 'rename',
-         'reset-guest-info' : 'reset_guest_info',
+def get_args():
+    p = vsl.ArgumentParser( loadrc=True )
+    p_sub = p.add_subparsers( dest='cmd' )
 
-         'network'          : 'network',
-         'connect'          : 'connect',
-         'disconnect'       : 'disconnect',
+    p_com_vm = vsl.ArgumentParser( add_help=False )
+    p_com_vm.add( 'vm', nargs='+', help='Virtual machines' )
 
-         'tools-mount'      : 'tools_mount',
-         'tools-unmount'    : 'tools_unmount',
-         'tools-update'     : 'tools_update',
+    ## annotate
+    p_annotate = p_sub.add_parser( 'annotate', parents=[p_com_vm], help='Set annotation (notes) for VM' )
+    p_anno_g   = p_annotate.add_mutually_exclusive_group( required=True )
+    p_anno_g.add_argument('-a', '--annotation', default=None, help='Annotation string' )
+    p_anno_g.add_argument('-f', '--file', type=vsl.argparse.FileType('r'), default=None, help='Read annotation from file' )
 
-         'upgrade'          : 'upgrade',
-         'resolution'       : 'resolution',
-         'annotate'         : 'annotate', }
+    ## connect, disconnect
+    p_com_conn = vsl.ArgumentParser( add_help=False )
+    p_com_conn.add_mxbool( ['-C', '--start-connected'],
+                           ['-D', '--start-disconnected'],
+                           help_true  = 'Keep device connected at boot',
+                           help_false = 'Keep device disconnected at boot' )
+    p_com_conn.add( 'vm',      nargs=1, help='Virtual machine' )
+    p_com_conn.add( 'label',   nargs=1, help='Device label to modify' )
+
+    p_sub.add_parser( 'connect',     help='Connect virtual device',    parents=[p_com_conn] )
+    p_sub.add_parser( 'disconnect',  help='Disconnect virtual device', parents=[p_com_conn] )
+
+    ## mem
+    p_mem = p_sub.add_parser( 'mem', help='Configure memory settings' )
+    p_mem.add( '-s', '--size',   help='Memory size in MiB; if not specified, do not change' )
+    p_mem.add_mxbool( ['-E', '--enable-hot-add'], ['-D', '--disable-hot-add'], dest='enable_hot_add' )
+    p_mem.add( 'vm',  nargs='+', help='Virtual machines' )
+
+    ## nested-hv
+    p_mem = p_sub.add_parser( 'nested-hv', parents=[p_com_vm], help='Nested virtualization configuration' )
+    p_mem.add_mxbool( ['-E', '--enable'], ['-D', '--disable'], dest='nestedHV' )
+
+    ## network
+    p_net = p_sub.add_parser( 'network', parents=[p_com_vm], help='Assign ethernet device to another network' )
+    p_net.add( '-n', '--nic',   dest='nicnum',   required=True, help='NIC device number or label')
+    p_net.add( '-l', '--label', dest='netlabel', required=True, help='Network label')
+
+    ## register
+    p_register = p_sub.add_parser( 'register',    help='Add existing VM to inventory' )
+    p_register.add( '-n', '--name',    default=None, help='Change name of VM; default uses previously registered name')
+    p_register.add( '-f', '--folder',  default=None, help='(sub)Folder to place VM in' )
+    p_register.add( '-r', '--pool',    default=None, help='Resource pool' )
+    p_register.add( '-c', '--cluster', default=None, help='Compute cluster or Host' )
+    p_register.add_bool( '-t', '--as-template',      help='Register VM as template' )
+    p_register.add_bool( '-k', '--keep-macs',        help='Do not change existing ethernet MAC addresses' )
+    p_register.add( 'vmx', nargs=1,                  help='Path to existing vmx file, in the form "[datastore] vm_directory/vm.vmx"' )
+
+    ## reload
+    p_sub.add_parser( 'reload', parents=[p_com_vm], help='Reload VM configuration from .vmx' )
+
+    ## rename
+    p_rename = p_sub.add_parser( 'rename', help='Rename virtual machine or template' )
+    p_rename.add( 'vm',      nargs=1,      help='VM to modify' )
+    p_rename.add( 'newname', nargs=1,      help='New name' )
+
+    ## reset_guest_info
+    p_sub.add_parser( 'reset-guest-info', parents=[p_com_vm], help='Flush vsphere guest identity cache' )
+
+    ## resolution
+    p_res = p_sub.add_parser( 'resolution', help='Set console resolution' )
+    p_res.add( 'WxH', nargs=1,   help='Width x Height in pixels' )
+    p_res.add( 'vm',  nargs='+', help='Virtual machines' )
+
+    ## to_template
+    p_sub.add_parser( 'to-template', parents=[p_com_vm], help='Convert VM to template' )
+
+    ## to_vm
+    p_to_vm = p_sub.add_parser( 'to-vm', parents=[p_com_vm], help='Convert template to virtual machine' )
+    p_to_vm.add( '-r', '--pool',    default=None, help='Resource pool' )
+    p_to_vm.add( '-c', '--cluster', default=None, help='Compute cluster or Host' )
+
+    ## tools_mount
+    p_sub.add_parser( 'tools-mount',   parents=[p_com_vm], help='Mount guest tools installer on virtual cd-rom' )
+    ## tools_unmount
+    p_sub.add_parser( 'tools-unmount', parents=[p_com_vm], help='Unmount guest tools installer' )
+    ## tools_update
+    p_sub.add_parser( 'tools-update',  parents=[p_com_vm], help='Update guest tools automatically (when supported)' )
+
+    ## unregister
+    p_sub.add_parser( 'unregister',    parents=[p_com_vm], help="Remove VM from inventory but don't delete" )
+
+    ## upgrade
+    p_upgrade = p_sub.add_parser( 'upgrade', parents=[p_com_vm], help='Upgrade guest hardware version' )
+    p_upgrade.add( '-v', '--version', type=int, default=None,    help='Upgrade to specific version' )
+
+    ## vcpu
+    p_vcpu = p_sub.add_parser( 'vcpu', parents=[p_com_vm], help='Configure number of virtual processors' )
+    p_vcpu.add( '-n', '--number', required=True,  help='Total number of vcpus' )
+    p_vcpu.add( '-s', '--sockets',                help='Number of cpu sockets' )
+    p_vcpu.add_mxbool( ['-A', '--enable-hot-add'],    ['-D', '--disable-hot-add'],    dest='enable_hot_add' )
+    p_vcpu.add_mxbool( ['-R', '--enable-hot-remove'], ['-S', '--disable-hot-remove'], dest='enable_hot_remove' )
+    #vvtdEnabled vim.vm.FlagInfo()
+    p_vcpu.add_mxbool( ['-V', '--enable-vvtd'], ['-W', '--disable-vvtd'], dest='enable_vvtd' )
+
+    return p.parse()
+
 
 class mVM():
     def __init__( self, vsi, args ):
         self.vsi    = vsi
         self.args   = args
         self.task   = []
-        self.method = getattr( self, cmds[ self.args.cmd ] )
+        self.method = getattr( self, args.cmd.replace( '-', '_' ) )
 
-    def doit( self, *rest, **kwargs ):
+    def doit( self ):
         try:
-            task = self.method( *rest, **kwargs )
-            if task:
-                self.task.append( task )
-        except vmodl.MethodFault as e:
-            vsl.printerr( rest[0], e.msg )
-        except Exception as e:
-            vsl.printerr( 'Caught Exception', str( e ))
+            targets = self.args.vm
+        except AttributeError:
+            targets = self.args.vmx
 
+        for arg in targets:
+            try:
+                task = self.method( arg )
+                if task:
+                    self.task.append( task )
+            except vmodl.MethodFault as e:
+                vsl.printerr( rest[0], e.msg )
 
-    def to_template( self, name ):
-        return self.vsi.get_vm( name ).MarkAsTemplate()
+    def _vm_reconfig_prep( self, vm_name ):
+        vm = self.vsi.get_vm( vm_name )
+        cfgspec = vim.vm.ConfigSpec()
+        cfgspec.changeVersion = vm.config.changeVersion
+        return (vm, cfgspec)
 
-    def to_vm( self, name ):
-        cluster = self.vsi.get_cluster( self.args.cluster )
-        pool    = self.vsi.get_pool( self.args.pool, root=cluster )
-        return self.vsi.get_vm( name ).MarkAsVirtualMachine( pool=pool )
-
-
-    def register( self, vmx ):
-        folder_map = self.vsi.path_to_subfolder_map()
-        folder     = folder_map[ self.args.folder ]
-        cluster    = self.vsi.get_cluster( self.args.cluster )
-        if self.args.pool:
-            pool = self.vsi.get_pool( self.args.pool, cluster.resourcePool.resourcePool )
+    def annotate( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        if self.args.file:
+            cfgspec.annotation = self.args.file.read()
+            self.args.file.close()
         else:
-            pool = cluster.resourcePool
-
-        istmpl = self.args.as_template
-        if vmx.find(".vmtx", -5) >= 0:
-            istmpl=True
-
-        return folder.RegisterVM_Task( name=self.args.name,
-                                       path=vmx,
-                                       pool=pool,
-                                       asTemplate=istmpl )
-
-    def register_mark_moved( self, vm ):
-        uuid_action = vim.option.OptionValue( key='uuid.action', value='keep' )
-        cfgspec = vim.vm.ConfigSpec( changeVersion = vm.config.changeVersion )
-        cfgspec.extraConfig.append( uuid_action )
+            cfgspec.annotation = self.args.annotation
         return vm.ReconfigVM_Task( cfgspec )
 
-    def unregister( self, name ):
-        return self.vsi.get_vm( name ).UnregisterVM()
+    def connect( self, vm_name, connect=True ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
 
-    def reload( self, vm_name ):
-        vm = self.vsi.get_vm( vm_name )
-        vm.Reload()
+        devlabel = self.args.label
+        dev = filter( lambda n: n.deviceInfo.label == devlabel,
+                      vm.config.hardware.device )
+        if not dev:
+            raise vsl.NameNotFoundError(
+                '{}: "{}" device not found'.format( name, devlabel ))
 
-    def rename( self, name, newname ):
-        vm = self.vsi.get_vm( vm_name )
-        cfgspec = vim.vm.ConfigSpec( name          = newname,
-                                     changeVersion = vm.config.changeVersion )
+        devspec           = vim.vm.device.VirtualDeviceSpec()
+        devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
+        devspec.device    = dev[0]
+
+        devspec.device.connectable.connected = connect
+        devspec.device.connectable.startConnected = self.args.start_connected
+
+        cfgspec.deviceChange = [ devspec ]
         return vm.ReconfigVM_Task( cfgspec )
 
-    def reset_guest_info( self, vm_name ):
-        vm = self.vsi.get_vm( vm_name )
-        vm.ResetGuestInformation()
+    def disconnect( self, vm_name ):
+        return self.connect( vm_name, connect=False )
 
-
-    def tools_mount( self, vm_name ):
-        vm = self.vsi.get_vm( vm_name )
-        vm.MountToolsInstaller()
-
-    def tools_unmount( self, vm_name ):
-        vm = self.vsi.get_vm( vm_name )
-        vm.UnmountToolsInstaller()
-
-    def tools_update( self, vm_name ):
-        vm = self.vsi.get_vm( vm_name )
-        return vm.UpgradeTools_Task()
-
-
-    def upgrade( self, vm_name, version=None ):
-        pst = vim.VirtualMachine.PowerState
-        vm  = self.vsi.get_vm( vm_name )
-        if vm.runtime.powerState == pst.poweredOn:
-            # Cannot upgrade vm while powered on.
-            # Schedule upgrade instead.
-            o_ver = config.vm.ScheduledHardwareUpgradeInfo
-            n_ver = vim.vm.ScheduledHardwareUpgradeInfo()
-            n_ver.versionKey = version
-            if not o_ver.upgradePolicy:
-                n_ver.upgradePolicy = 'onSoftPowerOff'
-            cfgspec = vim.vm.ConfigSpec(
-                scheduledHardwareUpgradeInfo = n_ver,
-                changeVersion = vm.config.changeVersion )
-            return vm.ReconfigVM_Task( cfgspec )
-        else:
-            return vm.UpgradeVM_Task( version=version )
-
-    def resolution( self, vm_name, WxH ):
-        vm = self.vsi.get_vm( vm_name )
-        width, height = WxH.split( 'x' )
-        vm.SetScreenResolution( width=int( width ), height=int( height ))
-
-    def annotate( self, name ):
-        vm = self.vsi.get_vm( name )
-        cfgspec = vim.vm.ConfigSpec( annotation    = self.args.annotation,
-                                     changeVersion = vm.config.changeVersion )
+    def mem( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        cfgspec.memoryMB            = long( self.args.size )
+        cfgspec.memoryHotAddEnabled = self.args.enable_hot_add
         return vm.ReconfigVM_Task( cfgspec )
 
+    def nested_hv( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        cfgspec.nestedHVEnabled = self.args.nestedHV
+        return vm.ReconfigVM_Task( cfgspec )
 
-    def network( self, vm_name, num, netlabel ):
-        net = self.vsi.get_network( netlabel )
-        vm  = self.vsi.get_vm( vm_name )
+    def network( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+
+        try:
+            nicnum = int( self.args.nicnum )
+            niclabel = 'Network adapter {}'.format( nicnum )
+        except ValueError:
+            niclabel = self.args.nicnum
+
+        netlabel = self.args.netlabel
+        net      = self.vsi.get_network( netlabel )
 
         ethernet = vim.vm.device.VirtualEthernetCard
-        niclabel = 'Network adapter {}'.format( num )
         nic = filter( lambda n: n.deviceInfo.label == niclabel,
                       vsl.get_seq_type( vm.config.hardware.device, ethernet ))
         if not nic:
             raise vsl.NameNotFoundError(
-                '{}: "{}" adapter not found'.format( name, niclabel ))
+                '{}: "{}" adapter not found'.format( vm_name, niclabel ))
 
         devspec           = vim.vm.device.VirtualDeviceSpec()
         devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
@@ -175,93 +224,131 @@ class mVM():
             devspec.device.backing.network = net
             devspec.device.backing.deviceName = netlabel
 
-        cfgspec = vim.vm.ConfigSpec( deviceChange  = [ devspec ],
-                                     changeVersion = vm.config.changeVersion )
+        cfgspec.deviceChange = [ devspec ]
         return vm.ReconfigVM_Task( cfgspec )
 
-    def connect( self, vm_name, devlabel, startConnected=None, connect=True ):
-        vm  = self.vsi.get_vm( vm_name )
 
-        dev = filter( lambda n: n.deviceInfo.label == devlabel,
-                      vm.config.hardware.device )
-        if not dev:
-            raise vsl.NameNotFoundError(
-                '{}: "{}" device not found'.format( name, devlabel ))
+    def register( self, vmx ):
+        folder_map = self.vsi.path_to_subfolder_map()
+        folder     = folder_map[ self.args.folder ]
+        cluster    = self.vsi.get_cluster( self.args.cluster )
+        if self.args.pool:
+            pool = self.vsi.get_pool( self.args.pool, cluster.resourcePool.resourcePool )
+        else:
+            pool = cluster.resourcePool
 
-        devspec           = vim.vm.device.VirtualDeviceSpec()
-        devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
-        devspec.device    = dev[0]
+        istmpl = self.args.as_template
+        if vmx.find(".vmtx", -5) >= 0:
+            istmpl=True
 
-        devspec.device.connectable.connected = connect
-        if startConnected is not None:
-            devspec.device.connectable.startConnected = startConnected
+        return folder.RegisterVM_Task( name       = self.args.name,
+                                       path       = vmx,
+                                       pool       = pool,
+                                       asTemplate = istmpl )
 
-        cfgspec = vim.vm.ConfigSpec( deviceChange  = [ devspec ],
-                                     changeVersion = vm.config.changeVersion )
+    def register_mark_moved( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        kv = vim.option.OptionValue( key='uuid.action', value='keep' )
+        cfgspec.extraConfig.append( kv )
         return vm.ReconfigVM_Task( cfgspec )
 
-    def disconnect( self, vm_name, devlabel, startConnected=None ):
-        return self.connect( vm_name, devlabel, connect=False, startConnected=startConnected )
+    def reload( self, vm_name ):
+        self.vsi.get_vm( vm_name ).Reload()
 
+    def rename( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        cfgspec.name = self.args.newname
+        return vm.ReconfigVM_Task( cfgspec )
 
-def get_args():
-    p = vsl.ArgumentParser()
-    p.add( '--datacenter',         default=None )
-    p.add( '-d', '--datastore',    default=None )
-    p.add( '-r', '--pool',         default=None )
-    p.add( '-c', '--cluster',      default=None )
-    p.add( '-f', '--folder',       default=None )
-    p.add( '-n', '--name',         default=None )
-    p.add( '-t', '--as-template',                                       action='store_true' )
-    p.add( '-a', '--annotation',   default=None )
-    p.add( '--start-connected',    default=None,  dest='startConnected', action='store_true' )
-    p.add( '--start-disconnected', default=None,  dest='startConnected', action='store_false' )
-    p.add( '-k', '--keep-uuid',    default=False, dest='keep_uuid',      action='store_true' )
-    p.add( 'cmd', choices=cmds,   help='Command to perform on virtual machines' )
-    p.add( 'vm',  nargs='+',      help='VM name(s) and/or modification parameters' )
-    return p.parse()
+    def reset_guest_info( self, vm_name ):
+        self.vsi.get_vm( vm_name ).ResetGuestInformation()
+
+    def resolution( self, vm_name, WxH ):
+        vm = self.vsi.get_vm( vm_name )
+        width, height = WxH.split( 'x' )
+        vm.SetScreenResolution(
+            width  = int( width ),
+            height = int( height ))
+
+    def to_template( self, vm_name ):
+        return self.vsi.get_vm( vm_name ).MarkAsTemplate()
+
+    def to_vm( self, vm_name ):
+        cluster = self.vsi.get_cluster( self.args.cluster )
+        pool    = self.vsi.get_pool( self.args.pool, root=cluster )
+        return self.vsi.get_vm( name ).MarkAsVirtualMachine( pool=pool )
+
+    def tools_mount( self, vm_name ):
+        self.vsi.get_vm( vm_name ).MountToolsInstaller()
+
+    def tools_unmount( self, vm_name ):
+        self.vsi.get_vm( vm_name ).UnmountToolsInstaller()
+
+    def tools_update( self, vm_name ):
+        return self.vsi.get_vm( vm_name ).UpgradeTools_Task()
+
+    def unregister( self, vm_name ):
+        return self.vsi.get_vm( vm_name ).UnregisterVM()
+
+    def upgrade( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        try:
+            version = 'vmx-{:02d}'.format( self.args.version )
+        except ValueError:
+            version = None
+        pst = vim.VirtualMachine.PowerState
+        if vm.runtime.powerState == pst.poweredOn:
+            # Cannot upgrade vm while powered on.
+            # Schedule upgrade instead.
+            o_ver = vm.config.ScheduledHardwareUpgradeInfo
+            n_ver = vim.vm.ScheduledHardwareUpgradeInfo()
+            n_ver.versionKey = version
+            if not o_ver.upgradePolicy:
+                n_ver.upgradePolicy = 'onSoftPowerOff'
+            cfgspec.scheduledHardwareUpgradeInfo = n_ver
+            return vm.ReconfigVM_Task( cfgspec )
+        else:
+            return vm.UpgradeVM_Task( version=version )
+
+    def vcpu( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        cfgspec.numCPUs = int( self.args.number )
+        try:
+            nsock = int( self.args[ 'sockets' ] )
+            cfgspec.numCoresPerSocket = cfgspec.numCPUs / nsock
+        except (TypeError, ZeroDivisionError):
+            pass
+        cfgspec.cpuHotAddEnabled    = self.args.enable_hot_add
+        cfgspec.cpuHotRemoveEnabled = self.args.enable_hot_remove
+        return vm.ReconfigVM_Task( cfgspec )
+
 
 def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
     mi   = mVM( vsi, args )
 
-    if args.cmd in ['rename', 'resolution']:
-        mi.doit( args.vm[0], args.vm[1] )
-    elif args.cmd == 'network':
-        if len( args.vm ) < 3:
-            mi.doit( args.vm[ 0 ], '1', args.vm[ 1 ] )
-        else:
-            mi.doit( *args.vm[ 0:3 ] )
-    elif args.cmd in ['connect', 'disconnect']:
-        mi.doit( *args.vm[ 0:2 ], startConnected=args.startConnected )
-    elif args.cmd in ['upgrade']:
-        try: # Try int coercion to check for valid number
-            version = 'vmx-{:02d}'.format( int( args.vm[ 0 ] ) )
-            args.vm.pop( 0 )
-        except ValueError:
-            version = None
-        for vm in args.vm:
-            mi.doit( vm, version=version )
-    else:
-        for vm in args.vm:
-            mi.doit( vm )
+    mi.doit()
     if mi.task:
-        succ = vsi.taskwait( mi.task )
-        if not succ:
-            sys.exit( 1 )
-
-        if args.cmd == 'register' and args.keep_uuid and not args.as_template:
+        succ1 = vsi.taskwait( mi.task )
+        if ( args.cmd == 'register'
+             and     args.keep_macs
+             and not args.as_template ):
             mtask = []
             for task in mi.task:
                 vm = task.info.result
-                mtask.append( mi.register_mark_moved ( vm ) )
+                mtask.append( mi.register_mark_moved ( vm.name ) )
             if mtask:
-                succ = vsi.taskwait( mtask )
-                if not succ:
+                succ2 = vsi.taskwait( mtask )
+                if not succ2:
                     sys.exit( 1 )
+        if not succ1:
+            sys.exit( 1 )
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
 
 # vsphere-vm-modify ends here
