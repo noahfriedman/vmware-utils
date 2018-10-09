@@ -5,7 +5,7 @@
 # Created: 2017-12-25
 # Public domain
 
-# $Id$
+# $Id: vmware-vmdk-info,v 1.2 2017/12/26 07:44:24 friedman Exp $
 
 # Commentary:
 # Code:
@@ -121,9 +121,19 @@ sub parse
             {
               my $sddb = \%ddb;
               my @k = split (/\./, $1);
+              print "\@k = @k\n";
               for (my $i = 0; $i < $#k; $i++)
                 {
                   $sddb->{$k[$i]} ||= {};
+                  if (exists $sddb->{$k[$i]} && ref $sddb->{$k[$i]} ne 'HASH')
+                    {
+                      # Conflict: "key" has a value, but there are also
+                      # subkeys "key.foo", etc. So create hash and move
+                      # previous value of key to the subkey '' (empty str).
+                      my $old = $sddb->{$k[$i]};
+                      $sddb->{$k[$i]} = {};
+                      $sddb->{$k[$i]}->{''} = $old;
+                    }
                   $sddb = $sddb->{$k[$i]};
                 }
               $sddb->{$k[$#k]} = $val;
