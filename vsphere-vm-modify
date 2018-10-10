@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.21 2018/10/05 02:03:08 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.22 2018/10/09 23:09:23 friedman Exp $
 
 # Commentary:
 
@@ -65,7 +65,7 @@ def get_args():
     p_register.add( '-f', '--folder',  default=None, help='(sub)Folder to place VM in' )
     p_register.add( '-r', '--pool',    default=None, help='Resource pool' )
     p_register.add( '-c', '--cluster', default=None, help='Compute cluster or Host' )
-    p_register.add_bool( '-t', '--as-template',      help='Register VM as template' )
+    p_register.add_bool( '-t', '--as-template', default=False, help='Register VM as template' )
     p_register.add_bool( '-k', '--keep-macs',        help='Do not change existing ethernet MAC addresses' )
     p_register.add( 'vmx', nargs=1,                  help='Path to existing vmx file, in the form "[datastore] vm_directory/vm.vmx"' )
 
@@ -246,8 +246,8 @@ class mVM():
             pool = cluster.resourcePool
 
         istmpl = self.args.as_template
-        if vmx.find(".vmtx", -5) >= 0:
-            istmpl=True
+        if vmx.find( '.vmtx', -5 ) >= 0:
+            istmpl = True
 
         return folder.RegisterVM_Task( name       = self.args.name,
                                        path       = vmx,
@@ -265,7 +265,7 @@ class mVM():
 
     def rename( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
-        cfgspec.name = self.args.newname
+        cfgspec.name = self.args.newname[0]
         return vm.ReconfigVM_Task( cfgspec )
 
     def reset_guest_info( self, vm_name ):
