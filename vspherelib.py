@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.60 2018/10/04 22:59:25 friedman Exp $
+# $Id: vspherelib.py,v 1.61 2018/10/05 04:05:07 friedman Exp $
 
 # Commentary:
 # Code:
@@ -1868,28 +1868,61 @@ def propset_to_dict( propset, objtype=dict ):
         pass
     return objtype( (p.name, p.val) for p in propset )
 
-
-# it can be useful to use objtype=pseudoPropAttr for
-# lists of dotted obj props from managed objects.
-#
-# n.b. this will error if there are keys which are
-# prefixes of other keys, since the shorter key cannot
-# have both an end value and a link to subkeys.
 def flat_to_nested_dict( flat, sep='.', objtype=dict ):
+    '''
+    Convert a dict with keys of the form 'a.b.c', 'a.b.d', etc. into
+    a hierarchical tree of nested dicts.
+
+    The optional keyword arg SEP can be used to change the separator.
+
+    If there are keys which are prefixes of other keys, the shorter key's
+    value will be moved to the None slot of the subkey dict, since a key
+    cannot have both an immediate end value and a link to subkeys.
+
+    For example, given
+
+            { 'a.b.c' : 1,
+              'd.e.f' : 2, }
+
+    the result will be
+
+            { 'a' : { 'b' : { 'c' : 1 }, },
+              'd' : { 'e' : { 'f' : 2 }, }, }
+
+    but given
+
+            { 'a.b'   : 0,
+              'a.b.c' : 1,
+              'd.e.f' : 2, }
+
+    the result will be
+
+            { 'a' : { 'b' : { None : 0,
+                              'c'  : 1 }, },
+              'd' : { 'e' : { 'f'  : 2 }, }, }
+
+
+    The optional keyword arg OBJTYPE can be used to specify the datatype for
+    the new tree object.  For example using objtype=pseudoPropAttr provides a
+    dict object whose keys can also be accessed as objects, e.g.
+
+            result['a']['b']['c'] == result.a.b.c
+    '''
     nested = objtype()
     for k in flat:
         parts = k.split( sep )
         walk = nested
         for elt in parts[ 0 : -1 ]: # all but last
             try:
-                walk = walk[ elt ]
+                if not isinstance( walk[ elt ], objtype ):
+                    prev_elt = walk[ elt ]
+                    walk[ elt ] = objtype()
+                    walk[ elt ][ None ] = prev_elt
             except KeyError:
                 walk[ elt ] = objtype()
-                walk = walk[ elt ]
-        assert parts[ -1 ] not in walk, (parts, flat[ k ], walk[ parts[ -1 ]])
+            walk = walk[ elt ]
         walk[ parts[ -1 ] ] = flat[ k ]
     return nested
-
 
 def environ_to_dict( names, preserve_case=False ):
     res = {}
