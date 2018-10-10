@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.30 2018/09/30 19:49:18 friedman Exp $
+# $Id: vsphere-vm-info,v 1.31 2018/10/04 15:51:05 friedman Exp $
 
 # Commentary:
 # Code:
@@ -196,29 +196,29 @@ class DisplayVM( object ):
     def __init__( self, vsi, vmprops, verbose=False, sep="" ):
         self.vsi = vsi
         self.vm = vsl.flat_to_nested_dict( vmprops, objtype=vsl.pseudoPropAttr )
+        try:
+            self.vm.config.extraConfig = vsl.flat_to_nested_dict(
+                vsl.attr_to_dict( self.vm.config.extraConfig ),
+                objtype=vsl.pseudoPropAttr )
+        except AttributeError:
+            pass
         self.verbose = verbose
         self.sep = sep
         self.display()
 
     def display( self ):
         vm      = self.vm
-        vm_conf = vm.config
-        hw_conf = vm.config.hardware
-        gu_conf = vm.guest
-        su_conf = vm.summary
-        rt_conf = vm.summary.runtime
-        ex_conf = getattr( vm.config, 'extraConfig', None )
 
         self.display_name()
         self.display_location()
         self.display_resource_pool()
-        p( 'Guest type', vm_conf.guestFullName )
+        p( 'Guest type', vm.config.guestFullName )
         self.display_hw_ver()
         self.display_cpu()
         self.display_mem()
-        p( 'NICs',    su_conf.config.numEthernetCards )
-        p( 'Disks',   su_conf.config.numVirtualDisks )
-        p( 'Storage', storage_size( su_conf.storage ))
+        p( 'NICs',    vm.summary.config.numEthernetCards )
+        p( 'Disks',   vm.summary.config.numVirtualDisks )
+        p( 'Storage', storage_size( vm.summary.storage ))
         self.display_host()
         self.display_power_state()
 
@@ -227,14 +227,15 @@ class DisplayVM( object ):
             self.display_guest()
             self.display_flags()
             self.display_power_ops()
+            self.display_vnc()
 
         self.display_networks()
 
         # This is a custom key I insert into my VMs
         if self.verbose:
             try:
-                p( 'Guest json', ex_conf.guestinfo.json )
-            except:
+                p( 'Guest json', vm.config.extraConfig.guestinfo.json )
+            except AttributeError:
                 pass
 
             self.display_annotation()
@@ -350,10 +351,13 @@ class DisplayVM( object ):
                ('Version',         'toolsVersion'),
                ('State',           'guestState'),
              ))
-        pf2( 'Screen', self.vm.guest.screen,
-             ( ('Width',    'width'),
-               ('Height',  'height'),
-             ))
+        try:
+            pf2( 'Screen', self.vm.guest.screen,
+                 ( ('Width',    'width'),
+                   ('Height',  'height'),
+                 ))
+        except AttributeError:
+            pass
 
     def display_flags( self ):
         pf( 'Flags', '', self.vm.config.flags,
@@ -379,6 +383,20 @@ class DisplayVM( object ):
                       'defaultSuspendType',
                       'defaultResetType',
                       'standbyAction', )))
+
+    def display_vnc( self ):
+        try:
+            vnc = self.vm.config.extraConfig.RemoteDisplay.vnc
+            if getattr( vnc, 'key', False ):
+                vnc.key = '(set)'
+            else:
+                vnc.key = 'None'
+            pf( 'VNC', '', vnc,
+                ( 'enabled',
+                  'port', 'frob',
+                  'key', ))
+        except AttributeError:
+            return
 
     def display_networks( self ):
         for nic in self.vsi.vmguest_nic_info( self.vm ):
