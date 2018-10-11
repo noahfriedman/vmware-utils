@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.61 2018/10/05 04:05:07 friedman Exp $
+# $Id: vspherelib.py,v 1.62 2018/10/10 21:02:32 friedman Exp $
 
 # Commentary:
 # Code:
@@ -101,6 +101,7 @@ def with_conditional_stacktrace( *exceptions ):
 
 def tidy_vimfaults( fn ):
     decorator = with_conditional_stacktrace(
+        vim.fault.GuestOperationsUnavailable,
         vim.fault.GuestRegistryKeyInvalid,
         vim.fault.NoPermission,
         vim.fault.InvalidGuestLogin )
