@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.23 2018/10/10 20:40:36 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.24 2018/10/12 01:17:16 friedman Exp $
 
 # Commentary:
 
@@ -32,6 +32,12 @@ def get_args():
     p_anno_g.add_argument('-a', '--annotation', default=None, help='Annotation string' )
     p_anno_g.add_argument('-f', '--file', type=vsl.argparse.FileType('r'), default=None, help='Read annotation from file' )
 
+    ## boot-options
+    # Todo: add option(s) to specify boot order
+    p_boot = p_sub.add_parser( 'boot-options', parents=[p_com_vm], help='Configure bios boot options' )
+    p_boot.add(      '-d', '--delay',                              help='Delay in ms before bios initiates boot')
+    p_boot.add_bool( '-e', '--enter-setup',                        help='Enter BIOS setup on next boot (one-time only)')
+
     ## connect, disconnect
     p_com_conn = vsl.ArgumentParser( add_help=False )
     p_com_conn.add_mxbool( ['-C', '--start-connected'],
@@ -56,8 +62,9 @@ def get_args():
 
     ## network
     p_net = p_sub.add_parser( 'network', parents=[p_com_vm], help='Assign ethernet device to another network' )
-    p_net.add( '-n', '--nic',   dest='nicnum',   required=True, help='NIC device number or label')
-    p_net.add( '-l', '--label', dest='netlabel', required=True, help='Network label')
+    p_net.add( '-n', '--nic',   dest='nicnum',   required=True,  help='NIC device number or label')
+    p_net.add( '-l', '--label', dest='netlabel', required=False, help='Network label')
+    p_net.add_bool( '-r', '--reset-mac',                         help='Regenerate MAC address')
 
     ## register
     p_register = p_sub.add_parser( 'register',    help='Add existing VM to inventory' )
@@ -146,7 +153,10 @@ class mVM():
                 if task:
                     self.task.append( task )
             except vmodl.MethodFault as e:
-                vsl.printerr( rest[0], e.msg )
+                if vsl.debug:
+                    raise
+                else:
+                    vsl.printerr( arg, e.msg )
 
     def _vm_reconfig_prep( self, vm_name ):
         vm = self.vsi.get_vm( vm_name )
@@ -163,22 +173,34 @@ class mVM():
             cfgspec.annotation = self.args.annotation
         return vm.ReconfigVM_Task( cfgspec )
 
+    def boot_options( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        bootspec = vim.vm.BootOptions()
+        bootspec.enterBIOSSetup = self.args.enter_setup
+        try:
+            bootspec.bootDelay = long( self.args.delay )
+        except TypeError:
+            pass
+        cfgspec.bootOptions = bootspec
+        return vm.ReconfigVM_Task( cfgspec )
+
     def connect( self, vm_name, connect=True ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
 
-        devlabel = self.args.label
+        devlabel = self.args.label[0]
         dev = filter( lambda n: n.deviceInfo.label == devlabel,
                       vm.config.hardware.device )
         if not dev:
             raise vsl.NameNotFoundError(
-                '{}: "{}" device not found'.format( name, devlabel ))
+                '{}: "{}" device not found'.format( vm_name, devlabel ))
 
         devspec           = vim.vm.device.VirtualDeviceSpec()
         devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
         devspec.device    = dev[0]
 
         devspec.device.connectable.connected = connect
-        devspec.device.connectable.startConnected = self.args.start_connected
+        if self.args.start_connected is not None:
+            devspec.device.connectable.startConnected = self.args.start_connected
 
         cfgspec.deviceChange = [ devspec ]
         return vm.ReconfigVM_Task( cfgspec )
@@ -206,9 +228,6 @@ class mVM():
         except ValueError:
             niclabel = self.args.nicnum
 
-        netlabel = self.args.netlabel
-        net      = self.vsi.get_network( netlabel )
-
         ethernet = vim.vm.device.VirtualEthernetCard
         nic = filter( lambda n: n.deviceInfo.label == niclabel,
                       vsl.get_seq_type( vm.config.hardware.device, ethernet ))
@@ -220,17 +239,24 @@ class mVM():
         devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
         devspec.device    = nic[0]
 
-        try:
-            dvs_port = vim.dvs.PortConnection()
-            dvs_port.portgroupKey = net.key
-            dvs_port.switchUuid   = net.config.distributedVirtualSwitch.uuid
+        netlabel = self.args.netlabel
+        if netlabel:
+            net = self.vsi.get_network( netlabel )
+            try:
+                dvs_port = vim.dvs.PortConnection()
+                dvs_port.portgroupKey = net.key
+                dvs_port.switchUuid   = net.config.distributedVirtualSwitch.uuid
 
-            devspec.device.backing = ethernet.DistributedVirtualPortBackingInfo()
-            devspec.device.backing.port = dvs_port
-        except AttributeError:
-            devspec.device.backing = ethernet.NetworkBackingInfo()
-            devspec.device.backing.network = net
-            devspec.device.backing.deviceName = netlabel
+                devspec.device.backing = ethernet.DistributedVirtualPortBackingInfo()
+                devspec.device.backing.port = dvs_port
+            except AttributeError:
+                devspec.device.backing = ethernet.NetworkBackingInfo()
+                devspec.device.backing.network = net
+                devspec.device.backing.deviceName = netlabel
+
+        if self.args.reset_mac:
+            devspec.device.addressType = 'Generated'
+            devspec.device.macAddress  = ''
 
         cfgspec.deviceChange = [ devspec ]
         return vm.ReconfigVM_Task( cfgspec )
