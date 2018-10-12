@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-tags,v 1.7 2018/09/18 01:57:23 friedman Exp $
+# $Id: vsphere-vm-tags,v 1.8 2018/10/04 15:51:05 friedman Exp $
 # This uses the vSphere Automation SDK for Python as well as pyVmomi.
 
 from __future__ import print_function
@@ -27,6 +27,12 @@ requests.packages.urllib3.disable_warnings( InsecureRequestWarning )
 import vspherelib                               as vsl
 from   pyVmomi                              import vim
 
+import pprint
+_pp_printer = pprint.PrettyPrinter( indent=2, width=40 )
+def _print( *args, **kwargs ):
+    for arg in args:
+        _pp_printer.pprint( arg, **kwargs )
+
 class vapiConnect():
     def __init__( self, host=None, user=None, passwd=None, vmlist=None ):
         self.vmlist = vmlist
@@ -51,7 +57,7 @@ class vapiConnect():
 
     def login( self ):
         # Pass user credentials (user/password) in the security context to authenticate.
-        self.userpass_ctx = create_user_password_security_context(self.user, self.passwd)
+        self.userpass_ctx = create_user_password_security_context( self.user, self.passwd )
         self.stub_config.connector.set_security_context( self.userpass_ctx )
         # Create the stub for the session service and login by creating a session.
         self.session_id = cis_client.Session( self.stub_config ).create()
@@ -69,6 +75,7 @@ class vapiConnect():
     def __del__( self ):
         self.logout()
 
+    # This is slow but appears to be all that works with vSphere 6.0
     def vmid_tags( self ):
         result = {}
         for cat_id in self.cat_svc.list():
@@ -79,9 +86,9 @@ class vapiConnect():
                 tag = self.tag_svc.get( tag_id )
                 tag_name = tag.name
 
-                vm_ids = map( lambda obj: obj.id,
-                              filter( lambda obj: obj.type == 'VirtualMachine',
-                                      self.tag_assoc.list_attached_objects( tag_id )))
+                vm_ids = [ obj.id for obj in
+                           filter( lambda obj: obj.type == 'VirtualMachine',
+                                   self.tag_assoc.list_attached_objects( tag_id )) ]
                 for vm_id in vm_ids:
                     try:
                         vm_result = result[ vm_id ]
@@ -94,21 +101,21 @@ class vapiConnect():
                     vm_cat.append( tag.name )
         return result
 
-    # WIP
-    def vmid_tags_fast1( self ):
+    # WIP - Does this method work at all with vSphere 6.0?
+    def vmid_tags_by_vm( self ):
         vm_ids = [ std_client.DynamicID( type = 'VirtualMachine',
                                          id   = str( vm['obj'].id ) )
                    for vm in self.vmlist ]
         tags = self.tag_assoc.list_attached_tags_on_objects( vm_ids )
-        print( tags )
+        _print( tags )
 
-    # WIP
-    def vmid_tags_fast2( self ):
+    # WIP - # Does this method work at all with vSphere 6.0?
+    def vmid_tags_by_tags( self ):
         tag_ids = []
         for cat_id in self.cat_svc.list():
             tag_ids.extend( self.tag_svc.list_tags_for_category( cat_id ))
         vm_ids = self.tag_assoc.list_attached_objects_on_tags( tag_ids )
-        print( vm_ids )
+        _print( vm_ids )
 
 def main():
     args = vsl.ArgumentParser( loadrc=True ).parse_args()
@@ -135,6 +142,20 @@ def main():
     t = vsl.Timer('vmid_tags')
     vm_tags = vpi.vmid_tags()
     t.report()
+
+    # The fact that these raise Unauthenticated rather than Unauthorized
+    # against vSphere 6.0 leads me to suspect that these methods just
+    # aren't supported there.
+    try:
+        t = vsl.Timer('vmid_tags_by_tags')
+        vpi.vmid_tags_by_tags()
+        t.report()
+
+        t = vsl.Timer('vmid_tags_by_vm')
+        vpi.vmid_tags_by_vm()
+        t.report()
+    except errors_client.Unauthenticated:
+        pass
 
     t = vsl.Timer('make vmtbl')
     vmtbl = {}
