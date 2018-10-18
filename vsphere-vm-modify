@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.24 2018/10/12 01:17:16 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.25 2018/10/12 07:56:15 friedman Exp $
 
 # Commentary:
 
@@ -131,6 +131,12 @@ def get_args():
     #vvtdEnabled vim.vm.FlagInfo()
     #p_vcpu.add_mxbool( ['-V', '--enable-vvtd'], ['-W', '--disable-vvtd'], dest='enable_vvtd' )
 
+    ## vnc
+    p_vnc = p_sub.add_parser( 'vnc', parents=[p_com_vm], help='Configure VNC console parameters' )
+    p_vnc.add_mxbool( ['-E', '--enable'], ['-D', '--disable'] )
+    p_vnc.add( '-p', '--vnc-port', help='Listening port on host' )
+    p_vnc.add( '-k', '--vnc-key',  help='VNC password' )
+
     return p.parse()
 
 
@@ -163,6 +169,12 @@ class mVM():
         cfgspec = vim.vm.ConfigSpec()
         cfgspec.changeVersion = vm.config.changeVersion
         return (vm, cfgspec)
+
+    @staticmethod
+    def _setopt( cfgspec, key, value ):
+        if value is not None:
+            opt = vim.option.OptionValue( key=key, value=str( value ) )
+            cfgspec.extraConfig.append( opt )
 
     def annotate( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
@@ -351,6 +363,26 @@ class mVM():
             pass
         cfgspec.cpuHotAddEnabled    = self.args.enable_hot_add
         cfgspec.cpuHotRemoveEnabled = self.args.enable_hot_remove
+        return vm.ReconfigVM_Task( cfgspec )
+
+    def vnc( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        self._setopt ( cfgspec, 'RemoteDisplay.vnc.enabled', self.args.enable )
+        self._setopt ( cfgspec, 'RemoteDisplay.vnc.port', self.args.vnc_port )
+
+        if self.args.vnc_key:
+            try:
+                import d3des
+            except ImportError:
+                vsl.printerr( 'Cannot set vnc key without d3des module.' )
+                sys.exit( 1 )
+            import base64
+            import struct
+            ek = d3des.deskey( (self.args.vnc_key + '\x00'*8)[ :8 ], False )
+            buf = struct.pack( '32I', *ek )
+            encoded = base64.standard_b64encode( buf )
+            self._setopt ( cfgspec, 'RemoteDisplay.vnc.key',  encoded )
+
         return vm.ReconfigVM_Task( cfgspec )
 
 
