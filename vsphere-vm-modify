@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.25 2018/10/12 07:56:15 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.26 2018/10/18 01:59:21 friedman Exp $
 
 # Commentary:
 
@@ -365,24 +365,33 @@ class mVM():
         cfgspec.cpuHotRemoveEnabled = self.args.enable_hot_remove
         return vm.ReconfigVM_Task( cfgspec )
 
+
+    def _vnckey( self, plain ):
+        try_imports = [ 'import d3des',
+                        'from vnc2flv   import d3des',
+                        'from vncpasswd import d3des', ]
+        for expr in try_imports:
+            try:
+                exec expr
+                break
+            except ImportError:
+                pass
+        else:
+            vsl.printerr( 'Cannot set vnc key without d3des module.' )
+            sys.exit( 1 )
+        import base64
+        import struct
+        ek  = d3des.deskey( (plain + '\x00'*8)[ :8 ], False )
+        buf = struct.pack( '32I', *ek )
+        return base64.standard_b64encode( buf )
+
     def vnc( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
         self._setopt ( cfgspec, 'RemoteDisplay.vnc.enabled', self.args.enable )
         self._setopt ( cfgspec, 'RemoteDisplay.vnc.port', self.args.vnc_port )
-
         if self.args.vnc_key:
-            try:
-                import d3des
-            except ImportError:
-                vsl.printerr( 'Cannot set vnc key without d3des module.' )
-                sys.exit( 1 )
-            import base64
-            import struct
-            ek = d3des.deskey( (self.args.vnc_key + '\x00'*8)[ :8 ], False )
-            buf = struct.pack( '32I', *ek )
-            encoded = base64.standard_b64encode( buf )
+            encoded = self._vnckey( self.args.vnc_key )
             self._setopt ( cfgspec, 'RemoteDisplay.vnc.key',  encoded )
-
         return vm.ReconfigVM_Task( cfgspec )
 
 
