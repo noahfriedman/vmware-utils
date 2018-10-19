@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.62 2018/10/10 21:02:32 friedman Exp $
+# $Id: vspherelib.py,v 1.63 2018/10/11 23:20:31 friedman Exp $
 
 # Commentary:
 # Code:
@@ -51,21 +51,24 @@ debug = bool( os.getenv( 'VSPHERELIB_DEBUG' ))
 
 def with_conditional_stacktrace( *exceptions ):
     def print_exception( exc, val, sta ):
+        args = [os.path.basename( sys.argv[0] ) or exc.__name__]
         try:
-            msg = val.msg
+            args.append( val.object.name )
         except AttributeError:
-            msg = str( val )
-        name = os.path.basename( sys.argv[0] ) or exc.__name__
-        print( name, msg, sep=': ', file=sys.stderr )
-
+            pass
+        try:
+            args.append( val.msg )
+        except AttributeError:
+            args.append( str( val ) )
+        print( *args, sep=': ', file=sys.stderr )
         exclude = [ 'dynamicType',
                     'dynamicProperty',
-                    'msg',
                     'faultCause',
                     'faultMessage',
                     'object',
-                    'reason',
-                    'windowsSystemErrorCode', ]
+                    'windowsSystemErrorCode',
+                    'msg',
+                    'reason', ]
         for attr in sorted( val.__dict__ ):
             if attr not in exclude:
                 print( attr, getattr( val, attr ), sep=' = ', file=sys.stderr )
@@ -101,6 +104,7 @@ def with_conditional_stacktrace( *exceptions ):
 
 def tidy_vimfaults( fn ):
     decorator = with_conditional_stacktrace(
+        vim.fault.GuestComponentsOutOfDate,
         vim.fault.GuestOperationsUnavailable,
         vim.fault.GuestRegistryKeyInvalid,
         vim.fault.NoPermission,
