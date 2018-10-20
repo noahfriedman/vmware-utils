@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.63 2018/10/11 23:20:31 friedman Exp $
+# $Id: vspherelib.py,v 1.64 2018/10/19 22:31:43 friedman Exp $
 
 # Commentary:
 # Code:
@@ -117,6 +117,7 @@ def conditional_stacktrace_exception( wrapped_class ):
 
 @conditional_stacktrace_exception
 class vmomiError( Exception ): pass
+class cliGeneralError(       vmomiError ): pass
 class NameNotFoundError(     vmomiError ): pass
 class NameNotUniqueError(    vmomiError ): pass
 class ConnectionFailedError( vmomiError ): pass
