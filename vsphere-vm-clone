@@ -5,7 +5,7 @@
 # Created: 2018-03-09
 # Public domain
 
-# $Id: vsphere-vm-clone,v 1.13 2018/09/20 19:24:27 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.14 2018/10/04 15:51:05 friedman Exp $
 
 # Commentary:
 # Code:
@@ -163,15 +163,13 @@ def main():
     vsi  = vsl.vmomiConnect( args )
 
     template = vsi.find_vm( args.template )
+    # If no template found, find_vm will already report error.
     if template:
         task = vmclone( vsi, template[ 0 ], args )
         if task:
             vsi.taskwait( task,
                           printsucc = False,
                           callback  = myCallback( args.vm_name ).callback )
-    else:
-        vsl.printerr( args.template, 'template not found' )
-
 
 if __name__ == "__main__":
     main()
