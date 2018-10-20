@@ -5,12 +5,11 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.26 2018/10/18 01:59:21 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.27 2018/10/18 04:35:09 friedman Exp $
 
 # Commentary:
 
 # TODO: customize taskwait success status depending on operation.
-# We'll need a custom callback to do this, and suppress the default output.
 
 # Code:
 
@@ -49,6 +48,11 @@ def get_args():
 
     p_sub.add_parser( 'connect',     help='Connect virtual device',    parents=[p_com_conn] )
     p_sub.add_parser( 'disconnect',  help='Disconnect virtual device', parents=[p_com_conn] )
+
+    ## folder
+    p_folder = p_sub.add_parser( 'folder', help='Move VM(s) to name folder' )
+    p_folder.add( '-f', '--folder',  help='Destination vmFolder path' )
+    p_folder.add( 'vm',  nargs='+',  help='Virtual machines' )
 
     ## mem
     p_mem = p_sub.add_parser( 'mem', help='Configure memory settings' )
@@ -142,10 +146,12 @@ def get_args():
 
 class mVM():
     def __init__( self, vsi, args ):
-        self.vsi    = vsi
-        self.args   = args
-        self.task   = []
-        self.method = getattr( self, args.cmd.replace( '-', '_' ) )
+        self.vsi     = vsi
+        self.args    = args
+        self.task    = []
+        self.operand = {}
+        self.method  = getattr( self, args.cmd.replace( '-', '_' ) )
+
 
     def doit( self ):
         try:
@@ -158,11 +164,40 @@ class mVM():
                 task = self.method( arg )
                 if task:
                     self.task.append( task )
+                    # Save the vm of the task because sometimes the task
+                    # itself actually operates on something different,
+                    # e.g. VMs are located in folders by a method call on
+                    # the folder, not on the vm.  The task object for that
+                    # has no reference to the vm.
+                    self.operand[ task ] = arg
             except vmodl.MethodFault as e:
                 if vsl.debug:
                     raise
                 else:
                     vsl.printerr( arg, e.msg )
+
+
+    def _tw_callback( self, change, objSet, *args ):
+        if change.name == 'info':
+            state = change.val.state
+        elif change.name == 'info.state':
+            state = change.val
+        else:
+            return
+        info = objSet.obj.info
+        operand = self.operand[ info.task ]
+        if state == vim.TaskInfo.State.success:
+            print( operand, 'Success', sep=': ' )
+        elif state == vim.TaskInfo.State.error:
+            vsl.printerr( operand, info.error.msg )
+
+
+    def taskwait( self ):
+        return self.vsi.taskwait(
+            self.task,
+            printsucc = False,
+            callback  = self._tw_callback )
+
 
     def _vm_reconfig_prep( self, vm_name ):
         vm = self.vsi.get_vm( vm_name )
@@ -170,11 +205,13 @@ class mVM():
         cfgspec.changeVersion = vm.config.changeVersion
         return (vm, cfgspec)
 
+
     @staticmethod
     def _setopt( cfgspec, key, value ):
         if value is not None:
             opt = vim.option.OptionValue( key=key, value=str( value ) )
             cfgspec.extraConfig.append( opt )
+
 
     def annotate( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
@@ -184,6 +221,7 @@ class mVM():
         else:
             cfgspec.annotation = self.args.annotation
         return vm.ReconfigVM_Task( cfgspec )
+
 
     def boot_options( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
@@ -195,6 +233,7 @@ class mVM():
             pass
         cfgspec.bootOptions = bootspec
         return vm.ReconfigVM_Task( cfgspec )
+
 
     def connect( self, vm_name, connect=True ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
@@ -217,8 +256,25 @@ class mVM():
         cfgspec.deviceChange = [ devspec ]
         return vm.ReconfigVM_Task( cfgspec )
 
+
     def disconnect( self, vm_name ):
         return self.connect( vm_name, connect=False )
+
+
+    def folder( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        try:
+            p2f = self._p2f
+        except AttributeError:
+            p2f = self._p2f = self.vsi.path_to_subfolder_map( 'vm' )
+
+        try:
+            fmo = p2f[ self.args.folder ]
+        except KeyError:
+            raise vsl.NameNotFoundError( self.args.folder, 'folder not found' )
+
+        return fmo.MoveIntoFolder_Task( vm.Array( [vm] ) )
+
 
     def mem( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
@@ -226,10 +282,12 @@ class mVM():
         cfgspec.memoryHotAddEnabled = self.args.enable_hot_add
         return vm.ReconfigVM_Task( cfgspec )
 
+
     def nested_hv( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
         cfgspec.nestedHVEnabled = self.args.nestedHV
         return vm.ReconfigVM_Task( cfgspec )
+
 
     def network( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
@@ -292,22 +350,27 @@ class mVM():
                                        pool       = pool,
                                        asTemplate = istmpl )
 
+
     def register_mark_moved( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
         kv = vim.option.OptionValue( key='uuid.action', value='keep' )
         cfgspec.extraConfig.append( kv )
         return vm.ReconfigVM_Task( cfgspec )
 
+
     def reload( self, vm_name ):
         self.vsi.get_vm( vm_name ).Reload()
+
 
     def rename( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
         cfgspec.name = self.args.newname[0]
         return vm.ReconfigVM_Task( cfgspec )
 
+
     def reset_guest_info( self, vm_name ):
         self.vsi.get_vm( vm_name ).ResetGuestInformation()
+
 
     def resolution( self, vm_name, WxH ):
         vm = self.vsi.get_vm( vm_name )
@@ -316,25 +379,32 @@ class mVM():
             width  = int( width ),
             height = int( height ))
 
+
     def to_template( self, vm_name ):
         return self.vsi.get_vm( vm_name ).MarkAsTemplate()
+
 
     def to_vm( self, vm_name ):
         cluster = self.vsi.get_cluster( self.args.cluster )
         pool    = self.vsi.get_pool( self.args.pool, root=cluster )
         return self.vsi.get_vm( vm_name ).MarkAsVirtualMachine( pool=pool )
 
+
     def tools_mount( self, vm_name ):
         self.vsi.get_vm( vm_name ).MountToolsInstaller()
+
 
     def tools_unmount( self, vm_name ):
         self.vsi.get_vm( vm_name ).UnmountToolsInstaller()
 
+
     def tools_update( self, vm_name ):
         return self.vsi.get_vm( vm_name ).UpgradeTools_Task()
 
+
     def unregister( self, vm_name ):
         return self.vsi.get_vm( vm_name ).UnregisterVM()
+
 
     def upgrade( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
@@ -353,6 +423,7 @@ class mVM():
         else:
             return vm.UpgradeVM_Task( version=version )
 
+
     def vcpu( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
         cfgspec.numCPUs = int( self.args.number )
@@ -366,6 +437,7 @@ class mVM():
         return vm.ReconfigVM_Task( cfgspec )
 
 
+
     def _vnckey( self, plain ):
         try_imports = [ 'import d3des',
                         'from vnc2flv   import d3des',
@@ -377,20 +449,20 @@ class mVM():
             except ImportError:
                 pass
         else:
-            vsl.printerr( 'Cannot set vnc key without d3des module.' )
-            sys.exit( 1 )
+            raise vsl.cliGeneralError( 'Cannot set vnc key without d3des module.' )
         import base64
         import struct
         ek  = d3des.deskey( (plain + '\x00'*8)[ :8 ], False )
         buf = struct.pack( '32I', *ek )
         return base64.standard_b64encode( buf )
 
+
     def vnc( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
         self._setopt ( cfgspec, 'RemoteDisplay.vnc.enabled', self.args.enable )
         self._setopt ( cfgspec, 'RemoteDisplay.vnc.port', self.args.vnc_port )
-        if self.args.vnc_key:
-            encoded = self._vnckey( self.args.vnc_key )
+        if self.args.vnc_key is not None:
+            encoded = '' if self.args.vnc_key == '' else self._vnckey( self.args.vnc_key )
             self._setopt ( cfgspec, 'RemoteDisplay.vnc.key',  encoded )
         return vm.ReconfigVM_Task( cfgspec )
 
@@ -402,7 +474,7 @@ def main():
 
     mi.doit()
     if mi.task:
-        succ1 = vsi.taskwait( mi.task )
+        succ1 = mi.taskwait()
         if ( args.cmd == 'register'
              and     args.keep_macs
              and not args.as_template ):
@@ -418,6 +490,7 @@ def main():
                     sys.exit( 1 )
         if not succ1:
             sys.exit( 1 )
+
 
 if __name__ == '__main__':
     try:
