@@ -5,7 +5,7 @@
 # Created: 2018-05-08
 # Public domain
 
-# $Id: vsphere-vm-list,v 1.7 2018/09/18 01:05:38 friedman Exp $
+# $Id: vsphere-vm-list,v 1.8 2018/10/04 15:51:05 friedman Exp $
 
 # Commentary:
 # Code:
@@ -19,11 +19,12 @@ poweredOff = vim.VirtualMachine.PowerState.poweredOff
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
-    p.add_bool( '-v', '--verbose',   help='Display extended info' )
-    p.add_bool( '-n', '--on',        help='Display VMs which are powered on' )
-    p.add_bool( '-f', '--off',       help='Display VMs which are powered off' )
-    p.add_bool( '-t', '--templates', help='Display templates' )
-    p.add_bool( '-a', '--all',       help='Same as -o -f -t; default')
+    p.add_bool( '-v', '--verbose',     help='Display extended info' )
+    p.add_bool( '-n', '--on',          help='Display VMs which are powered on' )
+    p.add_bool( '-f', '--off',         help='Display VMs which are powered off' )
+    p.add_bool( '-t', '--templates',   help='Display templates' )
+    p.add_bool( '-a', '--all',         help='Same as -o -f -t; default')
+    p.add_bool( '-F', '--folders',     help='Display full path to VM' )
     return p.parse()
 
 def main():
@@ -38,6 +39,8 @@ def main():
     proplist = [ 'name' ]
     if args.verbose or not args.all:
         proplist.extend( ('config.template', 'runtime.powerState') )
+    if args.folders:
+        proplist.append( 'parent' )
 
     vsi    = vsl.vmomiConnect( args )
     vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
@@ -53,6 +56,14 @@ def main():
                      and vm[ 'runtime.powerState' ] == poweredOff
                      and not vm[ 'config.template' ] )):
                 show.append( vm )
+
+    if args.folders:
+        f2p = vsl.inverted_dict( vsi.path_to_subfolder_map( 'vm' ) )
+        for vm in vmlist:
+            try:
+                vm[ 'name' ] = '/'.join( (f2p[ vm[ 'parent' ] ], vm[ 'name' ] ))
+            except KeyError:
+                pass
 
     show.sort( lambda a, b: cmp( a[ 'name' ], b[ 'name' ]))
     if args.verbose:
