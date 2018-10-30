@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.64 2018/10/19 22:31:43 friedman Exp $
+# $Id: vspherelib.py,v 1.65 2018/10/20 00:32:59 friedman Exp $
 
 # Commentary:
 # Code:
@@ -215,6 +215,12 @@ class ArgumentParser( argparse.ArgumentParser, _super ):
             'Overload: copy description from help if the former is not specified'
             kwargs.setdefault( 'description', kwargs.get( 'help', None ) )
             return self.super.add_parser( *args, **kwargs)
+
+        def alias( self, new, existing, force=False ):
+            if not force and new in self._name_parser_map:
+                raise NameNotUniqueError( new, 'attempt to redefine existing subparser.' )
+            self._name_parser_map[ new ] = self._name_parser_map[ existing ]
+
 
     def __init__( self, loadrc=False, rest=None, help='Remaining arguments', required=False, **kwargs ):
         self.is_subparser = bool( not loadrc )
