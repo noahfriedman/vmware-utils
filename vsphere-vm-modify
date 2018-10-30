@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.27 2018/10/18 04:35:09 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.28 2018/10/20 00:37:18 friedman Exp $
 
 # Commentary:
 
@@ -17,6 +17,7 @@ from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
 import sys
+import re
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
@@ -48,6 +49,15 @@ def get_args():
 
     p_sub.add_parser( 'connect',     help='Connect virtual device',    parents=[p_com_conn] )
     p_sub.add_parser( 'disconnect',  help='Disconnect virtual device', parents=[p_com_conn] )
+
+    ## disk-extend, extend-disk
+    p_disk_extend = p_sub.add_parser( 'disk-extend', parents=[p_com_vm], help='Increase size of virtual disk' )
+    p_disk_extend.add( '-l', '--label', dest='disknum', required=True,  help='Disk device number or label')
+    p_disk_extend.add( '-s', '--size',  '--resize', dest='size',    required=False, help=(
+        'New disk size.  Must be integer value but may be suffixed with'
+        ' "K", "KiB", "M", "MiB", "G", "GiB" to abbreviate in power of 2^n units;'
+        ' use "KB", "MB", "GB" to specify 10^n (SI) units.') )
+    p_sub.alias( 'extend-disk', 'disk-extend' )
 
     ## folder
     p_folder = p_sub.add_parser( 'folder', help='Move VM(s) to name folder' )
@@ -253,6 +263,52 @@ class mVM():
         if self.args.start_connected is not None:
             devspec.device.connectable.startConnected = self.args.start_connected
 
+        cfgspec.deviceChange = [ devspec ]
+        return vm.ReconfigVM_Task( cfgspec )
+
+    @staticmethod
+    def _to_bytes( str_val ):
+        unit = { 'b'   : 512,
+
+                 'k'   : 1024,         't'   : 1024 ** 4,
+                 'kib' : 1024,         'tib' : 1024 ** 4,
+                 'kb'  : 1000,         'tb'  : 1000 ** 4,
+
+                 'm'   : 1024 ** 2,    'p'   : 1024 ** 5,
+                 'mib' : 1024 ** 2,    'pib' : 1024 ** 5,
+                 'mb'  : 1000 ** 2,    'pb'  : 1000 ** 5,
+
+                 'g'   : 1024 ** 3,    'e'   : 1024 ** 6,
+                 'gib' : 1024 ** 3,    'eib' : 1024 ** 6,
+                 'gb'  : 1000 ** 3,    'eb'  : 1000 ** 6, }
+        regex = re.compile( "^\s*(\d+)\s*([bkmgtpei]+)\s*$", flags=re.I )
+        match = regex.search( str_val )
+        if match:
+            size, factor = match.groups()
+            return long( size ) * unit[ factor.lower() ]
+        else:
+            return long( size )
+
+    def disk_extend( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        try:
+            disknum = int( self.args.disknum )
+            disklabel = 'Hard disk {}'.format( disknum )
+        except ValueError:
+            disklabel = self.args.disknum
+        disk = filter( lambda n: n.deviceInfo.label == disklabel,
+                      vsl.get_seq_type( vm.config.hardware.device,
+                                        vim.vm.device.VirtualDisk ))
+        if not disk:
+            raise vsl.NameNotFoundError(
+                '{}: "{}" disk not found'.format( vm_name, disklabel ))
+        devspec           = vim.vm.device.VirtualDeviceSpec()
+        devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
+        devspec.device    = disk[0]
+        #if self.args.mode:
+        #    devspec.device.backing.diskMode = self.args.mode
+        if self.args.size:
+            devspec.device.capacityInBytes = self._to_bytes( self.args.size )
         cfgspec.deviceChange = [ devspec ]
         return vm.ReconfigVM_Task( cfgspec )
 
