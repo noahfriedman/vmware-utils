@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.28 2018/10/20 00:37:18 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.29 2018/10/30 01:20:44 friedman Exp $
 
 # Commentary:
 
@@ -66,7 +66,7 @@ def get_args():
 
     ## mem
     p_mem = p_sub.add_parser( 'mem', help='Configure memory settings' )
-    p_mem.add( '-s', '--size',   help='Memory size in MiB; if not specified, do not change' )
+    p_mem.add( '-s', '--size',       help='Memory size; if not specified, do not change' )
     p_mem.add_mxbool( ['-E', '--enable-hot-add'], ['-D', '--disable-hot-add'], dest='enable_hot_add' )
     p_mem.add( 'vm',  nargs='+', help='Virtual machines' )
 
@@ -287,7 +287,7 @@ class mVM():
             size, factor = match.groups()
             return long( size ) * unit[ factor.lower() ]
         else:
-            return long( size )
+            return long( str_val )
 
     def disk_extend( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
@@ -334,7 +334,8 @@ class mVM():
 
     def mem( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
-        cfgspec.memoryMB            = long( self.args.size )
+        mb = self._to_bytes( self.args.size ) / (1024 ** 2)
+        cfgspec.memoryMB            = long( mb )
         cfgspec.memoryHotAddEnabled = self.args.enable_hot_add
         return vm.ReconfigVM_Task( cfgspec )
 
