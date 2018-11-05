@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.65 2018/10/20 00:32:59 friedman Exp $
+# $Id: vspherelib.py,v 1.66 2018/10/30 01:19:40 friedman Exp $
 
 # Commentary:
 # Code:
@@ -987,6 +987,35 @@ class _vmomiGuestInfo( object ):
                     prop[ 'ip' ] = self.vmnic_cidrs( gnic[0] )
             nics.append( prop )
         return nics
+
+    def vmguest_disk_info( self, vm ):
+        vd = vim.vm.device.VirtualDisk
+        vm_disk_list = []
+        for vm_disk in get_seq_type( vm.config.hardware.device, vd ):
+            backing = vm_disk.backing
+            if isinstance( backing, vd.FlatVer2BackingInfo ):
+                if backing.thinProvisioned:
+                    disk_type = 'thin'
+                elif backing.eagerlyScrub:
+                    disk_type = 'eagerzeroedthick'
+                else:
+                    disk_type = 'zeroedthick'
+            elif isinstance( backing, vd.SeSparseBackingInfo ):
+                disk_type = 'sesparse'
+            else:
+                disk_type = 'unknown'
+            if backing.split:
+                disk_type += ', 2gb split'
+
+            prop = { 'obj'       : vm_disk,
+                     'type'      : disk_type,
+                     'label'     : vm_disk.deviceInfo.label,
+                     'capacity'  : vm_disk.capacityInBytes,
+                     'filename'  : vm_disk.fileName,
+                     'datastore' : vm_disk.datastore.name,
+                     'mode'      : vm_disk.diskMode, }
+        vm_disk_list.append( prop )
+        return vm_disk_list
 
     def vmguest_ops( self, vm, *args, **kwargs ):
         return vmomiVmGuestOperation( self, vm, *args, **kwargs )
