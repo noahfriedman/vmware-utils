@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.29 2018/10/30 01:20:44 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.30 2018/10/31 21:05:46 friedman Exp $
 
 # Commentary:
 
@@ -78,7 +78,9 @@ def get_args():
     p_net = p_sub.add_parser( 'network', parents=[p_com_vm], help='Assign ethernet device to another network' )
     p_net.add( '-n', '--nic',   dest='nicnum',   required=True,  help='NIC device number or label')
     p_net.add( '-l', '--label', dest='netlabel', required=False, help='Network label')
-    p_net.add_bool( '-r', '--reset-mac',                         help='Regenerate MAC address')
+    p_net_mac = p_net.add_mutually_exclusive_group()
+    p_net_mac.add_argument( '-m', '--mac',                                          help='Set explicit MAC address')
+    p_net_mac.add_argument( '-r', '--reset-mac', action='store_true', default=None, help='Assign new, random MAC address')
 
     ## register
     p_register = p_sub.add_parser( 'register',    help='Add existing VM to inventory' )
@@ -138,8 +140,8 @@ def get_args():
 
     ## vcpu
     p_vcpu = p_sub.add_parser( 'vcpu', parents=[p_com_vm], help='Configure number of virtual processors' )
-    p_vcpu.add( '-n', '--number', required=True,  help='Total number of vcpus' )
-    p_vcpu.add( '-s', '--sockets',                help='Number of cpu sockets' )
+    p_vcpu.add( '-n', '--number',  help='Total number of vcpus' )
+    p_vcpu.add( '-s', '--sockets', help='Number of cpu sockets' )
     p_vcpu.add_mxbool( ['-A', '--enable-hot-add'],    ['-D', '--disable-hot-add'],    dest='enable_hot_add' )
     p_vcpu.add_mxbool( ['-R', '--enable-hot-remove'], ['-S', '--disable-hot-remove'], dest='enable_hot_remove' )
     #vvtdEnabled vim.vm.FlagInfo()
@@ -384,6 +386,9 @@ class mVM():
         if self.args.reset_mac:
             devspec.device.addressType = 'Generated'
             devspec.device.macAddress  = ''
+        elif self.args.mac:
+            devspec.device.addressType = 'assigned'
+            devspec.device.macAddress  = self.args.mac
 
         cfgspec.deviceChange = [ devspec ]
         return vm.ReconfigVM_Task( cfgspec )
@@ -483,9 +488,12 @@ class mVM():
 
     def vcpu( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
-        cfgspec.numCPUs = int( self.args.number )
         try:
-            nsock = int( self.args[ 'sockets' ] )
+            cfgspec.numCPUs = int( self.args.number )
+        except TypeError:
+            cfgspec.numCPUs = vm.config.hardware.numCPU
+        try:
+            nsock = int( self.args.sockets )
             cfgspec.numCoresPerSocket = cfgspec.numCPUs / nsock
         except (TypeError, ZeroDivisionError):
             pass
