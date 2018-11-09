@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.31 2018/10/04 15:51:05 friedman Exp $
+# $Id: vsphere-vm-info,v 1.32 2018/10/10 21:01:09 friedman Exp $
 
 # Commentary:
 # Code:
@@ -48,6 +48,9 @@ proplist = [
 
     'guest.hostName',
     'guest.net',
+
+    'layoutEx.disk',
+    'layoutEx.file',
 
     'name',
     'parent',
@@ -230,6 +233,7 @@ class DisplayVM( object ):
             self.display_vnc()
 
         self.display_networks()
+        self.display_disks()
 
         # This is a custom key I insert into my VMs
         if self.verbose:
@@ -416,6 +420,20 @@ class DisplayVM( object ):
                 pi( farindentL, 'IP Addresses', cidr[0] )
                 for ip in cidr[1:]:
                     print( spc, ip )
+
+    def display_disks( self ):
+        for disk in self.vsi.vmguest_disk_info( self.vm ):
+            disk[ 'capacity' ]  = vsl.scale_size( disk[ 'capacity' ] );
+            disk[ 'allocated' ] = vsl.scale_size( disk[ 'allocated' ] );
+
+            pf( disk[ 'label' ], disk[ 'fileName' ],
+                disk, ( 'capacity',
+                        'allocated',
+                        'device',
+                        'backing',
+                        'split',
+                        'diskMode', ) )
+
 
     def _display_text( self, label, text ):
         text = vsl.fold_text( text, maxlen=70, indent=abs( indentL ) )
