@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.67 2018/11/05 19:26:37 friedman Exp $
+# $Id: vspherelib.py,v 1.68 2018/11/09 01:07:54 friedman Exp $
 
 # Commentary:
 # Code:
@@ -926,7 +926,7 @@ class _vmomiGuestInfo( object ):
             routes = ipStack.ipRouteConfig.ipRoute
             for elt in routes:
                 if ( elt.prefixLength == 128
-                     or elt.network in ('ff00::', '169.254.0.0')
+                     or elt.network in ['ff00::', '169.254.0.0']
                      or elt.network.find( 'fe80::' ) == 0 ):
                     continue
 
@@ -1003,24 +1003,13 @@ class _vmomiGuestInfo( object ):
         vd = vim.vm.device.VirtualDisk
         vm_disk_list = []
         for disk in get_seq_type( vm.config.hardware.device, vd ):
-            backing = disk.backing
-            if isinstance( backing, vd.FlatVer2BackingInfo ):
-                if backing.thinProvisioned:
-                    disk_type = 'thin'
-                elif backing.eagerlyScrub:
-                    disk_type = 'eagerzeroedthick'
-                else:
-                    disk_type = 'zeroedthick'
-            elif isinstance( backing, vd.SeSparseBackingInfo ):
-                disk_type = 'sesparse'
-            else:
-                disk_type = 'unknown'
-
             alloc = sum( f_layout[ key ] for key in d_layout[ disk.key ] )
 
             ctrl = controller[ disk.controllerKey ]
             devlabel = str.split( ctrl.deviceInfo.label, ' ', 2 )[0].lower()
             dev = '{}{}:{}'.format( devlabel, ctrl.busNumber, disk.unitNumber )
+
+            backing = disk.backing
 
             prop = { 'obj'       : disk,
                      'label'     : disk.deviceInfo.label,
@@ -1028,9 +1017,23 @@ class _vmomiGuestInfo( object ):
                      'allocated' : alloc,
                      'device'    : dev,
                      'fileName'  : backing.fileName,
-                     'backing'   : disk_type,
-                     'diskMode'  : backing.diskMode,
-                     'split'     : backing.split, }
+                     'diskMode'  : backing.diskMode, }
+
+            if isinstance( backing, vd.FlatVer2BackingInfo ):
+                if backing.thinProvisioned:
+                    prop[ 'backing' ] = 'thin'
+                elif backing.eagerlyScrub:
+                    prop[ 'backing' ] = 'eagerzeroedthick'
+                else:
+                    prop[ 'backing' ] = 'zeroedthick'
+            elif isinstance( backing, vd.SeSparseBackingInfo ):
+                prop[ 'backing' ] = 'sesparse'
+            elif isinstance( backing, vd.RawDiskMappingVer1BackingInfo ):
+                prop[ 'deviceName' ] = backing.deviceName
+                prop[ 'backing' ] = 'rawdiskmapping'
+            else:
+                prop[ 'backing' ] = 'unknown'
+
             vm_disk_list.append( prop )
         return vm_disk_list
 
