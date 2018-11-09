@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.66 2018/10/30 01:19:40 friedman Exp $
+# $Id: vspherelib.py,v 1.67 2018/11/05 19:26:37 friedman Exp $
 
 # Commentary:
 # Code:
@@ -989,10 +989,21 @@ class _vmomiGuestInfo( object ):
         return nics
 
     def vmguest_disk_info( self, vm ):
+        controller = { elt.key : elt for elt in
+                       get_seq_type( vm.config.hardware.device,
+                                     vim.vm.device.VirtualController ) }
+        d_layout = {}
+        for disk in vm.layoutEx.disk:
+            fileKey = []
+            for chain in disk.chain:
+                fileKey.extend( chain.fileKey )
+            d_layout[ disk.key ] = fileKey
+        f_layout = { elt.key : elt.size for elt in vm.layoutEx.file }
+
         vd = vim.vm.device.VirtualDisk
         vm_disk_list = []
-        for vm_disk in get_seq_type( vm.config.hardware.device, vd ):
-            backing = vm_disk.backing
+        for disk in get_seq_type( vm.config.hardware.device, vd ):
+            backing = disk.backing
             if isinstance( backing, vd.FlatVer2BackingInfo ):
                 if backing.thinProvisioned:
                     disk_type = 'thin'
@@ -1004,17 +1015,23 @@ class _vmomiGuestInfo( object ):
                 disk_type = 'sesparse'
             else:
                 disk_type = 'unknown'
-            if backing.split:
-                disk_type += ', 2gb split'
 
-            prop = { 'obj'       : vm_disk,
-                     'type'      : disk_type,
-                     'label'     : vm_disk.deviceInfo.label,
-                     'capacity'  : vm_disk.capacityInBytes,
-                     'filename'  : vm_disk.fileName,
-                     'datastore' : vm_disk.datastore.name,
-                     'mode'      : vm_disk.diskMode, }
-        vm_disk_list.append( prop )
+            alloc = sum( f_layout[ key ] for key in d_layout[ disk.key ] )
+
+            ctrl = controller[ disk.controllerKey ]
+            devlabel = str.split( ctrl.deviceInfo.label, ' ', 2 )[0].lower()
+            dev = '{}{}:{}'.format( devlabel, ctrl.busNumber, disk.unitNumber )
+
+            prop = { 'obj'       : disk,
+                     'label'     : disk.deviceInfo.label,
+                     'capacity'  : disk.capacityInBytes,
+                     'allocated' : alloc,
+                     'device'    : dev,
+                     'fileName'  : backing.fileName,
+                     'backing'   : disk_type,
+                     'diskMode'  : backing.diskMode,
+                     'split'     : backing.split, }
+            vm_disk_list.append( prop )
         return vm_disk_list
 
     def vmguest_ops( self, vm, *args, **kwargs ):
