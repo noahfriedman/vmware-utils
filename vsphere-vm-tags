@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-tags,v 1.8 2018/10/04 15:51:05 friedman Exp $
+# $Id: vsphere-vm-tags,v 1.9 2018/10/12 01:13:38 friedman Exp $
 # This uses the vSphere Automation SDK for Python as well as pyVmomi.
 
 from __future__ import print_function
@@ -160,9 +160,9 @@ def main():
     t = vsl.Timer('make vmtbl')
     vmtbl = {}
     for vm in vmlist:
-        if vm[ 'guest.guestState' ] != 'running':
-            continue
-        del vm[ 'guest.guestState' ]
+        #if vm[ 'guest.guestState' ] != 'running':
+        #    continue
+        #del vm[ 'guest.guestState' ]
 
         vmtbl[ vm.pop( 'name' ) ] = vm
         vmid = vm.pop( 'obj' )._moId
