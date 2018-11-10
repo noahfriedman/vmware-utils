@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.30 2018/10/31 21:05:46 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.31 2018/11/05 19:25:54 friedman Exp $
 
 # Commentary:
 
@@ -83,7 +83,7 @@ def get_args():
     p_net_mac.add_argument( '-r', '--reset-mac', action='store_true', default=None, help='Assign new, random MAC address')
 
     ## register
-    p_register = p_sub.add_parser( 'register',    help='Add existing VM to inventory' )
+    p_register = p_sub.add_parser( 'register',       help='Add existing VM to inventory' )
     p_register.add( '-n', '--name',    default=None, help='Change name of VM; default uses previously registered name')
     p_register.add( '-f', '--folder',  default=None, help='(sub)Folder to place VM in' )
     p_register.add( '-r', '--pool',    default=None, help='Resource pool' )
@@ -116,10 +116,33 @@ def get_args():
     p_to_vm.add( '-r', '--pool',    default=None, help='Resource pool' )
     p_to_vm.add( '-c', '--cluster', default=None, help='Compute cluster or Host' )
 
+    ## tools
+    p_tools = p_sub.add_parser( 'tools', parents=[p_com_vm], help='Configure VMware Tools guest operations' )
+    p_tools.add_mxbool( ['-p', '--poweron'],   ['-P', '--no-poweron'],
+                        help_true  = 'Run scripts after VM powers on',
+                        help_false = 'Do not run scripts after power-on' )
+    p_tools.add_mxbool( ['-b', '--reboot'],    ['-B', '--no-reboot'],
+                        help_true  = 'Run scripts before VM reboots',
+                        help_false = 'Do not run scripts before reboot' )
+    p_tools.add_mxbool( ['-o', '--shutdown'],  ['-O', '--no-shutdown'],
+                        help_true  = 'Run scripts before VM powers off',
+                        help_false = 'Do not run scripts before power-off' )
+    p_tools.add_mxbool( ['-r', '--resume'],    ['-R', '--no-resume'],
+                        help_true  = 'Run scripts after VM resumes',
+                        help_false = 'Do not run scripts after resume' )
+    p_tools.add_mxbool( ['-s', '--standby'],   ['-S', '--no-standby'],
+                        help_true  = 'Run scripts before VM suspends',
+                        help_false = 'Do not run scripts before suspend' )
+    p_tools.add_mxbool( ['-t', '--sync-time'], ['-T', '--no-sync-time'],
+                        help_true  = 'Sync guest time with the hypervisor',
+                        help_false = 'Do not sync guest time' )
+
     ## tools_mount
     p_sub.add_parser( 'tools-mount',   parents=[p_com_vm], help='Mount guest tools installer on virtual cd-rom' )
+
     ## tools_unmount
     p_sub.add_parser( 'tools-unmount', parents=[p_com_vm], help='Unmount guest tools installer' )
+
     ## tools_update
     p_sub.add_parser( 'tools-update',  parents=[p_com_vm], help='Update guest tools automatically (when supported)' )
 
@@ -450,6 +473,18 @@ class mVM():
         cluster = self.vsi.get_cluster( self.args.cluster )
         pool    = self.vsi.get_pool( self.args.pool, root=cluster )
         return self.vsi.get_vm( vm_name ).MarkAsVirtualMachine( pool=pool )
+
+
+    def tools( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        cfgspec.tools = vim.vm.ToolsConfigInfo()
+        cfgspec.tools.afterPowerOn        = self.args.poweron
+        cfgspec.tools.afterResume         = self.args.resume
+        cfgspec.tools.beforeGuestReboot   = self.args.reboot
+        cfgspec.tools.beforeGuestShutdown = self.args.shutdown
+        cfgspec.tools.beforeGuestStandby  = self.args.standby
+        cfgspec.tools.syncTimeWithHost    = self.args.sync_time
+        return vm.ReconfigVM_Task( cfgspec )
 
 
     def tools_mount( self, vm_name ):
