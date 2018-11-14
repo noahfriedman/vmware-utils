@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.33 2018/11/09 01:09:39 friedman Exp $
+# $Id: vsphere-vm-info,v 1.34 2018/11/09 02:11:53 friedman Exp $
 
 # Commentary:
 # Code:
@@ -435,12 +435,16 @@ class DisplayVM( object ):
                         'diskMode', ) )
 
 
-    def _display_text( self, label, text ):
+    def _display_text( self, label, text, *options ):
         text = vsl.fold_text( text, maxlen=70, indent=abs( indentL ) )
         if text.find ("\n") >= 0:
             text = "\n" + indentS + text
         if text != "":
             p( label, text )
+        if options:
+            print()
+            for choice in options:
+                print( indentS, choice )
 
     def display_annotation( self ):
         try:
@@ -450,7 +454,14 @@ class DisplayVM( object ):
 
     def display_question( self ):
         try:
-            self._display_text( 'Question', self.vm.summary.runtime.question.text )
+            question = self.vm.summary.runtime.question
+            choices = [ '\t[{}] {}'.format( choice.key, choice.summary )
+                        for choice in question.choice.choiceInfo ]
+            try:
+                choices[ question.choice.defaultIndex ] += ' (default)'
+            except (KeyError, AttributeError):
+                pass
+            self._display_text( 'Question', question.text, *choices )
         except AttributeError:
             pass
 
