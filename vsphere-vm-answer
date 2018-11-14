@@ -1,0 +1,67 @@
+#!/usr/bin/env python
+# vsphere-vm-answer --- view and respond to questions initiated by hypervisor
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2018-11-13
+# Public domain
+
+# $Id$
+
+# Commentary:
+# Code:
+
+from   __future__ import print_function
+from   pyVmomi    import vim
+
+import vspherelib     as vsl
+import sys
+
+def get_args():
+    p = vsl.ArgumentParser( loadrc=True )
+    p.add( '-a', '--answer', help='Response, if any' )
+    p.add( '-v', '--verbose', action='store_true', help='Display question when answering' )
+    p.add( 'vm', nargs='+',                        help='Virtual machines to answer' )
+    return p.parse()
+
+def display_question( q ):
+    cindent = ' ' * 8
+    choices = [ '{}[ {} ] {}'.format( cindent, choice.key, choice.summary )
+                for choice in q.choice.choiceInfo ]
+    try:
+        choices[ q.choice.defaultIndex ] += ' (default)'
+    except (KeyError, AttributeError):
+        pass
+
+    print( ' ' * 3, vsl.fold_text( q.text, maxlen=72, indent=4 ) )
+    print()
+    for choice in choices:
+        print( choice )
+
+def main():
+    args = get_args()
+    vsi  = vsl.vmomiConnect( args )
+
+    vmlist = vsi.find_vm( args.vm )
+    if not vmlist:
+        return
+    proplist = [ 'name', 'summary.runtime.question' ]
+    vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, vmlist )
+
+    for vmprop in vmlist:
+        print( vmprop[ 'name' ] )
+
+        question = vmprop[ 'summary.runtime.question' ]
+        if args.verbose or args.answer is None:
+            display_question( question )
+
+        if args.answer is not None:
+            vm = vmprop[ ' obj ' ]
+            vm.AnswerVM( questionId=question.id, answerChoice=args.answer )
+            if args.verbose:
+                print( '\n   Answering with {}\n'.format( args.answer ) )
+
+
+if __name__ == '__main__':
+    main()
+
+# eof
