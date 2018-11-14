@@ -1,0 +1,39 @@
+#!/usr/bin/env python
+# vsphere-get-files --- retrieve a file from a datastore
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2018-11-13
+# Public domain
+
+# $IdA$
+
+# Commentary:
+# Code:
+
+from   __future__ import print_function
+from   pyVmomi    import vim, vmodl
+import vspherelib     as vsl
+import sys
+import re
+
+def get_args():
+    p = vsl.ArgumentParser( loadrc=True )
+    p.add( '-d', '--datastore', help='Default datastore for remaining paths' )
+    p.add( 'files', nargs='+',  help='List of files to retrieve' )
+    return p.parse()
+
+def main():
+    args = get_args()
+    vsi  = vsl.vmomiConnect( args )
+
+    for dsfile in args.files:
+        pass
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+
+# vsphere-get-files
