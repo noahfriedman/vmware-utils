@@ -5,7 +5,7 @@
 # Created: 2018-11-13
 # Public domain
 
-# $Id$
+# $Id: vsphere-vm-answer,v 1.1 2018/11/14 02:30:06 friedman Exp $
 
 # Commentary:
 # Code:
@@ -50,15 +50,20 @@ def main():
     for vmprop in vmlist:
         print( vmprop[ 'name' ] )
 
-        question = vmprop[ 'summary.runtime.question' ]
+        try:
+            question = vmprop[ 'summary.runtime.question' ]
+        except KeyError:
+            print( '    No pending question' )
+            continue
+
         if args.verbose or args.answer is None:
             display_question( question )
 
         if args.answer is not None:
-            vm = vmprop[ ' obj ' ]
+            vm = vmprop[ 'obj' ]
             vm.AnswerVM( questionId=question.id, answerChoice=args.answer )
             if args.verbose:
-                print( '\n   Answering with {}\n'.format( args.answer ) )
+                print( '\n    Answering with {}\n'.format( args.answer ) )
 
 
 if __name__ == '__main__':
