@@ -5,7 +5,7 @@
 # Created: 2018-03-30
 # Public domain
 
-# $Id: vsphere-datastores,v 1.8 2018/09/12 19:45:40 friedman Exp $
+# $Id: vsphere-datastores,v 1.9 2018/10/04 15:51:05 friedman Exp $
 
 # Commentary:
 # Code:
@@ -61,7 +61,7 @@ def main():
         hfmt = ' '.join(('{0:%s}' % maxlen,
                         '{1:>9}',
                         '{2:>19}',
-                        '{3:>19}'))
+                        '{3:>20}'))
         s = hfmt.format( 'NAME', 'SIZE', 'FREE', 'UNCOMMITTED' )
         print( s )
 
@@ -74,7 +74,10 @@ def main():
         name = elt['summary.name']
         size = int( elt['summary.capacity'] )
         free = int( elt['summary.freeSpace'] )
-        ucom = int( elt['summary.uncommitted'] )
+        try: # Not sure why this can sometimes be unavailable
+            ucom = int( elt['summary.uncommitted'] )
+        except KeyError:
+            ucom = 0
 
         s = fmt.format( name,
                         vsl.scale_size( size ).split( ' ' ),
