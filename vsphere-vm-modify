@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.31 2018/11/05 19:25:54 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.32 2018/11/10 03:46:15 friedman Exp $
 
 # Commentary:
 
@@ -18,6 +18,8 @@ from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
 import sys
 import re
+
+class NotSupportedError( vsl.vmomiError ): pass
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
@@ -44,6 +46,11 @@ def get_args():
                            ['-D', '--start-disconnected'],
                            help_true  = 'Keep device connected at boot',
                            help_false = 'Keep device disconnected at boot' )
+    p_com_conn.add_mxbool( ['-g', '--allow-guest-control'],
+                           ['-G', '--no-guest-control'],
+                           help_true  = 'Enable guest control',
+                           help_false = 'Disable guest control' )
+
     p_com_conn.add( 'vm',      nargs=1, help='Virtual machine' )
     p_com_conn.add( 'label',   nargs=1, help='Device label to modify' )
 
@@ -75,12 +82,14 @@ def get_args():
     p_mem.add_mxbool( ['-E', '--enable'], ['-D', '--disable'], dest='nestedHV' )
 
     ## network
-    p_net = p_sub.add_parser( 'network', parents=[p_com_vm], help='Assign ethernet device to another network' )
-    p_net.add( '-n', '--nic',   dest='nicnum',   required=True,  help='NIC device number or label')
-    p_net.add( '-l', '--label', dest='netlabel', required=False, help='Network label')
-    p_net_mac = p_net.add_mutually_exclusive_group()
-    p_net_mac.add_argument( '-m', '--mac',                                          help='Set explicit MAC address')
-    p_net_mac.add_argument( '-r', '--reset-mac', action='store_true', default=None, help='Assign new, random MAC address')
+    p_net = p_sub.add_parser( 'network', parents=[p_com_vm], help='Modify ethernet device' )
+    p_net_xgr = p_net.add_mutually_exclusive_group( required=True )
+    p_net_xgr.add_argument( '-L', '--list-types', action='store_true', help='List supported ethernet devices for this VM')
+    p_net_xgr.add_argument( '-n', '--nic',   dest='nicnum',            help='NIC device number or label')
+    p_net.add( '-l', '--label',              dest='netlabel',          help='Assign nic to network identified by label')
+    p_net.add( '-t', '--type',               dest='ethtype',           help='Change ethernet hardware device type')
+    p_net.add( '-m', '--mac',                                          help='Set explicit MAC address')
+    p_net.add( '-r', '--reset-mac', action='store_true', default=None, help='Assign new, random MAC address')
 
     ## register
     p_register = p_sub.add_parser( 'register',       help='Add existing VM to inventory' )
@@ -242,6 +251,25 @@ class mVM():
 
 
     @staticmethod
+    def clone_obj( obj, *attrs ):
+        if not attrs:
+            exclude = ['dynamicProperty', 'dynamicType']
+            attrs = filter( lambda s: s not in exclude, obj.__dict__ )
+        new = type( obj )()
+        for attr in attrs:
+            if hasattr( obj, attr ):
+                setattr( new, attr, getattr( obj, attr ))
+        return new
+
+
+    def cfgo( self, vm ):
+        try:
+            return self._cfgo
+        except AttributeError:
+            self._cfgo = vm.environmentBrowser.QueryConfigOptionEx()
+            return self._cfgo
+
+    @staticmethod
     def _setopt( cfgspec, key, value ):
         if value is not None:
             opt = vim.option.OptionValue( key=key, value=str( value ) )
@@ -284,9 +312,12 @@ class mVM():
         devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
         devspec.device    = dev[0]
 
-        devspec.device.connectable.connected = connect
+        connectable = devspec.device.connectable
+        connectable.connected = connect
         if self.args.start_connected is not None:
-            devspec.device.connectable.startConnected = self.args.start_connected
+            connectable.startConnected = self.args.start_connected
+        if self.args.allow_guest_control is not None:
+            connectable.allowGuestControl = self.args.allow_guest_control
 
         cfgspec.deviceChange = [ devspec ]
         return vm.ReconfigVM_Task( cfgspec )
@@ -337,6 +368,8 @@ class mVM():
         cfgspec.deviceChange = [ devspec ]
         return vm.ReconfigVM_Task( cfgspec )
 
+    extend_disk = disk_extend # alias
+
 
     def disconnect( self, vm_name ):
         return self.connect( vm_name, connect=False )
@@ -373,6 +406,48 @@ class mVM():
 
     def network( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        ethernet = vim.vm.device.VirtualEthernetCard
+
+        def card_name( card ):
+            name = card._wsdlName.lower()
+            for substr in ['virtual', 'ethernetcard']:
+                name = name.replace( substr, '' )
+            return name
+
+        def supported_cards():
+            cfgo = self.cfgo( vm )
+            osd = cfgo.guestOSDescriptor[0]
+            return [ card_name( card ) for card in osd.supportedEthernetCard ]
+
+        def card_type( name, unsupported=False ):
+            cfgo = self.cfgo( vm )
+            for card in cfgo.guestOSDescriptor[0].supportedEthernetCard:
+                if name == card_name( card ):
+                    return card
+            diag = vsl.Diag( name, "Unsupported or unknown ethernet type." )
+            diag.append( 'Supported types:' )
+            for sup in sorted( supported_cards() ):
+                diag.append( '\t' + sup )
+            raise NotSupportedError( diag )
+
+        def make_backing( netlabel ):
+            net = self.vsi.get_network( netlabel )
+            try:
+                dvs_port = vim.dvs.PortConnection()
+                dvs_port.portgroupKey = net.key
+                dvs_port.switchUuid   = net.config.distributedVirtualSwitch.uuid
+                backing = ethernet.DistributedVirtualPortBackingInfo()
+                backing.port = dvs_port
+            except AttributeError:
+                backing = ethernet.NetworkBackingInfo()
+                backing.network = net
+                backing.deviceName = netlabel
+            return backing
+
+        if self.args.list_types:
+            for sup in sorted( supported_cards() ):
+                print( sup )
+            return
 
         try:
             nicnum = int( self.args.nicnum )
@@ -380,31 +455,41 @@ class mVM():
         except ValueError:
             niclabel = self.args.nicnum
 
-        ethernet = vim.vm.device.VirtualEthernetCard
         nic = filter( lambda n: n.deviceInfo.label == niclabel,
                       vsl.get_seq_type( vm.config.hardware.device, ethernet ))
         if not nic:
             raise vsl.NameNotFoundError(
                 '{}: "{}" adapter not found'.format( vm_name, niclabel ))
+        nic = nic[0]
 
-        devspec           = vim.vm.device.VirtualDeviceSpec()
-        devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
-        devspec.device    = nic[0]
+        devspec = vim.vm.device.VirtualDeviceSpec(
+            device    = nic,
+            operation = vim.vm.device.VirtualDeviceSpec.Operation.edit )
+        if self.args.ethtype:
+            # To change the card type we actually have to destroy the old card
+            # and create a new one.  We do that here, copying the properties we
+            # want to preserve.
+            delspec = vim.vm.device.VirtualDeviceSpec()
+            delspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.remove
+            delspec.device    = nic
+            cfgspec.deviceChange.append( delspec )
 
-        netlabel = self.args.netlabel
-        if netlabel:
-            net = self.vsi.get_network( netlabel )
-            try:
-                dvs_port = vim.dvs.PortConnection()
-                dvs_port.portgroupKey = net.key
-                dvs_port.switchUuid   = net.config.distributedVirtualSwitch.uuid
+            newcard = card_type( self.args.ethtype )(
+                addressType = 'assigned',
+                macAddress  = nic.macAddress,
+                connectable = self.clone_obj( nic.connectable,
+                                              'connected',
+                                              'startConnected',
+                                              'allowGuestControl' ) )
+            if not self.args.netlabel:
+                label = self.vsi.get_nic_network_label( nic )
+                newcard.backing = make_backing( label )
 
-                devspec.device.backing = ethernet.DistributedVirtualPortBackingInfo()
-                devspec.device.backing.port = dvs_port
-            except AttributeError:
-                devspec.device.backing = ethernet.NetworkBackingInfo()
-                devspec.device.backing.network = net
-                devspec.device.backing.deviceName = netlabel
+            devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
+            devspec.device    = newcard
+
+        if self.args.netlabel:
+            devspec.device.backing = make_backing( self.args.netlabel )
 
         if self.args.reset_mac:
             devspec.device.addressType = 'Generated'
@@ -413,7 +498,7 @@ class mVM():
             devspec.device.addressType = 'assigned'
             devspec.device.macAddress  = self.args.mac
 
-        cfgspec.deviceChange = [ devspec ]
+        cfgspec.deviceChange.append( devspec )
         return vm.ReconfigVM_Task( cfgspec )
 
 
