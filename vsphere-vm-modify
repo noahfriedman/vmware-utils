@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.32 2018/11/10 03:46:15 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.33 2018/11/15 01:20:12 friedman Exp $
 
 # Commentary:
 
@@ -431,17 +431,25 @@ class mVM():
             raise NotSupportedError( diag )
 
         def make_backing( netlabel ):
-            net = self.vsi.get_network( netlabel )
-            try:
-                dvs_port = vim.dvs.PortConnection()
-                dvs_port.portgroupKey = net.key
-                dvs_port.switchUuid   = net.config.distributedVirtualSwitch.uuid
-                backing = ethernet.DistributedVirtualPortBackingInfo()
-                backing.port = dvs_port
-            except AttributeError:
-                backing = ethernet.NetworkBackingInfo()
-                backing.network = net
-                backing.deviceName = netlabel
+            if isinstance( netlabel, vim.vm.device.VirtualEthernetCard ):
+                nic = netlabel
+                backing = type( nic.backing )()
+                try:
+                    backing.port = type( nic.backing.port )(
+                            portgroupKey = nic.backing.port.portgroupKey,
+                            switchUuid   = nic.backing.port.switchUuid )
+                except AttributeError:
+                    backing.network = nic.backing.network
+            else:
+                net = self.vsi.get_network( netlabel )
+                try:
+                    uuid = net.config.distributedVirtualSwitch.uuid
+                    backing = ethernet.DistributedVirtualPortBackingInfo(
+                        port = vim.dvs.PortConnection(
+                            portgroupKey = net.key,
+                            switchUuid   = uuid ))
+                except AttributeError:
+                    backing = ethernet.NetworkBackingInfo( network = net )
             return backing
 
         if self.args.list_types:
@@ -482,8 +490,7 @@ class mVM():
                                               'startConnected',
                                               'allowGuestControl' ) )
             if not self.args.netlabel:
-                label = self.vsi.get_nic_network_label( nic )
-                newcard.backing = make_backing( label )
+                newcard.backing = make_backing( nic )
 
             devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
             devspec.device    = newcard
@@ -542,9 +549,9 @@ class mVM():
         self.vsi.get_vm( vm_name ).ResetGuestInformation()
 
 
-    def resolution( self, vm_name, WxH ):
+    def resolution( self, vm_name ):
         vm = self.vsi.get_vm( vm_name )
-        width, height = WxH.split( 'x' )
+        width, height = self.args.WxH[0].split( 'x' )
         vm.SetScreenResolution(
             width  = int( width ),
             height = int( height ))
