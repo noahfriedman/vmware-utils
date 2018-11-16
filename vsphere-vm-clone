@@ -5,7 +5,7 @@
 # Created: 2018-03-09
 # Public domain
 
-# $Id: vsphere-vm-clone,v 1.15 2018/10/20 00:33:30 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.16 2018/10/25 01:48:32 friedman Exp $
 
 # Commentary:
 # Code:
@@ -92,6 +92,8 @@ def vmclone( vsi, template, opt ):
     cluster = None
     if opt.cluster:
         cluster = vsi.get_cluster( opt.cluster )
+    else:
+        cluster = template.runtime.host.parent
 
     datastore = None
     if opt.datastore:
@@ -99,6 +101,8 @@ def vmclone( vsi, template, opt ):
             datastore = vsi.get_datastore( opt.datastore, cluster.datastore )
         except AttributeError:
             datastore = vsi.get_datastore( opt.datastore )
+    else:
+        datastore = vsi.get_datastore( template.config.datastoreUrl[0].name, cluster.datastore )
 
     pool = None
     if opt.pool:
@@ -106,6 +110,8 @@ def vmclone( vsi, template, opt ):
             pool = vsi.get_pool( opt.pool, cluster.resourcePool )
         else:
             pool = cluster.resourcePool
+    elif template.resourcePool:
+        pool = template.resourcePool
 
     relospec              = vim.vm.RelocateSpec()
     relospec.datastore    = datastore
