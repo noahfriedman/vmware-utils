@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.33 2018/11/15 01:20:12 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.34 2018/11/16 03:12:24 friedman Exp $
 
 # Commentary:
 
@@ -71,6 +71,13 @@ def get_args():
     p_folder.add( '-f', '--folder',  help='Destination vmFolder path' )
     p_folder.add( 'vm',  nargs='+',  help='Virtual machines' )
 
+    ## guest-type
+    p_guest = p_sub.add_parser( 'guest-type', parents=[p_com_vm], help='Modify virtual machine guest type' )
+    p_guest_xgr = p_guest.add_mutually_exclusive_group( required=True )
+    p_guest_xgr.add_argument( '-L', '--list-types', action='store_true', help='List supported guest types for current VM machine version')
+    p_guest_xgr.add_argument( '-t', '--type',       dest='guestId',      help='New guest id')
+    p_guest.add_argument(     '-n', '--name',       dest='altname',      help='OS description for "other" or "other64" guest ids')
+
     ## mem
     p_mem = p_sub.add_parser( 'mem', help='Configure memory settings' )
     p_mem.add( '-s', '--size',       help='Memory size; if not specified, do not change' )
@@ -85,11 +92,12 @@ def get_args():
     p_net = p_sub.add_parser( 'network', parents=[p_com_vm], help='Modify ethernet device' )
     p_net_xgr = p_net.add_mutually_exclusive_group( required=True )
     p_net_xgr.add_argument( '-L', '--list-types', action='store_true', help='List supported ethernet devices for this VM')
-    p_net_xgr.add_argument( '-n', '--nic',   dest='nicnum',            help='NIC device number or label')
+    p_net_xgr.add_argument( '-n', '--nic',   dest='nicnum',            help='NIC device number or label, or "new"' )
     p_net.add( '-l', '--label',              dest='netlabel',          help='Assign nic to network identified by label')
     p_net.add( '-t', '--type',               dest='ethtype',           help='Change ethernet hardware device type')
     p_net.add( '-m', '--mac',                                          help='Set explicit MAC address')
     p_net.add( '-r', '--reset-mac', action='store_true', default=None, help='Assign new, random MAC address')
+    p_net.add( '-d', '--remove',    action='store_true', default=None, help='Remove NIC from vm')
 
     ## register
     p_register = p_sub.add_parser( 'register',       help='Add existing VM to inventory' )
@@ -261,13 +269,17 @@ class mVM():
                 setattr( new, attr, getattr( obj, attr ))
         return new
 
-
     def cfgo( self, vm ):
-        try:
-            return self._cfgo
-        except AttributeError:
-            self._cfgo = vm.environmentBrowser.QueryConfigOptionEx()
-            return self._cfgo
+        return vm.environmentBrowser.QueryConfigOptionEx()
+
+    # Return the configoptions for the vm's compute resource.
+    # This may be wider in scope than the vm's itself.
+    # For instance if a vm is a guest type 'other', its own config spec
+    # might not show any other guest types.
+    def cfgo_cr( self, vm ):
+        spec = vim.EnvironmentBrowser.ConfigOptionQuerySpec( key=vm.config.version )
+        eb   = vm.runtime.host.parent.environmentBrowser
+        return eb.QueryConfigOptionEx( spec=spec )
 
     @staticmethod
     def _setopt( cfgspec, key, value ):
@@ -389,6 +401,46 @@ class mVM():
 
         return fmo.MoveIntoFolder_Task( vm.Array( [vm] ) )
 
+    def guest_type( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        cfgo = self.cfgo_cr( vm )
+        # strip 'Guest' from names
+        valid = { x.id.replace( 'Guest', '' ) : [ x.family, x.id, x.fullName ]
+                  for x in cfgo.guestOSDescriptor }
+
+        def names():
+            mw  = max( map( len, valid ) ) + 8
+            fmt = '{{:<{}}} {{}}'.format( mw ).format
+            return [ fmt( k, v[2] ) for k,v in valid.items() ]
+
+        if self.args.list_types:
+            for name in sorted( names() ):
+                print( name )
+        else:
+            new = self.args.guestId
+            if new not in valid:
+                hw_ver = cfgo.version[ 4: ]  # skip 'vmx-'
+                if hw_ver[ 0 ] == '0':
+                    hw_ver = hw_ver[ 1: ]
+                diag = vsl.Diag( new,
+                                 'Unsupported or unknown guest type for '
+                                 'hardware version {}'.format( hw_ver) )
+                diag.append( 'Supported types:' )
+                for name in sorted( names() ):
+                    diag.append( '\t' + name )
+                raise NotSupportedError( diag )
+
+            nattr = valid[ new ]
+            cfgspec.guestId = nattr[ 1 ]
+            if nattr[ 0 ] == 'otherGuestFamily':
+                if self.args.altname:
+                    cfgspec.alternateGuestName = self.args.altname
+                else:
+                    cfgspec.alternateGuestName = nattr[ 2 ]
+            elif self.args.altname:
+                raise NotSupportedError( "cannot set OS name for non-'other' guest types" )
+
+            return vm.ReconfigVM_Task( cfgspec )
 
     def mem( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
@@ -407,6 +459,7 @@ class mVM():
     def network( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
         ethernet = vim.vm.device.VirtualEthernetCard
+        Op = vim.vm.device.VirtualDeviceSpec.Operation
 
         def card_name( card ):
             name = card._wsdlName.lower()
@@ -450,6 +503,7 @@ class mVM():
                             switchUuid   = uuid ))
                 except AttributeError:
                     backing = ethernet.NetworkBackingInfo( network = net )
+                    backing.deviceName = netlabel
             return backing
 
         if self.args.list_types:
@@ -466,19 +520,37 @@ class mVM():
         nic = filter( lambda n: n.deviceInfo.label == niclabel,
                       vsl.get_seq_type( vm.config.hardware.device, ethernet ))
         if not nic:
-            raise vsl.NameNotFoundError(
-                '{}: "{}" adapter not found'.format( vm_name, niclabel ))
-        nic = nic[0]
+            if niclabel == 'new':
+                if not self.args.netlabel:
+                    raise vsl.RequiredArgumentError( 'netlabel required for new NICs' )
 
-        devspec = vim.vm.device.VirtualDeviceSpec(
-            device    = nic,
-            operation = vim.vm.device.VirtualDeviceSpec.Operation.edit )
-        if self.args.ethtype:
+                nic = card_type( self.args.ethtype )()
+                nic.addressType = 'Generated'
+                nic.connectable = vim.vm.device.VirtualDevice.ConnectInfo(
+                    #connected         = True,
+                    startConnected    = True,
+                    allowGuestControl = True )
+
+                devspec = vim.vm.device.VirtualDeviceSpec(
+                    device    = nic,
+                    operation = Op.add )
+            else:
+                raise vsl.NameNotFoundError(
+                    '{}: "{}" adapter not found'.format( vm_name, niclabel ))
+        else:
+            nic = nic[0]
+            devspec = vim.vm.device.VirtualDeviceSpec(
+                device    = nic,
+                operation = Op.edit )
+            if self.args.remove:
+                devspec.operation = Op.remove
+
+        if self.args.ethtype and devspec.operation == Op.edit:
             # To change the card type we actually have to destroy the old card
             # and create a new one.  We do that here, copying the properties we
             # want to preserve.
             delspec = vim.vm.device.VirtualDeviceSpec()
-            delspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.remove
+            delspec.operation = Op.remove
             delspec.device    = nic
             cfgspec.deviceChange.append( delspec )
 
@@ -492,7 +564,7 @@ class mVM():
             if not self.args.netlabel:
                 newcard.backing = make_backing( nic )
 
-            devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
+            devspec.operation = Op.add
             devspec.device    = newcard
 
         if self.args.netlabel:
