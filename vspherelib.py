@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.68 2018/11/09 01:07:54 friedman Exp $
+# $Id: vspherelib.py,v 1.69 2018/11/09 02:11:27 friedman Exp $
 
 # Commentary:
 # Code:
@@ -851,7 +851,7 @@ class _vmomiFolderMap( object ):
     # To get the inverse of this map, use the 'inverted_dict' function below.
     def path_to_subfolder_map( self, subfolder='vm' ):
         p2sf = {}
-        for path, obj in self.path_to_folder_map().iteritems():
+        for path, obj in self.path_to_folder_map().items():
             try:
                 beg = path.index( '/', 1 )
             except ValueError:
@@ -2000,7 +2000,7 @@ def dict_to_environ( names ):
 
 # n.b. this only works if values are hashable
 def inverted_dict( d ):
-    return { v : k for k, v in d.iteritems() }
+    return { v : k for k, v in d.items() }
 
 
 ######
