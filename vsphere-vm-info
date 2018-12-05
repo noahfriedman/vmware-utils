@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.35 2018/11/14 01:28:45 friedman Exp $
+# $Id: vsphere-vm-info,v 1.36 2018/11/26 23:41:29 friedman Exp $
 
 # Commentary:
 # Code:
@@ -42,6 +42,7 @@ proplist = [
     'config.hardware.numCPU',
     'config.hardware.numCoresPerSocket',
     'config.memoryHotAddEnabled',
+    'config.nestedHVEnabled',
     'config.template',
     'config.uuid',
     'config.version',
@@ -225,6 +226,7 @@ class DisplayVM( object ):
         p( 'NICs',    vm.summary.config.numEthernetCards )
         p( 'Disks',   vm.summary.config.numVirtualDisks )
         p( 'Storage', storage_size( vm.summary.storage ))
+        p( 'Nested HV', vm.config.nestedHVEnabled )
         self.display_host()
         self.display_power_state()
 
@@ -509,6 +511,9 @@ def main():
         vmlist = vsi.find_vm( args.vm )
         if not vmlist:
             return
+        if args.verbose:
+            for vm in vmlist:
+                vm.RefreshStorageInfo()
         vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, vmlist )
     else:
         vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
