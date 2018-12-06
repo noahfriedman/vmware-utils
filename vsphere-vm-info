@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.36 2018/11/26 23:41:29 friedman Exp $
+# $Id: vsphere-vm-info,v 1.37 2018/12/05 20:25:22 friedman Exp $
 
 # Commentary:
 # Code:
@@ -320,7 +320,7 @@ class DisplayVM( object ):
 
     def display_mem( self ):
         memoryMB = self.vm.config.hardware.memoryMB
-        memargs = [ vsl.scale_size( memoryMB * 1024 * 1024) ]
+        memargs = [ vsl.scale_size( memoryMB * 2**20 ) ]
         if getattr( self.vm.config, 'memoryHotAddEnabled', False ):
             memargs.append( 'hot add enabled' )
         p( 'Memory', str.join( ', ', memargs ))
@@ -431,13 +431,23 @@ class DisplayVM( object ):
             disk[ 'capacity' ]  = vsl.scale_size( disk[ 'capacity' ] );
             disk[ 'allocated' ] = vsl.scale_size( disk[ 'allocated' ] );
 
+            vfrcache = 'vflash read cache'
+            try:
+                desc = '{}, blk={}'.format(
+                    vsl.scale_size( disk[ 'vflash_reserve' ] ),
+                    vsl.scale_size( disk[ 'vflash_blksz'   ] ) )
+                disk[ vfrcache ] = desc
+            except KeyError:
+                pass
+
             pf( disk[ 'label' ], disk[ 'fileName' ],
                 disk, ( 'capacity',
                         'allocated',
                         'device',
                         'backing',
                         'deviceName',
-                        'diskMode', ) )
+                        'diskMode',
+                        vfrcache, ) )
 
 
     def _display_text( self, label, text, *options ):
