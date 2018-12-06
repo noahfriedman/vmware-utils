@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.69 2018/11/09 02:11:27 friedman Exp $
+# $Id: vspherelib.py,v 1.70 2018/11/26 23:41:06 friedman Exp $
 
 # Commentary:
 # Code:
@@ -1032,7 +1032,16 @@ class _vmomiGuestInfo( object ):
                 prop[ 'deviceName' ] = backing.deviceName
                 prop[ 'backing' ] = 'rawdiskmapping'
             else:
-                prop[ 'backing' ] = 'unknown'
+                beg = len( 'VirtualDisk' )
+                end = len( 'BackingInfo' )
+                prop[ 'backing' ] = backing._wsdlName[ beg : -end ].lower()
+
+            try:
+                vflash = disk.vFlashCacheConfigInfo
+                prop[ 'vflash_reserve' ] = vflash.reservationInMB * 2**20
+                prop[ 'vflash_blksz'   ] = vflash.blockSizeInKB   * 2**10
+            except AttributeError:
+                pass
 
             vm_disk_list.append( prop )
         return vm_disk_list
@@ -2052,34 +2061,38 @@ def scale_size( size, fmtsize=1024 ):
         return (n & (n - 1) == 0)
 
     if size == 0:
-        return '0 B'
+        return '0'
 
-    suffix = ('', 'K', 'M', 'G', 'T', 'P', 'E')
+    suffix = (' B', ' K', ' M', ' G', ' T', ' P', ' E')
     idx = 0
 
-    ispow2 = pow2p (size)
-    if not pow2p (size) or not pow2p (fmtsize):
-        size = float( size )
+    try:
+        ispow2 = pow2p( size )
+        if not ispow2 or not pow2p( fmtsize ):
+            size = float( size )
+    except TypeError: # size is already float?
+        ispow2 = False
 
     while size > fmtsize:
         size = size / fmtsize
         idx += 1
 
     if ispow2 and fmtsize == 1024:
-        fmtstr = '%d %s%s'
+        fmtstr = '%d%s%s'
         if size < 10: # Prefer 4096M to 4G
             size *= fmtsize
             idx -= 1
     elif size < 100 and idx > 0:
-        fmtstr = '%.2f %s%s'
+        fmtstr = '%.2f%s%s'
     else:
         size = round( size )
-        fmtstr = '%d %s%s'
+        fmtstr = '%d%s%s'
 
-    if pow2p( fmtsize ): unit = 'iB'
-    else:                unit =  'B'
+    if idx == 0:           unit = ''
+    elif pow2p( fmtsize ): unit = 'iB'
+    else:                  unit =  'B'
 
-    return fmtstr % (size, suffix[idx], unit)
+    return fmtstr % (size, suffix[ idx ], unit)
 
 def printerr( *args, **kwargs ):
     sep  = kwargs.get( 'sep',  ': ' )
