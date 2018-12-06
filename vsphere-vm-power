@@ -5,7 +5,7 @@
 # Created: 2018-03-22
 # Public domain
 
-# $Id: vsphere-vm-power,v 1.12 2018/10/04 15:55:09 friedman Exp $
+# $Id: vsphere-vm-power,v 1.13 2018/11/22 02:33:09 friedman Exp $
 
 # Commentary:
 # Code:
@@ -81,10 +81,24 @@ class powerOnCallback( object ):
             for elt in self.natt:
                 vsl.printerr( elt.vm.name, elt.fault.msg )
 
-            # Not sure what to do with these yet since I haven't
-            # encountered this case, so I have nothing to test.
+            # This needs work.
+            # Recommendations occur when DRS is enabled but set to manual
+            # approval.  In the case of recommendations with no warnings,
+            # just approve them.  The cases with warning we ought to
+            # require some interactive approval unless some --auto-approve
+            # option is provided.
             for elt in self.rec:
-                vsl.printerr( 'recommendation', elt )
+                if elt.warningText:
+                    vsl.printerr( 'recommendation', elt )
+                else:
+                    vsl.printerr( elt.target.name, 'applying manual recommendations' )
+                    for action in elt.action:
+                        desc = action._wsdlName
+                        plc = '{} => {}'.format(
+                            action.target.name,
+                            action.targetHost.name )
+                        vsl.printerr( desc, plc )
+                    elt.target.ApplyRecommendation( elt.key )
 
 
 class monitorChangeCallback( object ):
