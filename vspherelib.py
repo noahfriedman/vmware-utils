@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.70 2018/11/26 23:41:06 friedman Exp $
+# $Id: vspherelib.py,v 1.71 2018/12/06 06:06:40 friedman Exp $
 
 # Commentary:
 # Code:
@@ -23,6 +23,7 @@ import time
 import atexit
 import functools
 import threading
+import random
 
 from pyVim      import connect as pyVconnect
 from pyVmomi    import vim, vmodl
@@ -203,10 +204,21 @@ class Timer( object ):
 ## ArgumentParser subclass with special handling
 ######
 
+# stub for supporting `with' statements
+class _with( object ):
+    def __enter__( self ):
+        return self
+
+    def __exit__( self, *exc_info ):
+        try:
+            self.__del__()
+        except:
+            pass
+
 class _super( object ):
     super = property( lambda self: super( type( self ), self ) )
 
-class ArgumentParser( argparse.ArgumentParser, _super ):
+class ArgumentParser( argparse.ArgumentParser, _super, _with ):
     searchlist = [ ['XDG_CONFIG_HOME', 'vspherelibrc.py'],
                    ['HOME',           '.vspherelibrc.py'], ]
 
@@ -1046,9 +1058,6 @@ class _vmomiGuestInfo( object ):
             vm_disk_list.append( prop )
         return vm_disk_list
 
-    def vmguest_ops( self, vm, *args, **kwargs ):
-        return vmomiVmGuestOperation( self, vm, *args, **kwargs )
-
 
 ##
 ## Monitor-related mixins
@@ -1111,7 +1120,8 @@ class vmomiConnect( _vmomiCollect,
                     _vmomiFolderMap,
                     _vmomiNetworkMap,
                     _vmomiGuestInfo,
-                    _vmomiMonitor ):
+                    _vmomiMonitor,
+                    _with ):
 
     def __init__( self, *args, **kwargs ):
         kwargs = dict( **kwargs ) # copy; destructively modified
@@ -1130,10 +1140,6 @@ class vmomiConnect( _vmomiCollect,
         self.kwargs = kwargs
         self.cache  = Cache( ttl=kwargs.get( 'cacheTimeout', None ) )
         self.connect()
-
-    # for `with' statements
-    def __enter__( self ): return self
-    def __exit__( self, *exc_info ): self.close()
 
     def __del__( self ):
         self.close()
@@ -1169,6 +1175,15 @@ class vmomiConnect( _vmomiCollect,
                               getattr( e, 'msg', str( e ) ) ))
             raise ConnectionFailedError( msg )
         timer.report()
+
+    def session_cookie( self ):
+        return self.si._stub.soapStub.cookie
+
+    def vmguest_ops( self, vm, *args, **kwargs ):
+        return vmomiVmGuestOperation( self, vm, *args, **kwargs )
+
+    def datastore_file_ops( self, *args, **kwargs ):
+        return vmomiDataStoreFile( self, *args, **kwargs )
 
     def mks( self, *args, **kwargs ):
         return vmomiMKS( self, *args, **kwargs )
@@ -1234,6 +1249,144 @@ class vmomiMKS( object ):
         return uri.format( **param )
 
 # end class vomiMKS
+
+
+class vmomiDataStoreFile( _with ):
+    session  = property( lambda self: self._get_session() )
+    ds_regex = re.compile( '^\[\s*([^)]+)\s*\]\s*(.*)$' )
+
+    def __init__( self, vsi, *args, **kwargs ):
+        if len( args ) == 1:
+            if kwargs.get( 'dsName', None ):
+                kwargs.setdefault( 'path', args[ 0 ] )
+            else:
+                match = self.ds_regex.search( args[ 0 ].strip() )
+                if match:
+                    dsName, path = match.groups()
+                    kwargs.setdefault( 'dsName', dsName )
+                    kwargs.setdefault( 'path',   path )
+                else:
+                    raise RequiredArgumentError( args[0], 'unparsable path' )
+        elif len( args ) == 2:
+            kwargs.setdefault( 'dsName', args[ 0 ] )
+            kwargs.setdefault( 'path',   args[ 1 ] )
+        elif args:
+            raise RequiredArgumentError( args, 'Too many args' )
+
+        self.vsi          = vsi
+        self.dsName       = kwargs[ 'dsName' ]
+        self.path         = kwargs[ 'path' ]
+        self.useHostAgent = kwargs.get( 'useHostAgent', True )
+        self.stream       = kwargs.get( 'stream',       True )
+        self.chunk_size   = kwargs.get( 'chunk_size',   16384 )
+
+        if isinstance( self.dsName, vim.Datastore ):
+            self.datastore = self.dsName
+            self.dsName    = self.datastore.name
+        else:
+            self.datastore = self.vsi.get_datastore( self.dsName )
+
+    def __del__( self ):
+        try:
+            self._session.close()
+        except:
+            pass
+
+    def _get_session( self ):
+        try:
+            return self._session
+        except AttributeError:
+            sess = self._session = requests.Session()
+            sess.stream = True
+            sess.verify = False
+            sess.headers.update( {
+                'Content-Type' : 'application/octet-stream',
+            } )
+            c_name, c_val = self.vsi.session_cookie().split( '=', 1 )
+            sess.cookies.update( { c_name : c_val } )
+            return self._session
+
+    def _ds_datacenter( self ):
+        if self.useHostAgent:
+            return 'ha-datacenter' # this is constant for ESXi hosts
+        else:
+            dc = self.datastore.parent
+            while not isinstance( dc, vim.Datacenter ):
+                dc = dc.parent
+            return dc.name
+
+    def _ds_host( self ):
+        if self.useHostAgent:
+            host = self.datastore.host
+            n = random.randint( 1, len( host ) )
+            return host[ n-1 ].key.name
+        else:
+            return self.vsi.host
+
+    # A URL has the form
+    #
+    #     scheme://authority/folder/path?dcPath=dcPath&dsName=dsName
+    #
+    # where
+    # 	* scheme: http or https.
+    # 	* authority: hostname or IP of the vcenter/esxi host+port
+    # 	* dcPath: Datacenter containing the Datastore
+    # 	* dsName: name of the Datastore
+    # 	* path: slash-delimited path from the root of the datastore
+    def _mkUrl( self ):
+        p = self.path
+        url = '{scheme}://{host}:{port}/folder/{path}?' \
+              'dcPath={dcPath}&dsName={dsName}'
+        return url.format( scheme = 'https',
+                             host = self._ds_host(),
+                             port = 443,
+                             path = p[ 1: ] if p[ 0 ] == '/' else p,
+                           dcPath = self._ds_datacenter(),
+                           dsName = self.dsName, )
+
+    @tidy_vimfaults
+    def _mkticket( self, url, method='httpGet' ):
+        spec = vim.SessionManager.HttpServiceRequestSpec()
+        spec.url    = url
+        spec.method = method
+        sm = self.vsi.si.content.sessionManager
+        ticket = sm.AcquireGenericServiceTicket( spec=spec )
+        return { 'vmware_cgi_ticket' : ticket.id }
+
+    # Return a wrapped iterator which closes the response object
+    # after all chunks are returned.
+    def _response_generator( self, resp ):
+        def generate():
+            try:
+                for chunk in resp.iter_content( chunk_size=self.chunk_size ):
+                    yield chunk
+            finally:
+                resp.close()
+        return generate()
+
+    def get( self ):
+        url = self._mkUrl()
+        if debug:
+            printerr( 'debug', 'GET', url )
+
+        if self.useHostAgent:
+            resp = self.session.get( url, cookies=self._mkticket( url ) )
+        else:
+            resp = self.session.get( url )
+
+        if not resp.ok:
+            raise NameNotFoundError(
+                '{} {}: "[{}] {}"'.format(
+                    resp.status_code, resp.reason,
+                    self.dsName, self.path ) )
+
+        if self.stream:
+            return self._response_generator( resp )
+        else:
+            try:
+                return resp.content
+            finally:
+                resp.close()
 
 
 ######
@@ -1618,7 +1771,8 @@ class _vmomiVmGuestOperation_Registry( object ):
 class vmomiVmGuestOperation( _vmomiVmGuestOperation_Env,
                              _vmomiVmGuestOperation_Dir,
                              _vmomiVmGuestOperation_File,
-                             _vmomiVmGuestOperation_Registry, ):
+                             _vmomiVmGuestOperation_Registry,
+                             _with ):
     def __init__( self, vsi, vm, *args, **kwargs ):
         kwargs = dict( **kwargs ) # copy; destructively modified
         for arg in args:
