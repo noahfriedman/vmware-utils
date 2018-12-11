@@ -5,30 +5,45 @@
 # Created: 2018-11-13
 # Public domain
 
-# $IdA$
+# $Id$
 
 # Commentary:
+
+# TODO:
+#	* retrieve modification time and restore on local copies
+#	* create file hierarchy mapping remote files, instead of writing
+#	  everything to one file.
+#	* more error checking, especially overwriting existing files
+
 # Code:
 
 from   __future__ import print_function
 from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
 import sys
-import re
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
-    p.add( '-d', '--datastore', help='Default datastore for remaining paths' )
-    p.add( 'files', nargs='+',  help='List of files to retrieve' )
+    p.add( '-d', '--datastore',           help='Default datastore for remaining paths' )
+    p.add( '-O', '--output', default='-', help='Write output to named file; default is stdout' )
+    p.add( 'files', nargs='+',            help='Remote file(s) to retrieve' )
     return p.parse()
+
+def open_output( name ):
+    if name in ['-', '/dev/stdout', '/proc/self/fd/1' ]:
+        return sys.stdout
+    else:
+        return open( name, 'wb' )
 
 def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
 
-    for dsfile in args.files:
-        pass
-
+    with open_output( args.output ) as out:
+        for dsfile in args.files:
+            with vsi.datastore_file_ops( dsfile, dsName=args.datastore ) as dsop:
+                for chunk in dsop.get():
+                    out.write( chunk )
 
 if __name__ == '__main__':
     try:
