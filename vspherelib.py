@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.71 2018/12/06 06:06:40 friedman Exp $
+# $Id: vspherelib.py,v 1.72 2018/12/11 08:00:04 friedman Exp $
 
 # Commentary:
 # Code:
@@ -2215,7 +2215,7 @@ def scale_size( size, fmtsize=1024 ):
         return (n & (n - 1) == 0)
 
     if size == 0:
-        return '0'
+        return '0 B'
 
     suffix = (' B', ' K', ' M', ' G', ' T', ' P', ' E')
     idx = 0
