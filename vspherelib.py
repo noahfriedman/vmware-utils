@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.72 2018/12/11 08:00:04 friedman Exp $
+# $Id: vspherelib.py,v 1.73 2018/12/19 22:53:00 friedman Exp $
 
 # Commentary:
 # Code:
@@ -532,7 +532,11 @@ class _vmomiCollect( object ):
                 pass
         return self.si.content.viewManager.CreateListView( obj=objs )
 
-    def _get_obj_props_nofilter( self, vimtype, props=None, root=None, recursive=True ):
+    def _get_obj_props_nofilter( self, vimtype,
+                                 props = None,
+                                 root = None,
+                                 recursive = True,
+                                 ignoreInvalidProps = False ):
         '''
         Retrieve all listed properties from objects in container (root), or
         create container out of the rootFolder.
@@ -559,14 +563,28 @@ class _vmomiCollect( object ):
             filterSpec = self.create_filter_spec( vimtype, container, props )
 
             timer  = Timer( lambda: 'retrieve {} '.format( ', '.join( v._wsdlName for v in vimtype )))
-            result = spc.RetrieveContents( [ filterSpec ] )
+            while True:
+                try:
+                    result = spc.RetrieveProperties( [ filterSpec ] )
+                    break
+                except vmodl.query.InvalidProperty as e:
+                    if not ignoreInvalidProps:
+                        raise
+                    # This is not ideal for collectors on multiple object types.
+                    # If a property path was invalid, on *which* object type was it invalid?
+                    # The exception doesn't give us any information, so we remove it from all
+                    # object types in the filterspec.
+                    for propSet in filterSpec.propSet:
+                        propSet.pathSet.remove( e.name )
+                    if debug:
+                        printerr( 'warning', e.name, 'invalid property path' )
             timer.report()
 
         if gc_container:
             container.Destroy()
         return result
 
-    def get_obj_props( self, vimtype, props=None, root=None, recursive=True, mustMatchAll=True ):
+    def get_obj_props( self, vimtype, props=None, root=None, recursive=True, mustMatchAll=True, ignoreInvalidProps=False ):
         '''
         If any of the properties have matching values to search for, narrow down
         the view of managed objects to retrieve the full list of attributes from.
@@ -580,13 +598,15 @@ class _vmomiCollect( object ):
 
         '''
         if not props:
-            return self._get_obj_props_nofilter( vimtype, props, root, recursive )
+            return self._get_obj_props_nofilter( vimtype, props, root, recursive, ignoreInvalidProps )
 
         # First get the subset of managed objects we want
         props   = propList( props )
         filters = props.filters()
         if filters:
             filterprops = filters.keys()
+            # Don't skip invalid properties here even if requested since
+            # these particular ones have match conditions attached.
             res = self._get_obj_props_nofilter( vimtype, filterprops, root, recursive )
             match = []
 
@@ -623,7 +643,7 @@ class _vmomiCollect( object ):
         # out, then merge this new set with the prior ones.
         propnames = props.names()
         if len( filters ) != len( propnames ):
-            res = self._get_obj_props_nofilter( vimtype, propnames, match, recursive )
+            res = self._get_obj_props_nofilter( vimtype, propnames, match, recursive, ignoreInvalidProps )
         else:
             res = match
 
@@ -1025,7 +1045,8 @@ class _vmomiGuestInfo( object ):
 
             prop = { 'obj'       : disk,
                      'label'     : disk.deviceInfo.label,
-                     'capacity'  : disk.capacityInBytes,
+                     # esxi4 may not fill out capacityInBytes
+                     'capacity'  : disk.capacityInBytes or disk.capacityInKB * 1024,
                      'allocated' : alloc,
                      'device'    : dev,
                      'fileName'  : backing.fileName,
@@ -1167,8 +1188,20 @@ class vmomiConnect( _vmomiCollect,
             vsos = pyVconnect.VimSessionOrientedStub
             login_method = vsos.makeUserLoginMethod( self.user, self.pwd )
             session_stub = vsos( smart_stub, login_method )
-
             self.si = vim.ServiceInstance( 'ServiceInstance', session_stub )
+
+            # SmartStubAdapter doesn't seem to work with ESXi 4.1 (or earlier?)
+            try:
+                self.si.content
+            except (vmodl.fault.MethodNotFound, vmodl.fault.SystemError) as e:
+                #printerr( 'warning', 'using non-reconnectable connection mechanism' )
+                self.si = pyVconnect.SmartConnect(
+                        host = self.host,
+                        port = self.port,
+                        user = self.user,
+                        pwd  = self.pwd,
+                        sslContext=sslContext )
+
         except Exception as e:
             msg = ': '.join(( self.host,
                               'Could not connect',
@@ -2214,7 +2247,7 @@ def scale_size( size, fmtsize=1024 ):
     def pow2p( n ):
         return (n & (n - 1) == 0)
 
-    if size == 0:
+    if size is None or size == 0:
         return '0 B'
 
     suffix = (' B', ' K', ' M', ' G', ' T', ' P', ' E')
