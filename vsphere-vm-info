@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.37 2018/12/05 20:25:22 friedman Exp $
+# $Id: vsphere-vm-info,v 1.38 2018/12/06 06:07:08 friedman Exp $
 
 # Commentary:
 # Code:
@@ -226,7 +226,10 @@ class DisplayVM( object ):
         p( 'NICs',    vm.summary.config.numEthernetCards )
         p( 'Disks',   vm.summary.config.numVirtualDisks )
         p( 'Storage', storage_size( vm.summary.storage ))
-        p( 'Nested HV', vm.config.nestedHVEnabled )
+        try:
+            p( 'Nested HV', vm.config.nestedHVEnabled )
+        except AttributeError:
+            pass
         self.display_host()
         self.display_power_state()
 
@@ -524,10 +527,12 @@ def main():
         if args.verbose:
             for vm in vmlist:
                 vm.RefreshStorageInfo()
-        vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, vmlist )
+        vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, vmlist,
+                                    ignoreInvalidProps=True )
     else:
-        vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
-        vmlist.sort( cmp=lambda a, b: cmp( a[ 'name' ], b[ 'name' ] ))
+        vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist,
+                                    ignoreInvalidProps=True )
+        vmlist.sort( key=lambda elt: elt[ 'name' ] )
 
     display_vmlist( vsi, vmlist, args.verbose )
 
