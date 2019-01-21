@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.74 2018/12/20 05:53:28 friedman Exp $
+# $Id: vspherelib.py,v 1.75 2019/01/21 19:05:47 friedman Exp $
 
 # Commentary:
 # Code:
@@ -1243,7 +1243,14 @@ class vmomiMKS( object ):
         self.fingerprint = vc_pem.digest( 'sha1' )
         self.serverGUID  = content.about.instanceUuid
         self.session     = content.sessionManager.AcquireCloneTicket()
-        self.fqdn        = attr_get( content.setting.setting, 'VirtualCenter.FQDN' )
+
+        # This is a dumb thing to fault on, but overly restrictive
+        # permissions might prevent us from inspecting vcenter to form a
+        # preferred url.
+        try:
+            self.fqdn = attr_get( content.setting.setting, 'VirtualCenter.FQDN' )
+        except vmodl.fault.SecurityError:
+            self.fqdn = self.host
 
         for arg in kwargs:
             setattr( self, arg, kwargs[ arg ] )
