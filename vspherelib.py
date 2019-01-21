@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.73 2018/12/19 22:53:00 friedman Exp $
+# $Id: vspherelib.py,v 1.74 2018/12/20 05:53:28 friedman Exp $
 
 # Commentary:
 # Code:
@@ -24,6 +24,7 @@ import atexit
 import functools
 import threading
 import random
+import weakref
 
 from pyVim      import connect as pyVconnect
 from pyVmomi    import vim, vmodl
@@ -433,25 +434,33 @@ class Cache( object ):
         for method in self.valid_table_methods:
             setattr( self, method, getattr( self.table, method ))
 
-    def clear( self ):
-        for k in self.table.keys():
-            del self[ k ]
+        # For CPython versions 3.1 or earlier, explicitly shut down daemon
+        # threads at exit, because otherwise they keep running even as the
+        # interpreter is busy destroying objects around them, resulting in
+        # exceptions in the threading module after the program has
+        # otherwise terminated.  In 3.2 and later, daemon threads are
+        # frozen at interpreter shutdown time.
+        if ( sys.version_info.major < 3
+             or ( sys.version_info.major == 3
+                  and sys.version_info.minor < 2 )):
+            weak = weakref.ref( self )
+            atexit.register( lambda: weak() and weak().thread_cleanup() )
 
-    def _expire( self, k, v ):
-        self.mutex.acquire()
+    def thread_cleanup( self ):
+        for thr in self.timer.values():
+            thr.cancel()
+            thr.join()
+
+    # Note: caller must acquire lock before calling this.
+    def __deltimer( self, k ):
         try:
-            cv = self.table[ k ]
+            timer = self.timer[ k ]
+            del self.timer[ k ]
+            if timer.ident != threading.current_thread().ident:
+                timer.cancel()
+                timer.join()
         except KeyError:
-            try: # key is gone already, but gc timer
-                del self.timer[ k ]
-            except KeyError:
-                pass
-            return
-        finally:
-            self.mutex.release()
-        # Double check it's still the same object
-        if cv is v:
-            del self[ k ]
+            pass
 
     def __getitem__( self, k ):
         return self.table[ k ]
@@ -459,20 +468,13 @@ class Cache( object ):
     def __setitem__( self, k, v ):
         self.mutex.acquire()
         try:
-            try:
-                self.timer[ k ].cancel()
-                del self.timer[ k ]
-            except KeyError: # no prior timer
-                pass
-
+            self.__deltimer( k )
             self.table[ k ] = v
             self.timer[ k ] = threading.Timer(
-                self.ttl,
-                lambda: self._expire( k, v ) )
+                self.ttl, self.__delitem__, args=[ k ] )
             # No need to finish this thread if main thread exits
             self.timer[ k ].daemon = True
             self.timer[ k ].start()
-            time.sleep( 0.0001 ) # let thread have some time to init
         finally:
             self.mutex.release()
         return v # for passthrough
@@ -480,20 +482,16 @@ class Cache( object ):
     def __delitem__( self, k ):
         self.mutex.acquire()
         try:
-            try:
-                self.timer[ k ].cancel()
-                del self.timer[ k ]
-            except KeyError:
-                pass
-
             if debug:
                 v = self.table[ k ]
-                printerr('debug', self,
-                         'delete {1:#x} {0!r}'.format( k, id( v )))
+                printerr( 'debug', self,
+                          'expire {1:#x} {0!r}'.format( k, id( v )) )
             del self.table[ k ]
+            self.__deltimer( k )
+        except KeyError:
+            pass
         finally:
             self.mutex.release()
-
 
 
 ##
