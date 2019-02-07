@@ -5,7 +5,7 @@
 # Created: 2018-03-22
 # Public domain
 
-# $Id: vsphere-vm-power,v 1.14 2018/12/06 21:57:34 friedman Exp $
+# $Id: vsphere-vm-power,v 1.15 2018/12/20 05:55:06 friedman Exp $
 
 # Commentary:
 # Code:
@@ -115,8 +115,6 @@ class monitorChangeCallback( object ):
         if objSet.kind == 'enter':
             vm_prop[ name ] = val
         elif vm_prop.get( name, None ) != val:
-            # Only one prop has to change state to consider
-            # the operation complete for our purposes.
             if vsl.debug:
                 print( '{}: {}: {} => {}'.format(
                     vm.name, name, vm_prop[ name ], val ))
@@ -186,12 +184,12 @@ def main():
         tsucc = vsi.taskwait( tasklist )
     if monilist:
         if args.cmd in ['vm-reboot']:
-            prop = 'runtime.bootTime'
+            proplist = [ 'runtime.bootTime' ]
+        else:
+            proplist = [ 'runtime.powerState' ]
 
         msucc = vsi.monitor_property_changes(
-            monilist,
-            [ 'runtime.bootTime',   # for vm-reboot
-              'runtime.powerState' ],
+            monilist, proplist,
             monitorChangeCallback( monilist ).entry )
 
     if not (tsucc and msucc):
