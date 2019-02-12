@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.34 2018/11/16 03:12:24 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.35 2018/11/26 23:45:12 friedman Exp $
 
 # Commentary:
 
@@ -483,6 +483,13 @@ class mVM():
                 diag.append( '\t' + sup )
             raise NotSupportedError( diag )
 
+        def lookup_dvs_uuid( label ):
+            dvs_mgr   = self.vsi.si.content.dvSwitchManager
+            dvs_ct    = dvs_mgr.QueryDvsConfigTarget( host = vm.runtime.host )
+            for pg in dvs_ct.distributedVirtualPortgroup:
+                if pg.portgroupName == label:
+                    return pg.switchUuid
+
         def make_backing( netlabel ):
             if isinstance( netlabel, vim.vm.device.VirtualEthernetCard ):
                 nic = netlabel
@@ -496,7 +503,11 @@ class mVM():
             else:
                 net = self.vsi.get_network( netlabel )
                 try:
-                    uuid = net.config.distributedVirtualSwitch.uuid
+                    try:
+                        uuid = net.config.distributedVirtualSwitch.uuid
+                    except AttributeError:
+                        uuid = lookup_dvs_uuid( netlabel )
+
                     backing = ethernet.DistributedVirtualPortBackingInfo(
                         port = vim.dvs.PortConnection(
                             portgroupKey = net.key,
@@ -634,9 +645,13 @@ class mVM():
 
 
     def to_vm( self, vm_name ):
-        cluster = self.vsi.get_cluster( self.args.cluster )
-        pool    = self.vsi.get_pool( self.args.pool, root=cluster )
-        return self.vsi.get_vm( vm_name ).MarkAsVirtualMachine( pool=pool )
+        vm = self.vsi.get_vm( vm_name )
+        if self.args.cluster:
+            cluster = self.vsi.get_cluster( self.args.cluster )
+        else:
+            cluster = vm.runtime.host.parent
+        pool = self.vsi.get_pool( self.args.pool, root=cluster )
+        return vm.MarkAsVirtualMachine( pool=pool )
 
 
     def tools( self, vm_name ):
