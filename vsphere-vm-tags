@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-tags,v 1.9 2018/10/12 01:13:38 friedman Exp $
+# $Id: vsphere-vm-tags,v 1.10 2018/11/10 02:49:54 friedman Exp $
 # This uses the vSphere Automation SDK for Python as well as pyVmomi.
 
 from __future__ import print_function
@@ -46,6 +46,9 @@ class vapiConnect():
         self.tag_svc   = tagging_client.Tag(            self.stub_config )
         self.tag_assoc = tagging_client.TagAssociation( self.stub_config )
 
+        self.cat_tbl = {}
+        self.tag_tbl = {}
+
 
     def connect( self ):
         host_url = "https://{}/api".format( self.host )
@@ -75,47 +78,85 @@ class vapiConnect():
     def __del__( self ):
         self.logout()
 
-    # This is slow but appears to be all that works with vSphere 6.0
-    def vmid_tags( self ):
-        result = {}
-        for cat_id in self.cat_svc.list():
+
+    def category_name( self, cat_id ):
+        try:
+            return self.cat_tbl[ cat_id ]
+        except KeyError:
+            t = vsl.Timer( 'cat_svc.get:' + cat_id )
             cat = self.cat_svc.get( cat_id )
-            cat_name = cat.name
+            t.report()
+            self.cat_tbl[ cat_id ] = cat.name
+            return cat.name
 
-            for tag_id in self.tag_svc.list_tags_for_category( cat_id ):
-                tag = self.tag_svc.get( tag_id )
-                tag_name = tag.name
+    def _tag_id_data( self, tag_id ):
+        try:
+            return self.tag_tbl[ tag_id ]
+        except KeyError:
+            t = vsl.Timer( 'tag_svc.get:' + tag_id )
+            tag = self.tag_svc.get( tag_id )
+            t.report()
+            self.tag_tbl[ tag_id ] = { 'cat_id' : tag.category_id,
+                                       'name'   : tag.name }
+            return self.tag_tbl[ tag_id ]
 
-                vm_ids = [ obj.id for obj in
-                           filter( lambda obj: obj.type == 'VirtualMachine',
-                                   self.tag_assoc.list_attached_objects( tag_id )) ]
-                for vm_id in vm_ids:
-                    try:
-                        vm_result = result[ vm_id ]
-                    except KeyError:
-                        vm_result = result[ vm_id ] = {}
-                    try:
-                        vm_cat = vm_result[ cat.name ]
-                    except KeyError:
-                        vm_cat = vm_result[ cat.name ] = []
-                    vm_cat.append( tag.name )
-        return result
+    def tag_name( self, tag_id ):
+        return self._tag_id_data( tag_id )[ 'name' ]
 
-    # WIP - Does this method work at all with vSphere 6.0?
-    def vmid_tags_by_vm( self ):
+    def tag_category( self, tag_id ):
+        cat_id = self._tag_id_data( tag_id )[ 'cat_id' ]
+        return self.category_name( cat_id )
+
+
+    def vmid_tags( self ):
         vm_ids = [ std_client.DynamicID( type = 'VirtualMachine',
                                          id   = str( vm['obj'].id ) )
                    for vm in self.vmlist ]
-        tags = self.tag_assoc.list_attached_tags_on_objects( vm_ids )
-        _print( tags )
 
-    # WIP - # Does this method work at all with vSphere 6.0?
-    def vmid_tags_by_tags( self ):
-        tag_ids = []
-        for cat_id in self.cat_svc.list():
-            tag_ids.extend( self.tag_svc.list_tags_for_category( cat_id ))
-        vm_ids = self.tag_assoc.list_attached_objects_on_tags( tag_ids )
-        _print( vm_ids )
+        t = vsl.Timer( 'vmid_tags_legacy: list_attached_tags_on_objects' )
+        tagged_objects = self.tag_assoc.list_attached_tags_on_objects( vm_ids )
+        t.report()
+
+        result = {}
+        for elt in tagged_objects:
+            tbl = {}
+            for tag_id in elt.tag_ids:
+                tag_name = self.tag_name( tag_id )
+                tag_cat  = self.tag_category( tag_id )
+                try:
+                    tbl[ tag_cat ].append( tag_name )
+                except KeyError:
+                    tbl[ tag_cat ] = [ tag_name ]
+            result[ elt.object_id.id ] = tbl
+        return result
+
+    # This is slower but appears to be all that works with vSphere 6.0
+    def vmid_tags_legacy( self ):
+        result = {}
+        for tag_id in self.tag_svc.list():
+            t = vsl.Timer( 'vmid_tags_legacy: list_attached_objects: ' + tag_id )
+            vm_ids = [ obj.id for obj in
+                       filter( lambda obj: obj.type == 'VirtualMachine',
+                               self.tag_assoc.list_attached_objects( tag_id )) ]
+            t.report()
+
+            if not vm_ids:
+                continue
+
+            tag_name = self.tag_name( tag_id )
+            tag_cat  = self.tag_category( tag_id )
+            for vm_id in vm_ids:
+                try:
+                    vm_result = result[ vm_id ]
+                except KeyError:
+                    vm_result = result[ vm_id ] = {}
+
+                try:
+                    vm_result[ tag_cat ].append( tag_name )
+                except KeyError:
+                    vm_result[ tag_cat ] = [ tag_name ]
+        return result
+
 
 def main():
     args = vsl.ArgumentParser( loadrc=True ).parse_args()
@@ -128,42 +169,29 @@ def main():
                   'guest.hostName',
                   'guest.ipAddress', ]
 
-    t = vsl.Timer('get_obj_props')
+    t = vsl.Timer( 'get_obj_props' )
     vmlist = vsi.get_obj_props( [vim.VirtualMachine], obj_props )
     t.report()
 
-    t = vsl.Timer('vapiConnect')
+    t = vsl.Timer( 'vapiConnect' )
     vpi  = vapiConnect( vmlist = vmlist,
                         host   = args.host,
                         user   = args.user,
                         passwd = args.password )
     t.report()
 
-    t = vsl.Timer('vmid_tags')
-    vm_tags = vpi.vmid_tags()
-    t.report()
-
-    # The fact that these raise Unauthenticated rather than Unauthorized
-    # against vSphere 6.0 leads me to suspect that these methods just
-    # aren't supported there.
     try:
-        t = vsl.Timer('vmid_tags_by_tags')
-        vpi.vmid_tags_by_tags()
-        t.report()
-
-        t = vsl.Timer('vmid_tags_by_vm')
-        vpi.vmid_tags_by_vm()
-        t.report()
+        vm_tags = vpi.vmid_tags()
     except errors_client.Unauthenticated:
-        pass
+        # The fact that this exception is Unauthenticated rather than
+        # Unauthorized (which is the documented exception) against vSphere
+        # 6.0 leads me to suspect that the faster methods just aren't
+        # supported there.
+        vm_tags = vpi.vmid_tags_legacy()
 
-    t = vsl.Timer('make vmtbl')
+    t = vsl.Timer( 'make vmtbl' )
     vmtbl = {}
     for vm in vmlist:
-        #if vm[ 'guest.guestState' ] != 'running':
-        #    continue
-        #del vm[ 'guest.guestState' ]
-
         vmtbl[ vm.pop( 'name' ) ] = vm
         vmid = vm.pop( 'obj' )._moId
 
@@ -181,10 +209,9 @@ def main():
             vm[ 'ip' ] = vm.pop( 'guest.ipAddress' )
         except KeyError:
             pass
-
     t.report()
 
-    t = vsl.Timer("generate json")
+    t = vsl.Timer( 'generate json' )
     out = json.dumps( vmtbl,
                       sort_keys      = True,
                       #indent        = None,
