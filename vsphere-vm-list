@@ -5,7 +5,7 @@
 # Created: 2018-05-08
 # Public domain
 
-# $Id: vsphere-vm-list,v 1.8 2018/10/04 15:51:05 friedman Exp $
+# $Id: vsphere-vm-list,v 1.9 2018/10/26 02:15:48 friedman Exp $
 
 # Commentary:
 # Code:
@@ -65,19 +65,20 @@ def main():
             except KeyError:
                 pass
 
-    show.sort( lambda a, b: cmp( a[ 'name' ], b[ 'name' ]))
-    if args.verbose:
-        for vm in show:
-            if vm[ 'config.template' ]:
-                flag = '+'
-            elif vm[ 'runtime.powerState' ] == poweredOff:
-                flag = 'o'
-            else:
-                flag = ' '
-            print( flag, vm[ 'name' ] )
-    else:
-        for vm in show:
-            print( vm[ 'name' ] )
+    if show:
+        show.sort( lambda a, b: cmp( a[ 'name' ], b[ 'name' ]))
+        if args.verbose:
+            for vm in show:
+                if vm[ 'config.template' ]:
+                    flag = '+'
+                elif vm[ 'runtime.powerState' ] == poweredOff:
+                    flag = 'o'
+                else:
+                    flag = ' '
+                print( flag, vm[ 'name' ] )
+        else:
+            for vm in show:
+                print( vm[ 'name' ] )
 
 
 if __name__ == '__main__':
