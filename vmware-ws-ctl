@@ -1,5 +1,17 @@
-#!/bin/sh
-# $Id: vmware-ws-ctl,v 1.10 2013/09/24 22:04:48 friedman Exp $
+#!/bin/bash
+# $Id: vmware-ws-ctl,v 1.11 2014/12/02 16:44:13 friedman Exp $
+
+apush() { eval "$1=(\"\${$1[@]}\" \"\${@:2}\")"; }
+
+anreverse()
+{
+    eval set "$1" "\"\${$1[@]}\""
+    eval unset "$1"
+    while [ $# -gt 1 ]; do
+        eval "$1=(\"$2\" \"\${$1[@]}\")"
+        set "$1" "${@:3}"
+    done
+}
 
 docmd()
 {
@@ -7,36 +19,26 @@ docmd()
   "$@"
 }
 
-revlist()
-{
-    i=$#
-    while [ $i -gt 0 ]; do
-        eval echo \$$i
-        i=$((i - 1))
-    done
-}
-
 system()
 {
-    action=$1
+    local action=$1
 
     case ${EUID-${UID-`id -u`}} in
         0 ) : ;;
         * ) exec sudo "$0" system "$action" || exit $? ;;
     esac
 
-    svcs='vmware
-          vmamqpd
-          vmware-USBArbitrator
-          vmware-workstation-server
-          vmware-wsx-server
-         '
+    declare -a svcs=( vmware vmamqpd )
+    if lsusb > /dev/null 2>&1; then
+        apush svcs vmware-USBArbitrator
+    fi
+    apush svcs vmware-workstation-server vmware-wsx-server
 
     case $action in
-        stop ) svcs=`revlist $svcs` ;;
+        stop ) anreverse svcs ;;
     esac
 
-    for svc in $svcs ; do
+    for svc in "${svcs[@]}" ; do
         test -f /etc/rc.d/init.d/$svc ||
             test -f /etc/init.d/$svc  ||
             continue
@@ -56,10 +58,9 @@ move_home()
 
 set_vmguest_vmx()
 {
-    os=$1
-    vmroot=${VMROOT-/export/vm/vmware}
-    vmdir=
-    arch=
+    local os=$1
+    local vmroot=${VMROOT-/export/vm/vmware}
+    local vmdir arch
 
     case $os in
         f[1-9][0-9] | f[1-9][0-9]-* ) os=fedora${os#f} ;;
@@ -70,7 +71,7 @@ set_vmguest_vmx()
         *-x86 ) arch=x86-    os=${os%-x86} ;;
     esac
 
-    vmx=
+    local vmx
     for vmdir in "$vmroot/$os" "$vmroot/$arch"*"$os"* ; do
         for f in "$vmdir"/*.vmx ; do
             if [ -f "$f" ]; then
