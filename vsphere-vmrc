@@ -5,7 +5,7 @@
 # Created: 2018-04-03
 # Public domain
 
-# $Id: vsphere-vmrc,v 1.8 2018/09/12 19:45:40 friedman Exp $
+# $Id: vsphere-vmrc,v 1.9 2018/10/04 15:51:05 friedman Exp $
 
 # Commentary:
 # Code:
@@ -22,6 +22,7 @@ import time
 def get_args():
     p = vsl.ArgumentParser( loadrc=True, rest='vmname', required=True )
     p.add_bool( '--uri', help='display URIs instead of launching' )
+    p.add( '-d', '--delay', type=int, default=2, help='Keep original session open for DELAY minutes')
     return p.parse()
 
 
@@ -34,20 +35,20 @@ def spawn(*args):
         return pid
 
 
-def launch( mks, vmlist ):
+def launch( mks, vmlist, delay ):
     for vm in vmlist:
         uri = mks.uri_vmrc( vm=vm )
         pid = spawn( os.getenv( 'VMRC_PROGRAM', default='vmplayer' ), uri )
     # Background ourselves for a while to keep session tickets active, then exit.
     pid = os.fork()
     if pid == 0:
-        time.sleep( 30 )
+        time.sleep( 60 * delay )
         sys.exit( 0 )
     else:
         os._exit( 0 )
 
 
-def display( mks, vmlist ):
+def display( mks, vmlist, delay ):
     for vm in vmlist:
         print( mks.uri_vmrc( vm=vm ) )
         print( '' )
@@ -55,12 +56,11 @@ def display( mks, vmlist ):
         print( '' )
         if len( vmlist ) > 1:
             print( '\n' )
-    # The tickets are only good until session is disconnected.
-    print( 'You have 2 minutes to connect before ticket expires.' )
-    time.sleep( 60 )
-    print( '1 minute remaining before ticket expires.' )
-    time.sleep( 60 )
-
+    while delay > 0:
+        # The tickets are only good until session is disconnected.
+        print( 'You have {} minutes to connect before ticket expires.'.format( delay ))
+        time.sleep( 60 )
+        delay -= 1
 
 def main():
     args = get_args()
@@ -69,9 +69,9 @@ def main():
 
     vmlist = vsi.find_vm( args.vmname )
     if args.uri:
-        display( mks, vmlist )
+        display( mks, vmlist, args.delay )
     else:
-        launch( mks, vmlist )
+        launch( mks, vmlist, args.delay )
 
 if __name__ == '__main__':
     main()
