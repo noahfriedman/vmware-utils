@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.75 2019/01/21 19:05:47 friedman Exp $
+# $Id: vspherelib.py,v 1.76 2019/01/21 20:43:56 friedman Exp $
 
 # Commentary:
 # Code:
@@ -1250,6 +1250,9 @@ class vmomiMKS( object ):
         try:
             self.fqdn = attr_get( content.setting.setting, 'VirtualCenter.FQDN' )
         except vmodl.fault.SecurityError:
+            pass
+        # Might be None for an esxi session
+        if not self.fqdn:
             self.fqdn = self.host
 
         for arg in kwargs:
