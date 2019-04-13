@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.76 2019/01/21 20:43:56 friedman Exp $
+# $Id: vspherelib.py,v 1.77 2019/03/23 02:38:20 friedman Exp $
 
 # Commentary:
 # Code:
@@ -771,7 +771,14 @@ class _vmomiFind( object ):
         return self._get_single( name, [vim.dvs.DistributedVirtualPortgroup], 'portgroup', root=root )
 
     def get_vm( self, name, root=None ):
-        return self._get_single( name, [vim.VirtualMachine], 'virtual machine', root=root )
+        try:
+            return self._get_single( name, [vim.VirtualMachine], 'virtual machine', root=root )
+        except:
+            search = self.find_vm( name, root=root, showerrors=False )
+            if len( search ) != 1:
+                raise
+            else:
+                return search[0]
 
     def find_vm( self, *names, **kwargs ):
         args = None # make copy of names since we alter
@@ -790,10 +797,10 @@ class _vmomiFind( object ):
 
         idx = self.si.content.searchIndex
         searchfns = [
-            lambda pat: find_by_name( pat ),
-            lambda pat: idx.FindAllByDnsName( vmSearch=True, dnsName=pat ),
+            lambda pat: idx.FindAllByUuid(    vmSearch=True,    uuid=pat ),
             lambda pat: idx.FindAllByIp(      vmSearch=True,      ip=pat ),
-            lambda pat: idx.FindAllByUuid(    vmSearch=True,    uuid=pat ) ]
+            lambda pat: find_by_name( pat ),
+            lambda pat: idx.FindAllByDnsName( vmSearch=True, dnsName=pat ), ]
 
         found    = []
         notfound = []
