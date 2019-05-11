@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.78 2019/04/13 00:23:57 friedman Exp $
+# $Id: vspherelib.py,v 1.79 2019/05/11 01:22:26 friedman Exp $
 
 # Commentary:
 # Code:
@@ -1124,7 +1124,7 @@ class _vmomiGuestInfo( object ):
         # We want to return entries in nic order.
         netOrder = { mac : i  for i, mac
                          in enumerate( net.macAddress for net in vm.guest.net ) }
-        nicOrder = [ netOrder[ nic.macAddress ]
+        nicOrder = [ netOrder.get( nic.macAddress, None )
                      for nic in get_seq_type( vm.config.hardware.device,
                                               vim.vm.device.VirtualEthernetCard ) ]
         for ipStack in vm.guest.ipStack:
@@ -1153,7 +1153,7 @@ class _vmomiGuestInfo( object ):
                 except KeyError:
                     eth = tbl[ dev ] = []
                 eth.append( new )
-        return [ tbl[ n ] for n in nicOrder ]
+        return [ tbl.get( n, [] ) for n in nicOrder ]
 
     def vmguest_ip_addrs( self, vm ):
         return [ self.vmnic_cidrs( vmnic )
