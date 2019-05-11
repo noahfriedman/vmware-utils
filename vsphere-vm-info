@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.39 2018/12/20 05:54:14 friedman Exp $
+# $Id: vsphere-vm-info,v 1.40 2019/05/11 01:33:11 friedman Exp $
 
 # Commentary:
 # Code:
@@ -421,6 +421,11 @@ class DisplayVM( object ):
         sw_map = { eth.NetworkBackingInfo                : 'vSwitch',
                    eth.DistributedVirtualPortBackingInfo : 'dvportgroup', }
 
+        if self.verbose:
+            routes = self.vsi.vmguest_ip_routes( self.vm )
+        else:
+            routes = None
+
         for nic in self.vsi.vmguest_nic_info( self.vm ):
             try:
                 backing = sw_map[ type( nic[ 'backing' ])]
@@ -435,27 +440,28 @@ class DisplayVM( object ):
 
             if self.verbose:
                 obj = nic[ 'obj' ]
+                con = obj.connectable
                 pi( farindentL, 'wakeOnLanEnabled',  obj.wakeOnLanEnabled )
-                pi( farindentL, 'startConnected',    obj.connectable.startConnected )
-                pi( farindentL, 'connected',         obj.connectable.connected )
-                pi( farindentL, 'allowGuestControl', obj.connectable.allowGuestControl )
+                pi( farindentL, 'startConnected',    con.startConnected )
+                pi( farindentL, 'connected',         con.connected )
+                pi( farindentL, 'allowGuestControl', con.allowGuestControl )
 
             cidr = nic.get( 'ip' )
             if cidr:
                 pi( farindentL, 'IP Addresses', cidr )
 
-            if self.verbose:
-                routes = self.vsi.vmguest_ip_routes( self.vm )
-            else:
-                routes = None
             if routes:
                 nicroutes = routes.pop( 0 )
-                width = max( elt[ 'network' ] for elt in nicroutes )
+                if not nicroutes:
+                    continue
+
                 formatted = []
+                #width = max( len( elt.get( 'network', '' )) for elt in nicroutes )
+                width = 0
                 for elt in nicroutes:
                     gw = elt.get( 'gateway', None )
                     if gw:
-                        s = '{} via {}'.format( elt[ 'network' ], gw )
+                        s = '{1:<{0}} via {2}'.format( width, elt[ 'network' ], gw )
                     else:
                         s = elt[ 'network' ]
                     formatted.append( s )
