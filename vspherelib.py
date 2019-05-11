@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.77 2019/03/23 02:38:20 friedman Exp $
+# $Id: vspherelib.py,v 1.78 2019/04/13 00:23:57 friedman Exp $
 
 # Commentary:
 # Code:
@@ -662,6 +662,22 @@ class _vmomiCollect( object ):
         else:
             return result
 
+    @staticmethod
+    def clone_obj( obj, *attrs ):
+        """
+        Create a shallow copy of object and its attributes.
+        Attribute values are shared, not copied.
+        """
+        if not attrs:
+            exclude = ['dynamicProperty', 'dynamicType']
+            attrs = filter( lambda s: s not in exclude, obj.__dict__ )
+        new = type( obj )()
+        for attr in attrs:
+            if hasattr( obj, attr ):
+                setattr( new, attr, getattr( obj, attr ))
+        return new
+
+
 # end class _vmomiCollect
 
 
@@ -707,8 +723,11 @@ class _vmomiFind( object ):
                     names = res
 
             diag = Diag( msg )
-            if names:
-                diag.append( 'Available {0}s:'.format( label ) )
+            if True or names:
+                local_label = label
+                if local_label[-2:] == 'ch':
+                    local_label += 'e'
+                diag.append( 'Available {0}s:'.format( local_label ) )
                 for n in sorted( names ):
                     diag.append( '\t' + n )
             raise exception( diag )
@@ -769,6 +788,9 @@ class _vmomiFind( object ):
     # These are a subset of vim.Network
     def get_portgroup( self, name, root=None ):
         return self._get_single( name, [vim.dvs.DistributedVirtualPortgroup], 'portgroup', root=root )
+
+    def get_dvswitch( self, name, root=None ):
+        return self._get_single( name, [vim.DistributedVirtualSwitch], 'distributed virtual switch', root=root )
 
     def get_vm( self, name, root=None ):
         try:
@@ -938,7 +960,133 @@ class _vmomiNetworkMap( object ):
         mapping = self._get_network_moId_label_map()
         return mapping.get( groupKey, groupKey )
 
+    def get_portgroup_switchUUID( self, label, host=None ):
+        if not host:
+            host = self.get_obj( [vim.HostSystem] )
+        elif type( host ) is vim.HostSystem:
+            host = [ host ]
+        elif type( host ) is vim.VirtualMachine:
+            host = [ host.runtime.host ]
+
+        dvs_mgr = self.si.content.dvSwitchManager
+        for obj in host:
+            ct = dvs_mgr.QueryDvsConfigTarget( host=obj )
+            for pg in ct.distributedVirtualPortgroup:
+                if label in (pg.portgroupName, pg.portgroupKey):
+                    return pg.switchUuid
+
 # end of class _vmomiNetworkMap
+
+
+##
+## changeSpec mixins
+##
+class _vmomiChangeSpec( object ):
+    def make_device_connection_changespec(
+            self,
+            vm,
+            label,
+            connect             = None,
+            start_connected     = None,
+            allow_guest_control = None ):
+        dev = filter( lambda elt: elt.deviceInfo.label == label,
+                      vm.config.hardware.device )
+        if not dev:
+            raise NameNotFoundError(
+                '{}: "{}" device not found'.format( vm.name, label ))
+
+        devspec           = vim.vm.device.VirtualDeviceSpec()
+        devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
+        devspec.device    = dev[0]
+
+        c = devspec.device.connectable
+        c.connected         = connect
+        c.startConnected    = start_connected
+        c.allowGuestControl = allow_guest_control
+        return devspec
+
+    def make_disk_format_changespec( self, vm, dest_format, index=None ):
+        vd = vim.vm.device.VirtualDisk
+        devspecs  = vim.vm.RelocateSpec.DiskLocator.Array()
+        src_disks = get_seq_type( template.config.hardware.device,
+                                  vim.vm.device.VirtualDisk )
+        if index is not None:
+            src_disks = [ src_disks[ index ] ]
+
+        for src in src_disks:
+            dspec = vim.vm.RelocateSpec.DiskLocator()
+            dspec.diskId = src.key
+            if dest_format in ['sesparse']:
+                dspec.diskBackingInfo = vd.SeSparseBackingInfo()
+            else:
+                dspec.diskBackingInfo = vd.FlatVer2BackingInfo()
+                if dest_format in ['thin']:
+                    dspec.diskBackingInfo.thinProvisioned = True
+                elif dest_format in ['thick', 'zeroedthick']:
+                    pass
+                elif dest_format in ['eagerzeroedthick']:
+                    dspec.diskBackingInfo.eagerlyScrub = True
+            devspecs.append( dspec )
+        return devspecs
+
+    def make_disk_resize_changespec( self, vm, disknum, size ):
+        try:
+            disknum = int( disknum )
+            disklabel = 'Hard disk {}'.format( disknum )
+        except ValueError:
+            disklabel = disknum
+
+        disk = filter( lambda n: n.deviceInfo.label == disklabel,
+                       get_seq_type( vm.config.hardware.device,
+                                     vim.vm.device.VirtualDisk ))
+        if not disk:
+            raise NameNotFoundError(
+                '{}: "{}" disk not found'.format( vm.name, disklabel ))
+
+        devspec           = vim.vm.device.VirtualDeviceSpec()
+        devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
+        devspec.device    = disk[0]
+        #if mode:
+        #    devspec.device.backing.diskMode = mode
+        devspec.device.capacityInBytes = str_to_bytes( size )
+        return devspec
+
+    def make_nic_changespec( self, vm, label, index=0, root=None ):
+        ethernet = vim.vm.device.VirtualEthernetCard
+        nic = get_seq_type( vm.config.hardware.device, ethernet )[index]
+
+        spec           = vim.vm.device.VirtualDeviceSpec()
+        spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
+        spec.device    = nic
+
+        if label:
+            net = self.get_network( label, root=root )
+        else:
+            net = None
+
+        try:
+            dvs_port = vim.dvs.PortConnection()
+
+            if net:
+                dvs_port.portgroupKey = net.key
+                dvs_port.switchUuid   = self.get_portgroup_switchUUID( net.key, vm )
+            else:
+                dvs_port.portgroupKey = nic.backing.port.portgroupKey
+                dvs_port.switchUuid   = nic.backing.port.switchUuid
+
+            spec.device.backing = ethernet.DistributedVirtualPortBackingInfo()
+            spec.device.backing.port = dvs_port
+
+        except AttributeError:
+            spec.device.backing = ethernet.NetworkBackingInfo()
+            if net:
+                spec.device.backing.network    = net
+                spec.device.backing.deviceName = label
+            else:
+                spec.device.backing.network    = nic.backing.network
+                spec.device.backing.deviceName = nic.backing.deviceName
+
+        return spec
 
 
 ##
@@ -952,13 +1100,33 @@ class _vmomiGuestInfo( object ):
             dconf = ipStack.dnsConfig
             if not dconf:
                 continue
-            dns.append( {
-                'server' : list( dconf.ipAddress ),
-                'search' : list( dconf.searchDomain ), })
+            elt = { 'dhcp'     : dconf.dhcp,
+                    'hostname' : dconf.hostName,
+                    'domain'   : dconf.domainName,
+                    'server'   : list( dconf.ipAddress ),
+                    'search'   : list( dconf.searchDomain ), }
+
+            if elt[ 'domain' ] and elt[ 'domain' ][-1] == '.':
+                elt[ 'domain' ] = elt[ 'domain' ][:-1]
+
+            search = elt[ 'search' ]
+            for i in range( 0, len( search )):
+                if search[ i ][ -1 ] == '.':
+                    search[ i ] = search[ i ][:-1]
+
+            dns.append ( elt )
         return dns
 
     def vmguest_ip_routes( self, vm ):
         tbl = {}
+
+        # guest net device numbers might not be in the same order as vmx nic order.
+        # We want to return entries in nic order.
+        netOrder = { mac : i  for i, mac
+                         in enumerate( net.macAddress for net in vm.guest.net ) }
+        nicOrder = [ netOrder[ nic.macAddress ]
+                     for nic in get_seq_type( vm.config.hardware.device,
+                                              vim.vm.device.VirtualEthernetCard ) ]
         for ipStack in vm.guest.ipStack:
             routes = ipStack.ipRouteConfig.ipRoute
             for elt in routes:
@@ -979,13 +1147,13 @@ class _vmomiGuestInfo( object ):
                 if gw:
                     new[ 'gateway' ] = gw
 
-                dev = elt.gateway.device
-                if dev not in tbl:
-                    eth = tbl[ dev ] = []
-                else:
+                dev = int( elt.gateway.device )
+                try:
                     eth = tbl[ dev ]
+                except KeyError:
+                    eth = tbl[ dev ] = []
                 eth.append( new )
-        return list( tbl[i] for i in sorted( tbl.keys() ))
+        return [ tbl[ n ] for n in nicOrder ]
 
     def vmguest_ip_addrs( self, vm ):
         return [ self.vmnic_cidrs( vmnic )
@@ -1016,7 +1184,8 @@ class _vmomiGuestInfo( object ):
                      'type'       : nic._wsdlName.replace( 'Virtual', '' ).lower(),
                      'label'      : nic.deviceInfo.label,
                      'netlabel'   : self.get_nic_network_label( nic ),
-                     'macAddress' : nic.macAddress, }
+                     'macAddress' : nic.macAddress,
+                     'backing'    : nic.backing, }
             if vm.summary.runtime.powerState == pst.poweredOn:
                 gnic = filter( lambda g: g.macAddress.lower() == nic.macAddress.lower(),
                                vm.guest.net )
@@ -1145,6 +1314,7 @@ class vmomiConnect( _vmomiCollect,
                     _vmomiFind,
                     _vmomiFolderMap,
                     _vmomiNetworkMap,
+                    _vmomiChangeSpec,
                     _vmomiGuestInfo,
                     _vmomiMonitor,
                     _with ):
@@ -2251,6 +2421,29 @@ def fold_text( text, maxlen=75, indent=0 ):
         text = re.sub( '\n', repl, text, flags=re.M )
 
     return text
+
+
+def str_to_bytes( str_val ):
+    unit = { 'b'   : 512,
+
+             'k'   : 1024,         't'   : 1024 ** 4,
+             'kib' : 1024,         'tib' : 1024 ** 4,
+             'kb'  : 1000,         'tb'  : 1000 ** 4,
+
+             'm'   : 1024 ** 2,    'p'   : 1024 ** 5,
+             'mib' : 1024 ** 2,    'pib' : 1024 ** 5,
+             'mb'  : 1000 ** 2,    'pb'  : 1000 ** 5,
+
+             'g'   : 1024 ** 3,    'e'   : 1024 ** 6,
+             'gib' : 1024 ** 3,    'eib' : 1024 ** 6,
+             'gb'  : 1000 ** 3,    'eb'  : 1000 ** 6, }
+    regex = re.compile( "^\s*(\d+)\s*([bkmgtpei]+)\s*$", flags=re.I )
+    match = regex.search( str( str_val ) )
+    if match:
+        size, factor = match.groups()
+        return long( size ) * unit[ factor.lower() ]
+    else:
+        return long( str_val )
 
 
 def scale_size( size, fmtsize=1024 ):
