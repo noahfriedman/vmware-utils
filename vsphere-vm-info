@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.38 2018/12/06 06:07:08 friedman Exp $
+# $Id: vsphere-vm-info,v 1.39 2018/12/20 05:54:14 friedman Exp $
 
 # Commentary:
 # Code:
@@ -112,6 +112,7 @@ proplist_verbose = [
     'guest.guestState',
     'guest.screen.width',
     'guest.screen.height',
+    'guest.ipStack',
 ]
 
 moId_types = [ vim.HostSystem, vim.ResourcePool ]
@@ -123,6 +124,7 @@ def get_args():
     p = vsl.ArgumentParser( loadrc=True )
     p.add( '-a', '--all',     action='store_true', help='Retrieve all known VMs' )
     p.add( '-v', '--verbose', action='store_true', help='Display extended info' )
+    p.add( '-R', '--refresh', action='store_true', help='Refresh storage info' )
     p.add( 'vm', nargs='*',                        help='VM names, if not all' )
 
     args = p.parse()
@@ -159,41 +161,33 @@ def p( *parm ):
     if isinstance( parm[ -1 ], (str, unicode) ) and parm[ -1 ] == "":
         end  = ''
         parm = parm[ : -1 ]
-    s = '%*s : %s' % (w, parm[ 0 ], str.join( " ", map( str, parm[ 1: ] ) ))
+
+    if len( parm ) > 1 and type( parm[ 1 ] ) is list:
+        val = str.join( '\n' + farindentS + indentS + '   ', map( str, parm[ 1 ] ))
+    else:
+        val = str.join( ' ', map( str, parm[ 1: ] ) )
+    s = '%*s : %s' % (w, parm[ 0 ], val )
     print( s, end=end )
 
 def pi( *parm ):
     print( indentS, end="" )
     p( *parm )
 
-def pf( label, extra, dic, attrs ):
-    idx = 0
-    if extra:
-        p( label, extra )
-    else:
+def pf( label, dic, attrs, extra='' ):
+    p( label, extra )
+    for n, attr in enumerate( attrs ):
         try:
-            # Look up key before writing, in case of exception.
-            val = dic[ attrs[ 0 ]]
-            p( label, '' )
-            p( farindentL, attrs[ 0 ], val )
-            idx = 1
-        except KeyError:
-            pass
-    for attr in attrs[ idx : ]:
-        try:
-            pi( farindentL, attr, dic[ attr ] )
-        except KeyError:
-            pass
-        except:
-            pi( farindentL, attr, getattr( dic, attr ))
+            if n == 0 and not extra:
+                fn = p
+            else:
+                fn = pi
 
-def pf2( label, dic, attrs ):
-    p( label, '' )
-    p( farindentL, attrs[0][0], dic[ attrs[0][1] ] )
-    for a, b in attrs[ 1: ]:
-        try:
-            pi( farindentL, a, dic[ b ] )
-        except:
+            if type( attr ) is tuple:
+                fn( farindentL, attr[0], dic[ attr[1] ] )
+            else:
+                fn( farindentL, attr, dic[ attr ] )
+
+        except KeyError:
             pass
 
 
@@ -212,7 +206,7 @@ class DisplayVM( object ):
         self.display()
 
     def display( self ):
-        vm      = self.vm
+        vm = self.vm
 
         self.display_name()
         self.display_location()
@@ -239,6 +233,7 @@ class DisplayVM( object ):
             self.display_flags()
             self.display_power_ops()
             self.display_vnc()
+            self.display_dns()
 
         self.display_networks()
         self.display_disks()
@@ -275,7 +270,8 @@ class DisplayVM( object ):
         p( 'VM UUID', vm_conf.uuid)
         if self.verbose:
             p( 'Instance Id',    vm_conf.instanceUuid )
-            p( 'Location Id',    getattr( vm_conf, 'locationId', None ))
+            if vm_conf.locationId:
+                p( 'Location Id', vm_conf.locationId)
             p( 'Config modtime', vm_conf.changeVersion )
         p( 'VMX', vm_conf.files.vmPathName )
 
@@ -345,26 +341,26 @@ class DisplayVM( object ):
             pass
 
     def display_tools( self ):
-        pf2( 'Tools ', self.vm.config.tools,
-             ( ('Power On' , 'afterPowerOn'),
-               ('Resume'   , 'afterResume'),
-               ('Standby'  , 'beforeGuestStandby'),
-               ('Shutdown' , 'beforeGuestShutdown'),
-               ('Reboot'   , 'beforeGuestReboot'),
-               ('Upgrade'  , 'toolsUpgradePolicy'),
-               ('syncTime' , 'syncTimeWithHost'), ))
+        pf( 'Tools ', self.vm.config.tools,
+            ( ('Power On' , 'afterPowerOn'),
+              ('Resume'   , 'afterResume'),
+              ('Standby'  , 'beforeGuestStandby'),
+              ('Shutdown' , 'beforeGuestShutdown'),
+              ('Reboot'   , 'beforeGuestReboot'),
+              ('Upgrade'  , 'toolsUpgradePolicy'),
+              ('syncTime' , 'syncTimeWithHost'), ))
 
     def display_guest( self ):
-        pf2( 'Guest Tools', self.vm.guest,
-             ( ('Tools Status',    'toolsStatus'),
-               ('Running Status',  'toolsRunningStatus'),
-               ('Version Status',  'toolsVersionStatus'),
-               ('Version Status2', 'toolsVersionStatus2'),
-               ('Version',         'toolsVersion'),
-               ('State',           'guestState'),
-             ))
+        pf( 'Guest Tools', self.vm.guest,
+            ( ('Tools Status',    'toolsStatus'),
+              ('Running Status',  'toolsRunningStatus'),
+              ('Version Status',  'toolsVersionStatus'),
+              ('Version Status2', 'toolsVersionStatus2'),
+              ('Version',         'toolsVersion'),
+              ('State',           'guestState'),
+            ))
         try:
-            pf2( 'Screen', self.vm.guest.screen,
+            pf( 'Screen', self.vm.guest.screen,
                  ( ('Width',    'width'),
                    ('Height',  'height'),
                  ))
@@ -372,7 +368,7 @@ class DisplayVM( object ):
             pass
 
     def display_flags( self ):
-        pf( 'Flags', '', self.vm.config.flags,
+        pf( 'Flags', self.vm.config.flags,
             sorted( ( 'disableAcceleration',
                       'enableLogging',
                       'runWithDebugInfo',
@@ -387,7 +383,7 @@ class DisplayVM( object ):
                       'faultToleranceType', )))
 
     def display_power_ops( self ):
-        pf( 'Power Ops', '', self.vm.config.defaultPowerOps,
+        pf( 'Power Ops', self.vm.config.defaultPowerOps,
             sorted( ( 'powerOffType',
                       'suspendType',
                       'resetType',
@@ -403,17 +399,39 @@ class DisplayVM( object ):
                 vnc.key = '(set)'
             else:
                 vnc.key = 'None'
-            pf( 'VNC', '', vnc,
+            pf( 'VNC', vnc,
                 ( 'enabled',
-                  'port', 'frob',
+                  'port',
                   'key', ))
         except AttributeError:
             return
 
+    def display_dns( self ):
+        dns_list = self.vsi.vmguest_dns_config( self.vm )
+        for dns in dns_list:
+            if not dns[ 'domain' ]:
+                dns[ 'domain' ] = ' '
+            pf( 'DNS', dns,
+                 ( 'domain',
+                   'server',
+                   'search', ))
+
     def display_networks( self ):
+        eth = vim.vm.device.VirtualEthernetCard
+        sw_map = { eth.NetworkBackingInfo                : 'vSwitch',
+                   eth.DistributedVirtualPortBackingInfo : 'dvportgroup', }
+
         for nic in self.vsi.vmguest_nic_info( self.vm ):
-            pf( nic[ 'label' ], '{} on "{}"'.format( nic[ 'type' ], nic[ 'netlabel' ] ),
-                nic, ( 'macAddress', ) )
+            try:
+                backing = sw_map[ type( nic[ 'backing' ])]
+            except KeyError:
+                backing = 'unknown switch type'
+
+            pf( nic[ 'label' ], nic,
+                ( 'macAddress', ),
+                extra='{} on "{}" ({})'.format(
+                    nic[ 'type' ], nic[ 'netlabel' ], backing) )
+
 
             if self.verbose:
                 obj = nic[ 'obj' ]
@@ -424,10 +442,25 @@ class DisplayVM( object ):
 
             cidr = nic.get( 'ip' )
             if cidr:
-                spc  = " " * (abs( farindentL ) + abs( indentL ) + 2)
-                pi( farindentL, 'IP Addresses', cidr[0] )
-                for ip in cidr[1:]:
-                    print( spc, ip )
+                pi( farindentL, 'IP Addresses', cidr )
+
+            if self.verbose:
+                routes = self.vsi.vmguest_ip_routes( self.vm )
+            else:
+                routes = None
+            if routes:
+                nicroutes = routes.pop( 0 )
+                width = max( elt[ 'network' ] for elt in nicroutes )
+                formatted = []
+                for elt in nicroutes:
+                    gw = elt.get( 'gateway', None )
+                    if gw:
+                        s = '{} via {}'.format( elt[ 'network' ], gw )
+                    else:
+                        s = elt[ 'network' ]
+                    formatted.append( s )
+                pi( farindentL, 'Routes', formatted )
+
 
     def display_disks( self ):
         for disk in self.vsi.vmguest_disk_info( self.vm ):
@@ -443,14 +476,15 @@ class DisplayVM( object ):
             except KeyError:
                 pass
 
-            pf( disk[ 'label' ], disk[ 'fileName' ],
-                disk, ( 'capacity',
-                        'allocated',
-                        'device',
-                        'backing',
-                        'deviceName',
-                        'diskMode',
-                        vfrcache, ) )
+            pf( disk[ 'label' ], disk,
+                ( 'capacity',
+                  'allocated',
+                  'device',
+                  'backing',
+                  'deviceName',
+                  'diskMode',
+                  vfrcache, ),
+                extra=disk[ 'fileName' ] )
 
 
     def _display_text( self, label, text, *options ):
@@ -524,7 +558,7 @@ def main():
         vmlist = vsi.find_vm( args.vm )
         if not vmlist:
             return
-        if args.verbose:
+        if args.refresh:
             for vm in vmlist:
                 vm.RefreshStorageInfo()
         vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, vmlist,
