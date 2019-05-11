@@ -5,7 +5,7 @@
 # Created: 2018-03-09
 # Public domain
 
-# $Id: vsphere-vm-clone,v 1.16 2018/10/25 01:48:32 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.17 2018/11/16 03:10:05 friedman Exp $
 
 # Commentary:
 # Code:
@@ -33,54 +33,6 @@ def get_args():
     return p.parse()
 
 ##########
-
-def make_disk_changespecs( vsi, template, opt ):
-    vd = vim.vm.device.VirtualDisk
-    dst_specs = vim.vm.RelocateSpec.DiskLocator.Array()
-    src_disks = vsl.get_seq_type( template.config.hardware.device,
-                                  vim.vm.device.VirtualDisk )
-    dst_format = opt.disk_format
-    for src in src_disks:
-        dspec = vim.vm.RelocateSpec.DiskLocator()
-        dspec.diskId    = src.key
-        if dst_format in ['sesparse']:
-            dspec.diskBackingInfo = vd.SeSparseBackingInfo()
-        else:
-            dspec.diskBackingInfo = vd.FlatVer2BackingInfo()
-            if dst_format in ['thin']:
-                dspec.diskBackingInfo.thinProvisioned = True
-            elif dst_format in ['thick', 'zeroedthick']:
-                pass
-            elif dst_format in ['eagerzeroedthick']:
-                dspec.diskBackingInfo.eagerlyScrub = True
-        dst_specs.append( dspec )
-    return dst_specs
-
-
-def make_nic_changespec( vsi, template, label, root=None ):
-    ethernet = vim.vm.device.VirtualEthernetCard
-
-    nic = vsl.get_seq_type( template.config.hardware.device, ethernet )[0]
-    net = vsi.get_network( label, root=root )
-
-    spec           = vim.vm.device.VirtualDeviceSpec()
-    spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
-    spec.device    = nic
-
-    try:
-        dvs_port = vim.dvs.PortConnection()
-        dvs_port.portgroupKey = net.key
-        dvs_port.switchUuid   = net.config.distributedVirtualSwitch.uuid
-
-        spec.device.backing = ethernet.DistributedVirtualPortBackingInfo()
-        spec.device.backing.port = dvs_port
-    except AttributeError:
-        spec.device.backing = ethernet.NetworkBackingInfo()
-        spec.device.backing.network = net
-        spec.device.backing.deviceName = label
-
-    return spec
-
 
 def vmclone( vsi, template, opt ):
     if opt.folder:
@@ -118,12 +70,11 @@ def vmclone( vsi, template, opt ):
     relospec.pool         = pool
     relospec.deviceChange = []
 
-    if opt.network:
-        nicspec = make_nic_changespec( vsi, template, opt.network, root=cluster.network )
-        relospec.deviceChange.append( nicspec )
+    nicspec = vsi.make_nic_changespec( template, opt.network, root=cluster.network )
+    relospec.deviceChange.append( nicspec )
 
     if opt.disk_format:
-        dspecs = make_disk_changespecs( vsi, template, opt )
+        dspecs = vsi.make_disk_format_changespecs( template, opt.disk_format )
         for spec in dspecs:
             spec.datastore = datastore
         relospec.disk.extend( dspecs )
