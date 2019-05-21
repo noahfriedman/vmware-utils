@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.79 2019/05/11 01:22:26 friedman Exp $
+# $Id: vspherelib.py,v 1.80 2019/05/11 02:34:05 friedman Exp $
 
 # Commentary:
 # Code:
@@ -276,11 +276,12 @@ class ArgumentParser( argparse.ArgumentParser, _super, _with ):
         opt.user     = os.getenv( 'LOGNAME' )
         opt.password = None
 
-        _locals = locals()
+        _environ = dict( globals() )
+        _environ.update( locals() )
         def source( filename ):
             script = file_contents( filename )
             script.replace( '\r\n', '\n' )
-            exec( script, globals(), _locals )
+            exec( script, _environ, _environ )
 
         env_rc = os.getenv( 'VSPHERELIBRC' )
         if env_rc:
