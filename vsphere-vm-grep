@@ -1,0 +1,126 @@
+#!/usr/bin/env python
+# vsphere-vm-grep --- search for virtual machines by regex on vm properties
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2019-05-21
+# Public domain
+
+# $Id$
+
+# Commentary:
+# Code:
+
+from   __future__ import print_function
+from   pyVmomi    import vim
+
+import vspherelib     as vsl
+import sys
+import re
+
+
+
+def get_args():
+    p = vsl.ArgumentParser( loadrc=True )
+    p.add( '-v', '--verbose', action='store_true', help='Display matching property and contents' )
+
+    p.add( '-I', '-i', action='store_true', help='Perform case-insensitive matching.')
+    p.add( '-L', action='store_true', help='''Make \w, \W, \b, \B, dependent on the current locale.''')
+    p.add( '-M', action='store_true', help='''
+        "^" matches the beginning of lines (after a newline) as well as the string.
+        "$" matches the end of lines (before a newline) as well as the end of the string.''' )
+    p.add( '-S', action='store_true', help='"." matches any character at all, including newline.')
+    p.add( '-X', action='store_true', help='''Ignore whitespace and comments for nicer looking RE's.''')
+    p.add( '-U', action='store_true', help='''Make \w, \W, \b, \B, dependent on the Unicode locale.''')
+
+    p.add( 'regex',                   help='Pattern to search for' )
+    p.add( 'properties', nargs='*',   help='vm properties to search (default: config.annotation)' )
+
+    args = p.parse()
+    if not args.regex:
+        vsl.printerr( 'Specify regex' )
+        sys.exit( 1 )
+    return args
+
+
+def matches( regex, obj, name=None ):
+    # Don't descend into other referenced managed objects
+    if isinstance( obj, (type, vim.ManagedObject) ):
+        return
+
+    try:
+        result = regex.search( obj )
+        if result:
+            return (name, obj,)
+    except TypeError:
+        try:
+            iter( obj )
+        except TypeError:
+            obj = vars( obj )
+
+        # Sorting the elements makes the results a little more consistent
+        # when multiple properties might match in multiple VMs.
+        # Otherwise what you get depends on hash order.
+        for (i, elt) in enumerate( sorted( obj )):
+            try:
+                val = obj[ elt ]
+                subname = str.join( '.', (name, elt))
+                result = matches( regex, val, name=subname )
+            except (TypeError, IndexError):
+                subname = '{}[{}]'.format( name, i )
+                result = matches( regex, elt, name=subname )
+            if result:
+                return result
+
+def display( label, text ):
+    try:
+        text = vsl.fold_text( text, maxlen=70, indent=8 )
+        if text.find( '\n' ) >= 0:
+            text = '\n        ' + text
+        print( '    {}: {}\n'.format( label, text ))
+    except AttributeError:
+        text = re.sub( '\n+', '\n    ', str( text ), flags=re.M )
+        print( '    {} = {}\n'.format( label, text ))
+
+def main():
+    args = get_args()
+    vsi  = vsl.vmomiConnect( args )
+
+    greplist = args.properties
+    if not greplist:
+        greplist.append( 'config.annotation' )
+    proplist = [ 'name', ]
+    proplist.extend( greplist )
+
+    flags = 0
+    if args.I: flags |= re.I
+    if args.L: flags |= re.L
+    if args.M: flags |= re.M
+    if args.S: flags |= re.S
+    if args.X: flags |= re.X
+    if args.U: flags |= re.U
+    regex  = re.compile( args.regex, flags=flags )
+    vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, ignoreInvalidProps=True )
+
+    vmlist.sort( cmp=lambda a, b: cmp( a[ 'name' ], b[ 'name' ] ) )
+    for vm in vmlist:
+        firstmatch = True
+        for prop in greplist:
+            try:
+                result = matches( regex, vm[ prop ], name=prop )
+                if result:
+                    if firstmatch:
+                        print( vm[ 'name' ] )
+                        firstmatch = False
+                    if args.verbose:
+                        display( *result )
+                    else:
+                        break
+            except KeyError:
+                pass
+
+##########
+
+if __name__ == '__main__':
+    main()
+
+# eof
