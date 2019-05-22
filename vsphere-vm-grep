@@ -5,7 +5,7 @@
 # Created: 2019-05-21
 # Public domain
 
-# $Id$
+# $Id: vsphere-vm-grep,v 1.1 2019/05/22 02:49:41 friedman Exp $
 
 # Commentary:
 # Code:
@@ -16,6 +16,7 @@ from   pyVmomi    import vim
 import vspherelib     as vsl
 import sys
 import re
+import functools
 
 
 
@@ -48,9 +49,8 @@ def matches( regex, obj, name=None ):
         return
 
     try:
-        result = regex.search( obj )
-        if result:
-            return (name, obj,)
+        if regex.search( obj ):
+            return (name, obj)
     except TypeError:
         try:
             iter( obj )
@@ -101,7 +101,8 @@ def main():
     regex  = re.compile( args.regex, flags=flags )
     vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, ignoreInvalidProps=True )
 
-    vmlist.sort( cmp=lambda a, b: cmp( a[ 'name' ], b[ 'name' ] ) )
+    keyfn = functools.cmp_to_key( lambda a, b: cmp( a[ 'name' ], b[ 'name' ] ))
+    vmlist.sort( key=keyfn )
     for vm in vmlist:
         firstmatch = True
         for prop in greplist:
