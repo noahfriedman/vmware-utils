@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.40 2019/05/11 01:33:11 friedman Exp $
+# $Id: vsphere-vm-info,v 1.41 2019/05/11 02:35:20 friedman Exp $
 
 # Commentary:
 # Code:
@@ -270,8 +270,10 @@ class DisplayVM( object ):
         p( 'VM UUID', vm_conf.uuid)
         if self.verbose:
             p( 'Instance Id',    vm_conf.instanceUuid )
-            if vm_conf.locationId:
+            try:
                 p( 'Location Id', vm_conf.locationId)
+            except AttributeError:
+                pass
             p( 'Config modtime', vm_conf.changeVersion )
         p( 'VMX', vm_conf.files.vmPathName )
 
