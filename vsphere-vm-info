@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.41 2019/05/11 02:35:20 friedman Exp $
+# $Id: vsphere-vm-info,v 1.42 2019/06/19 22:23:48 friedman Exp $
 
 # Commentary:
 # Code:
@@ -70,7 +70,6 @@ proplist = [
     'summary.storage', ]
 
 proplist_verbose = [
-    #'config.extraConfig.guestinfo.json', # can't retrieve if undefined
     'config.extraConfig',
 
     'config.instanceUuid',
@@ -123,7 +122,7 @@ folder_map = None
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
     p.add( '-a', '--all',     action='store_true', help='Retrieve all known VMs' )
-    p.add( '-v', '--verbose', action='store_true', help='Display extended info' )
+    p.add( '-v', '--verbose', action='count',      help='Display extended info' )
     p.add( '-R', '--refresh', action='store_true', help='Refresh storage info' )
     p.add( 'vm', nargs='*',                        help='VM names, if not all' )
 
@@ -194,6 +193,7 @@ def pf( label, dic, attrs, extra='' ):
 class DisplayVM( object ):
     def __init__( self, vsi, vmprops, verbose=False, sep="" ):
         self.vsi = vsi
+        self.vmprops = vmprops
         self.vm = vsl.flat_to_nested_dict( vmprops, objtype=vsl.pseudoPropAttr )
         try:
             self.vm.config.extraConfig = vsl.flat_to_nested_dict(
@@ -226,25 +226,20 @@ class DisplayVM( object ):
             pass
         self.display_host()
         self.display_power_state()
-
-        if self.verbose:
-            self.display_tools()
-            self.display_guest()
-            self.display_flags()
-            self.display_power_ops()
-            self.display_vnc()
-            self.display_dns()
-
         self.display_networks()
         self.display_disks()
 
-        # This is a custom key I insert into my VMs
         if self.verbose:
-            try:
-                p( 'Guest json', vm.config.extraConfig.guestinfo.json )
-            except AttributeError:
-                pass
-
+            self.display_dns()
+            self.display_vnc()
+            self.display_tools()
+            self.display_power_ops()
+            self.display_flags()
+            self.display_guest()
+            if self.verbose > 1:
+                self.display_extraconfig_props()
+            else:
+                self.display_guestinfo_props()
             self.display_annotation()
 
         self.display_question()
@@ -407,6 +402,31 @@ class DisplayVM( object ):
                   'key', ))
         except AttributeError:
             return
+
+    def display_extraconfig_props( self ):
+        prop = vsl.attr_to_dict( self.vmprops[ 'config.extraConfig' ] )
+        for key in prop:
+            val = prop[ key ]
+            if val == '':
+                val = ' '
+            elif val.find( '\n' ) > 0:
+                val = [ s.strip( '\t\r' ) for s in val.split( '\n' ) ]
+                val = str.join( '\\n', val )
+            prop[ key ] = val
+        pf( 'ExtraConfig', prop, sorted( prop ))
+
+    def display_guestinfo_props( self ):
+        ec = self.vmprops[ 'config.extraConfig' ]
+        prop = dict( map( lambda elt: (elt.key[ 10: ], elt.value.strip( ' \t\r' ) ),
+                          filter( lambda elt: elt.key.find( 'guestinfo.' ) == 0, ec ) ))
+        if prop:
+            for key in prop:
+                val = prop[ key ]
+                if val.find( '\n' ) > 0:
+                    val = [ s.strip() for s in val.split( '\n' ) ]
+                    val = str.join( '\\n', val )
+                prop[ key ] = '"{}"'.format( val )
+            pf( 'GuestInfo', prop, sorted( prop ))
 
     def display_dns( self ):
         dns_list = self.vsi.vmguest_dns_config( self.vm )
