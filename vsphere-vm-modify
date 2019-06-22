@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.35 2018/11/26 23:45:12 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.36 2019/02/12 01:48:27 friedman Exp $
 
 # Commentary:
 
@@ -65,6 +65,11 @@ def get_args():
         ' "K", "KiB", "M", "MiB", "G", "GiB" to abbreviate in power of 2^n units;'
         ' use "KB", "MB", "GB" to specify 10^n (SI) units.') )
     p_sub.alias( 'extend-disk', 'disk-extend' )
+
+    ## extraconfig
+    p_econfig = p_sub.add_parser( 'extraconfig', help='set or delete config variables in vmx file' )
+    p_econfig.add( 'vm',    nargs=1,             help='Virtual machine' )
+    p_econfig.add( 'entry', nargs='+',           help='KEY=VALUE pairs; leave VALUE empty to delete' )
 
     ## folder
     p_folder = p_sub.add_parser( 'folder', help='Move VM(s) to name folder' )
@@ -385,6 +390,16 @@ class mVM():
 
     def disconnect( self, vm_name ):
         return self.connect( vm_name, connect=False )
+
+
+    def extraconfig( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        for entry in self.args.entry:
+            kv = entry.split( '=', 1 )
+            if len( kv ) < 2:
+                kv.append( '' )
+            self._setopt( cfgspec, *kv )
+        return vm.ReconfigVM_Task( cfgspec )
 
 
     def folder( self, vm_name ):
