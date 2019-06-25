@@ -5,7 +5,7 @@
 # Created: 2018-03-09
 # Public domain
 
-# $Id: vsphere-vm-clone,v 1.18 2019/05/11 01:25:03 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.19 2019/06/25 18:57:53 friedman Exp $
 
 # Commentary:
 # Code:
@@ -29,7 +29,6 @@ def get_args():
     p.add( '-c', '--cluster',                     help='Name of the cluster or hypervisor host for new vm' )
     p.add( '-n', '--network',                     help='Network label for first virtual nic' )
     p.add( '-a', '--annotation',                  help='New annotation for cloned VM' )
-    p.add( '-V', '--hwversion',                   help='Upgrade hardware version of new vm' )
     p.add( '-F', '--disk-format', choices=formats, help='Format for cloned VM disks' )
     return p.parse()
 
@@ -87,14 +86,6 @@ def vmclone( vsi, template, opt ):
     if opt.annotation is not None:
         clonespec.config = vim.vm.ConfigSpec()
         clonespec.config.annotation = opt.annotation
-
-    if opt.hwversion is not None:
-        if not clonespec.config:
-            clonespec.config = vim.vm.ConfigSpec()
-
-        version = 'vmx-{:02d}'.format( int( opt.hwversion ))
-        hui = vim.vm.ScheduledHardwareUpgradeInfo( versionKey=version )
-        clonespec.config.scheduledHardwareUpgradeInfo = hui
 
     try:
         task = template.Clone( folder=folder, name=opt.vm_name, spec=clonespec )
