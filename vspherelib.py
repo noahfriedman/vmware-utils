@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.80 2019/05/11 02:34:05 friedman Exp $
+# $Id: vspherelib.py,v 1.81 2019/05/21 00:52:35 friedman Exp $
 
 # Commentary:
 # Code:
@@ -1009,7 +1009,7 @@ class _vmomiChangeSpec( object ):
     def make_disk_format_changespec( self, vm, dest_format, index=None ):
         vd = vim.vm.device.VirtualDisk
         devspecs  = vim.vm.RelocateSpec.DiskLocator.Array()
-        src_disks = get_seq_type( template.config.hardware.device,
+        src_disks = get_seq_type( vm.config.hardware.device,
                                   vim.vm.device.VirtualDisk )
         if index is not None:
             src_disks = [ src_disks[ index ] ]
