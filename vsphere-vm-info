@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.42 2019/06/19 22:23:48 friedman Exp $
+# $Id: vsphere-vm-info,v 1.43 2019/06/22 03:55:32 friedman Exp $
 
 # Commentary:
 # Code:
@@ -231,7 +231,6 @@ class DisplayVM( object ):
 
         if self.verbose:
             self.display_dns()
-            self.display_vnc()
             self.display_tools()
             self.display_power_ops()
             self.display_flags()
@@ -239,6 +238,7 @@ class DisplayVM( object ):
             if self.verbose > 1:
                 self.display_extraconfig_props()
             else:
+                self.display_vnc()
                 self.display_guestinfo_props()
             self.display_annotation()
 
