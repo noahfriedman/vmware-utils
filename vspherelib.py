@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.81 2019/05/21 00:52:35 friedman Exp $
+# $Id: vspherelib.py,v 1.82 2019/06/25 18:56:26 friedman Exp $
 
 # Commentary:
 # Code:
@@ -829,10 +829,15 @@ class _vmomiFind( object ):
         notfound = []
         for name in args:
             for fn in searchfns:
-                res = fn( name )
-                if res:
-                    found.extend( res )
-                    break
+                try:
+                    res = fn( name )
+                    if res:
+                        found.extend( res )
+                        break
+                except vmodl.fault.SystemError:
+                    # ESXi 4.x doesn't like uuid searches with
+                    # non-conforming patterns
+                    pass
             else:
                 notfound.append( name )
 
