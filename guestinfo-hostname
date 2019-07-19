@@ -1,0 +1,143 @@
+#!/bin/sh
+# guestinfo-hostname - set hostname from VMware guestinfo
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2019-07-19
+# Public domain
+
+# $Id$
+
+### BEGIN INIT INFO
+# Provides:          guestinfo-hostname
+# Required-Start:
+# Required-Stop:
+# X-Start-Before:    $network $netdaemons
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Set hostname from VMware guestinfo
+# Description:       set hostname from VMware guestinfo
+### END INIT INFO
+
+# chkconfig: 2345 01 99
+# description:	set hostname from VMware guestinfo
+
+# To add/remove using chkconfig:
+#	chkconfig --add guestinfo-hostname
+#	chkconfig --del guestinfo-hostname
+# To add/remove using insserv:
+# 	insserv --default guestinfo-hostname
+#	insserv --remove  guestinfo-hostname
+# Using update-rc.d:
+# 	update-rc.d    guestinfo-hostname defaults
+#	update-rc.d -f guestinfo-hostname remove
+
+# To enable with systemd, create /etc/systemd/system/guestinfo-hostname.service
+# with the following lines:
+#	[Unit]
+#	Description=set hostname from VMware guestinfo
+#	SourcePath=/etc/systemd/system/guestinfo-hostname
+#	Before=graphical.target
+#	Before=network-online.target
+#	Before=network.target
+#	Before=network-pre.target
+#	Before=systemd-networkd.service
+#	Before=systemd-networkd.socket
+#	Before=update-issue.service
+#
+#	[Service]
+#	Type=oneshot
+#	Restart=no
+#	TimeoutSec=10s
+#	RemainAfterExit=no
+#	SuccessExitStatus=0
+#	ExecStart=/etc/systemd/system/guestinfo-hostname
+#
+#	[Install]
+#	WantedBy=multi-user.target
+#
+# Install this script in the same directory rather than /etc/init.d,
+# then run:
+#	systmectl enable guestinfo-hostname.service
+
+PATH=/usr/bin:/usr/sbin:$PATH
+
+iface_primary()
+{
+    ip -o -f inet route list match 0 | sed -e 's/.* dev \([^ ][^ ]*\).*/\1/';
+}
+
+restart_iface()
+{
+    iface=`iface_primary`
+    case $iface in '' ) return ;; esac
+
+    if { type ifdown && type ifup; } > /dev/null 2>&1; then
+        ifdown $iface
+        ifup   $iface
+    else
+        # systemd-networkd has no support for bringing a single interface
+        # up and down.  This is about the best we can do.
+        ip link set $iface down
+        ip link set $iface up
+    fi
+}
+
+set_hostname()
+{
+    new=$1
+    cur=$curHostname
+
+    # If new hostname is not a fqdn, but the old hostname was, then
+    # reuse the old fqdn with the new name.
+    case $new in
+        *.* ) : ;;
+        *   ) case $cur in
+                  *.* ) new=$new.${cur#*.} ;;
+              esac ;;
+    esac
+
+    # Record for future reboots
+    if   [ -f /etc/hostname ]; then echo $new > /etc/hostname
+    elif [ -f /etc/HOSTNAME ]; then echo $new > /etc/HOSTNAME
+    elif [ -f /etc/sysconfig/network ]; then
+        sed -i -e "s/^\(HOSTNAME\)=.*/\1=$new/" /etc/sysconfig/network
+    fi
+
+    hostname $new
+    restart_iface
+}
+
+set_forceHostname()
+{
+    case ${forceHostname:+isset}:$curHostname in
+        isset:$forceHostname ) return 1 ;; # forced name is already current
+        isset:* ) set_hostname $forceHostname; return $? ;;
+        *:* ) return 1 ;;
+    esac
+}
+
+set_initHostname()
+{
+    case ${initHostname:+isset}:$curHostname in
+        isset:*-template.* | isset:*-template )
+            set_hostname $initHostname
+            return $? ;;
+    esac
+    return 0
+}
+
+main()
+{
+    case $1 in
+        stop | status ) exit 0 ;;
+    esac
+
+    forceHostname=`vmware-rpctool "info-get guestinfo.forceHostname" 2> /dev/null`
+    initHostname=`vmware-rpctool  "info-get guestinfo.initHostname"  2> /dev/null`
+    curHostname=`uname -n`
+
+    set_forceHostname || set_initHostname
+}
+
+main "$@"
+
+# eof
