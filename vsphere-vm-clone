@@ -5,7 +5,7 @@
 # Created: 2018-03-09
 # Public domain
 
-# $Id: vsphere-vm-clone,v 1.19 2019/06/25 18:57:53 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.20 2019/06/25 19:23:22 friedman Exp $
 
 # Commentary:
 # Code:
@@ -43,7 +43,7 @@ def vmclone( vsi, template, opt ):
 
     cluster = None
     if opt.cluster:
-        cluster = vsi.get_cluster( opt.cluster )
+        cluster = vsi.get_compute_resource( opt.cluster )
     else:
         cluster = template.runtime.host.parent
 
