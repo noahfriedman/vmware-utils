@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.82 2019/06/25 18:56:26 friedman Exp $
+# $Id: vspherelib.py,v 1.83 2019/07/10 18:46:58 friedman Exp $
 
 # Commentary:
 # Code:
@@ -757,6 +757,13 @@ class _vmomiFind( object ):
             if not found:
                 raise NameNotFoundError( 'No {0}s found!'.format( label ))
             elif len( found ) > 1:
+                if mot[ 0 ] is vim.ResourcePool and len( mot ) == 1:
+                    # "Resources" pools are children of (cluster)ComputeResource objects.
+                    # If there is just one other resource pool other than those kind, return that.
+                    childpools = filter( lambda elt: isinstance( elt.parent, vim.ResourcePool ), found )
+                    if childpools and len( childpools ) == 1:
+                        return childpools[0]
+
                 err( NameNotUniqueError,
                      'More than one {0} exists; specify {0}s to use.'.format( label, label ),
                      found )
@@ -768,7 +775,7 @@ class _vmomiFind( object ):
     # results may include ClusterComputeResource
     def get_compute_resource( self, name, root=None ):
         return self._get_single( name, [vim.ComputeResource], 'compute resource', root=root )
-    get_cluster = get_compute_resource # legacy; name was poorly chosen.
+    get_cluster = get_compute_resource # legacy
 
     # excludes ComputeResource objects
     def get_cluster_compute_resource( self, name, root=None ):
@@ -780,8 +787,9 @@ class _vmomiFind( object ):
     def get_datastore( self, name, root=None ):
         return self._get_single( name, [vim.Datastore], 'datastore', root=root )
 
-    def get_pool( self, name, root=None ):
+    def get_resource_pool( self, name, root=None ):
         return self._get_single( name, [vim.ResourcePool], 'resource pool', root=root )
+    get_pool = get_resource_pool # legacy
 
     def get_network( self, name, root=None ):
         return self._get_single( name, [vim.Network], 'network label', root=root )
