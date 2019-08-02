@@ -5,7 +5,7 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-vm-modify,v 1.36 2019/02/12 01:48:27 friedman Exp $
+# $Id: vsphere-vm-modify,v 1.37 2019/06/22 03:51:36 friedman Exp $
 
 # Commentary:
 
@@ -610,7 +610,7 @@ class mVM():
     def register( self, vmx ):
         folder_map = self.vsi.path_to_subfolder_map()
         folder     = folder_map[ self.args.folder ]
-        cluster    = self.vsi.get_cluster( self.args.cluster )
+        cluster    = self.vsi.get_compute_resource( self.args.cluster )
         if self.args.pool:
             pool = self.vsi.get_pool( self.args.pool, cluster.resourcePool.resourcePool )
         else:
@@ -662,7 +662,7 @@ class mVM():
     def to_vm( self, vm_name ):
         vm = self.vsi.get_vm( vm_name )
         if self.args.cluster:
-            cluster = self.vsi.get_cluster( self.args.cluster )
+            cluster = self.vsi.get_compute_resource( self.args.cluster )
         else:
             cluster = vm.runtime.host.parent
         pool = self.vsi.get_pool( self.args.pool, root=cluster )
