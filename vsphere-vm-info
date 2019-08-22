@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.43 2019/06/22 03:55:32 friedman Exp $
+# $Id: vsphere-vm-info,v 1.44 2019/07/02 01:55:25 friedman Exp $
 
 # Commentary:
 # Code:
@@ -161,7 +161,7 @@ def p( *parm ):
         end  = ''
         parm = parm[ : -1 ]
 
-    if len( parm ) > 1 and type( parm[ 1 ] ) is list:
+    if len( parm ) > 1 and isinstance( parm[ 1 ], list):
         val = str.join( '\n' + farindentS + indentS + '   ', map( str, parm[ 1 ] ))
     else:
         val = str.join( ' ', map( str, parm[ 1: ] ) )
