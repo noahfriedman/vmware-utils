@@ -5,7 +5,7 @@
 # Created: 2017-11-02
 # Public domain
 
-# $Id: vsphere-vm-info,v 1.44 2019/07/02 01:55:25 friedman Exp $
+# $Id: vsphere-vm-info,v 1.45 2019/08/22 18:03:34 friedman Exp $
 
 # Commentary:
 # Code:
@@ -583,7 +583,7 @@ def main():
         proplist.extend( proplist_verbose )
 
     if args.vm:
-        vmlist = vsi.find_vm( args.vm )
+        vmlist = vsi.search_by_name( args.vm )
         if not vmlist:
             return
         if args.refresh:
