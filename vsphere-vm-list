@@ -5,7 +5,7 @@
 # Created: 2018-05-08
 # Public domain
 
-# $Id: vsphere-vm-list,v 1.9 2018/10/26 02:15:48 friedman Exp $
+# $Id: vsphere-vm-list,v 1.10 2019/03/20 22:24:37 friedman Exp $
 
 # Commentary:
 # Code:
@@ -25,6 +25,8 @@ def get_args():
     p.add_bool( '-t', '--templates',   help='Display templates' )
     p.add_bool( '-a', '--all',         help='Same as -o -f -t; default')
     p.add_bool( '-F', '--folders',     help='Display full path to VM' )
+    p.add( 'pattern',  nargs='*',      help='Virtual machine names or patterns' )
+
     return p.parse()
 
 def main():
@@ -43,7 +45,9 @@ def main():
         proplist.append( 'parent' )
 
     vsi    = vsl.vmomiConnect( args )
-    vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
+
+    container = vsi.search_by_name( args.pattern ) if args.pattern else None
+    vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, root=container )
 
     if args.all:
         show = vmlist
