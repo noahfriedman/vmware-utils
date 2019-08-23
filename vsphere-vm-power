@@ -5,7 +5,7 @@
 # Created: 2018-03-22
 # Public domain
 
-# $Id: vsphere-vm-power,v 1.15 2018/12/20 05:55:06 friedman Exp $
+# $Id: vsphere-vm-power,v 1.16 2019/02/07 06:07:30 friedman Exp $
 
 # Commentary:
 # Code:
@@ -31,7 +31,7 @@ cmds = { 'on'          : 'PowerOn',
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
     p.add( 'cmd', choices=cmds,   help='Command to perform on virtual machines' )
-    p.add( 'vm',  nargs='+',      help='VM name(s)' )
+    p.add( 'vm',  nargs='+',      help='VM name(s) or pattern(s)' )
     return p.parse()
 
 
@@ -155,7 +155,7 @@ def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
 
-    vmlist = vsi.find_vm( args.vm )
+    vmlist = vsi.search_by_name( args.vm )
     if not vmlist:
         return
 
