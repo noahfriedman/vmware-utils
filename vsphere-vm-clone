@@ -5,7 +5,7 @@
 # Created: 2018-03-09
 # Public domain
 
-# $Id: vsphere-vm-clone,v 1.20 2019/06/25 19:23:22 friedman Exp $
+# $Id: vsphere-vm-clone,v 1.21 2019/08/02 21:04:36 friedman Exp $
 
 # Commentary:
 # Code:
@@ -57,7 +57,7 @@ def vmclone( vsi, template, opt ):
         datastore = vsi.get_datastore( template.config.datastoreUrl[0].name, cluster.datastore )
 
     pool = None
-    if opt.pool:
+    if opt.pool or not template.resourcePool:
         if cluster.resourcePool.resourcePool:
             pool = vsi.get_pool( opt.pool, cluster.resourcePool )
         else:
@@ -108,11 +108,22 @@ class myCallback():
             print( s, end='' )
             sys.stdout.flush()
 
+        def failed( msg ):
+            self.succ = 0
+            if ( ( sys.stdout.isatty() and sys.stderr.isatty() )
+                 or
+                 ( sys.stdout.fileno() ==  sys.stderr.fileno() )):
+                print()
+            vsl.printerr( self.target, msg )
+            return
+
         change = param[ 0 ]
         key = change.name
         val = change.val
         if key == 'info':
-            if val.description:
+            if val.error:
+                return failed( val.error.msg )
+            elif val.description:
                 self.newmsg = val.description.message
                 self.pct    = val.progress
             else:
@@ -123,13 +134,7 @@ class myCallback():
         elif key == 'info.progress':
             self.pct = change.val
         elif key == 'info.error':
-            self.succ = 0
-            if ( ( sys.stdout.isatty() and sys.stderr.isatty() )
-                 or
-                 ( sys.stdout.fileno() ==  sys.stderr.fileno() )):
-                print()
-            vsl.printerr( self.target, val.msg )
-            return
+            return failed( val.msg )
         elif key == 'info.state':
             if val == 'success':
                 self.pct = 100  # doesn't always get this far
