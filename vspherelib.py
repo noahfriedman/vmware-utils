@@ -4,7 +4,7 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.83 2019/07/10 18:46:58 friedman Exp $
+# $Id: vspherelib.py,v 1.84 2019/08/02 21:03:58 friedman Exp $
 
 # Commentary:
 # Code:
@@ -25,6 +25,8 @@ import functools
 import threading
 import random
 import weakref
+
+from fnmatch    import translate as glob2regex
 
 from pyVim      import connect as pyVconnect
 from pyVmomi    import vim, vmodl
@@ -854,6 +856,53 @@ class _vmomiFind( object ):
                     printerr( '"{}"'.format( name ), 'virtual machine not found.' )
 
         return found
+
+    def search_by_name( self, name, objtype=vim.VirtualMachine, regex=False ):
+	'''Return a list of managed objects with name matching NAME.
+
+	NAME is treated as a shell-style glob pattern or a list of
+        patterns, in which case objects which match any one of them are
+        included in the results.
+
+	Optional keyword arg OBJTYPE specifies one or more managed object
+        types to include.  It defaults to `vim.VirtualMachine'.
+
+	Optional keyword arg REGEX may be `True' or a set of regex compiler
+        flags (e.g. `re.I', `re.M', etc. logically ORed together) in which
+        case the NAME pattern(s) are all treated as regular expressions
+        instead of glob patterns.
+
+        Note: if you know the exact name of an object, it's more efficient
+        to retrieve it using the `get_vm', `get_datastore', etc. methods or
+        the more general `get_obj' method, since they take advantage of
+        server-side pruning and indexing.  This method has to perform a
+        full search of the requested managed object categories in order to
+        perform pattern matching.
+
+        '''
+        if not isinstance( objtype, list ):
+            objtype = [ objtype ]
+        if not isinstance( name, list ):
+            name = [ name ]
+
+        result = []
+        objmap = self.name_to_mo_map( objtype ) # n.b. temporarily cached
+        for nelt in name:
+            isglob = any( c in nelt for c in '?*!~[' ) if not regex else False
+
+            if not (isglob or regex):
+                try:
+                    result.extend( objmap[ nelt ] )
+                except KeyError:
+                    pass
+            else:
+                pat = '^' + glob2regex( nelt ) + '$' if isglob else nelt
+                # If regex is actually a set of flags (e.g. re.I), pass that to compiler.
+                pat = re.compile( pat, 0 if isinstance( regex, bool ) else regex )
+                for oelt in objmap:
+                    if pat.search( oelt ) is not None:
+                        result.extend( objmap[ oelt ] )
+        return result
 
 # end class _vmomiFinder
 
