@@ -5,7 +5,7 @@
 # Created: 2018-03-30
 # Public domain
 
-# $Id: vsphere-datastores,v 1.9 2018/10/04 15:51:05 friedman Exp $
+# $Id: vsphere-datastores,v 1.10 2018/11/15 01:52:47 friedman Exp $
 
 # Commentary:
 # Code:
@@ -23,6 +23,7 @@ props = [ 'summary.name',
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
     p.add_bool( '-H', '--header', help='Show column headers' )
+    p.add( 'pattern',  nargs='*', help='Datastore names or patterns' )
     return p.parse()
 
 
@@ -52,7 +53,9 @@ def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
 
-    ds = vsi.get_obj_props( [vim.Datastore], props )
+    container = vsi.search_by_name( args.pattern, objtype=[vim.Datastore]
+                                   ) if args.pattern else None
+    ds = vsi.get_obj_props( [vim.Datastore], props, root=container )
     if not ds:
         return
 
