@@ -5,7 +5,7 @@
 # Created: 2019-05-21
 # Public domain
 
-# $Id: vsphere-vm-grep,v 1.1 2019/05/22 02:49:41 friedman Exp $
+# $Id: vsphere-vm-grep,v 1.2 2019/05/22 02:59:35 friedman Exp $
 
 # Commentary:
 # Code:
@@ -43,43 +43,52 @@ def get_args():
     return args
 
 
-def matches( regex, obj, name=None ):
+def matches( regex, obj, name=None, all=False ):
     # Don't descend into other referenced managed objects
-    if isinstance( obj, (type, vim.ManagedObject) ):
+    if obj is None or isinstance( obj, (type, bool, vim.ManagedObject) ):
         return
 
     try:
         if regex.search( obj ):
-            return (name, obj)
+            return [(name, obj)]
     except TypeError:
         try:
             iter( obj )
         except TypeError:
             obj = vars( obj )
 
-        # Sorting the elements makes the results a little more consistent
-        # when multiple properties might match in multiple VMs.
-        # Otherwise what you get depends on hash order.
+        result = []
+        # Sorting the elements makes the results a little more consistent,
+        # otherwise what you get depends on hash order.
         for (i, elt) in enumerate( sorted( obj )):
             try:
                 val = obj[ elt ]
                 subname = str.join( '.', (name, elt))
-                result = matches( regex, val, name=subname )
-            except (TypeError, IndexError):
+                m = matches( regex, val, name=subname, all=all )
+                if m:
+                    result.extend( m )
+            except (TypeError, IndexError) as e:
                 subname = '{}[{}]'.format( name, i )
-                result = matches( regex, elt, name=subname )
-            if result:
+                m = matches( regex, elt, name=subname, all=all )
+                if m:
+                    result.extend( m )
+            if result and not all:
                 return result
+        if result:
+            return result
 
-def display( label, text ):
-    try:
-        text = vsl.fold_text( text, maxlen=70, indent=8 )
-        if text.find( '\n' ) >= 0:
-            text = '\n        ' + text
-        print( '    {}: {}\n'.format( label, text ))
-    except AttributeError:
-        text = re.sub( '\n+', '\n    ', str( text ), flags=re.M )
-        print( '    {} = {}\n'.format( label, text ))
+def display( results ):
+    for elt in results:
+        label, text = elt
+        try:
+            text = vsl.fold_text( text, maxlen=70, indent=8 )
+            if text.find( '\n' ) >= 0:
+                text = '\n        ' + text
+            print( '    {}: {}'.format( label, text ))
+        except AttributeError:
+            text = re.sub( '\n+', '\n    ', str( text ), flags=re.M )
+            print( '    {} = {}'.format( label, text ))
+    print( '' )
 
 def main():
     args = get_args()
@@ -107,13 +116,13 @@ def main():
         firstmatch = True
         for prop in greplist:
             try:
-                result = matches( regex, vm[ prop ], name=prop )
+                result = matches( regex, vm[ prop ], name=prop, all=args.verbose )
                 if result:
                     if firstmatch:
                         print( vm[ 'name' ] )
                         firstmatch = False
                     if args.verbose:
-                        display( *result )
+                        display( result )
                     else:
                         break
             except KeyError:
