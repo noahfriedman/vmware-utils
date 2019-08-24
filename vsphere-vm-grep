@@ -5,13 +5,13 @@
 # Created: 2019-05-21
 # Public domain
 
-# $Id: vsphere-vm-grep,v 1.2 2019/05/22 02:59:35 friedman Exp $
+# $Id: vsphere-vm-grep,v 1.3 2019/08/23 22:57:32 friedman Exp $
 
 # Commentary:
 # Code:
 
 from   __future__ import print_function
-from   pyVmomi    import vim
+from   pyVmomi    import vim, vmodl
 
 import vspherelib     as vsl
 import sys
@@ -90,6 +90,36 @@ def display( results ):
             print( '    {} = {}'.format( label, text ))
     print( '' )
 
+
+def get_obj_props_best_effort( vsi, orig_proplist ):
+    # Since you can't specify properties that are subproperties of arrays,
+    # we keep trying to include parent properties until everything succeeds.
+    # We have to filter the results when this happens.
+    proplist = list( orig_proplist )  # make copy, since we modify
+    while proplist:
+        try:
+            vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist )
+        except vmodl.query.InvalidProperty as e:
+            culprit = e.name
+            proplist.remove( culprit )
+
+            up = culprit.rfind( '.' )
+            if up >= 0:
+                proplist.append( culprit[ 0 : up ])
+        else: # no exception occured
+            return vmlist, proplist
+
+def filter_nonrequested( result, requested ):
+    want = []
+    for elt in result:
+        name = re.sub( '\[[0-9]+\]', '', elt[0] )
+        if (name in requested
+            # the name is a child of any of the requested props
+            or any( name.startswith( req ) and name[ len( req ) ] == '.'
+                    for req in requested )):
+            want.append( elt )
+    return want
+
 def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
@@ -108,16 +138,33 @@ def main():
     if args.X: flags |= re.X
     if args.U: flags |= re.U
     regex  = re.compile( args.regex, flags=flags )
-    vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, ignoreInvalidProps=True )
+
+    vmlist, actual_proplist = get_obj_props_best_effort( vsi, proplist )
+    proplists_equiv = proplist == actual_proplist  # eqv, but not eq
+    if proplists_equiv:
+        iter_proplist = greplist
+    else:
+        actual_proplist.remove( 'name' )
+        iter_proplist = actual_proplist
 
     keyfn = functools.cmp_to_key( lambda a, b: cmp( a[ 'name' ], b[ 'name' ] ))
     vmlist.sort( key=keyfn )
     for vm in vmlist:
         firstmatch = True
-        for prop in greplist:
+        for prop in iter_proplist:
             try:
                 result = matches( regex, vm[ prop ], name=prop, all=args.verbose )
                 if result:
+                    # Even if we're just testing for any match, we have to
+                    # filter out matches from other parts of the proplist
+                    # tree that the user didn't request a match on.
+                    if iter_proplist is not greplist:
+                        result = filter_nonrequested( result, greplist )
+                        # And then if there are no results left, it was a
+                        # false positive.
+                        if not result:
+                            continue
+
                     if firstmatch:
                         print( vm[ 'name' ] )
                         firstmatch = False
