@@ -1174,7 +1174,7 @@ class _vmomiGuestInfo( object ):
 
             search = elt[ 'search' ]
             for i in range( 0, len( search )):
-                if search[ i ][ -1 ] == '.':
+                if len( search[i] ) > 0 and search[ i ][ -1 ] == '.':
                     search[ i ] = search[ i ][:-1]
 
             dns.append ( elt )
