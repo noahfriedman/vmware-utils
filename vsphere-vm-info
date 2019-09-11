@@ -583,7 +583,7 @@ def main():
         proplist.extend( proplist_verbose )
 
     if args.vm:
-        vmlist = vsi.search_by_name( args.vm )
+        vmlist = vsi.find_vm( args.vm )
         if not vmlist:
             return
         if args.refresh:

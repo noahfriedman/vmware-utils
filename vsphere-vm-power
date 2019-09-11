@@ -155,7 +155,7 @@ def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
 
-    vmlist = vsi.search_by_name( args.vm )
+    vmlist = vsi.find_vm( args.vm )
     if not vmlist:
         return
 

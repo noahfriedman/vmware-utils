@@ -833,7 +833,8 @@ class _vmomiFind( object ):
             lambda pat: idx.FindAllByUuid(    vmSearch=True,    uuid=pat ),
             lambda pat: idx.FindAllByIp(      vmSearch=True,      ip=pat ),
             lambda pat: find_by_name( pat ),
-            lambda pat: idx.FindAllByDnsName( vmSearch=True, dnsName=pat ), ]
+            lambda pat: idx.FindAllByDnsName( vmSearch=True, dnsName=pat ),
+            lambda pat: self.search_by_name( pat ) ]
 
         found    = []
         notfound = []

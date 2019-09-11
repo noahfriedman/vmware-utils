@@ -46,7 +46,7 @@ def main():
 
     vsi    = vsl.vmomiConnect( args )
 
-    container = vsi.search_by_name( args.pattern ) if args.pattern else None
+    container = vsi.find_vm( args.pattern ) if args.pattern else None
     vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, root=container )
 
     if args.all:
