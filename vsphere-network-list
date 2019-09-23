@@ -1,0 +1,46 @@
+#!/usr/bin/env python
+# vsphere-network-list --- show virtual switches and optionally member VMs
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2019-07-12
+# Public domain
+
+# $Id$
+
+# Commentary:
+# Code:
+
+from   __future__ import print_function
+from   pyVmomi    import vim
+import vspherelib     as vsl
+import re
+
+props = [ 'name',
+          'config.distributedVirtualSwitch',
+          'config.defaultPortConfig',
+        ]
+
+def get_args():
+    p = vsl.ArgumentParser( loadrc=True )
+    #p.add_bool( '-H', '--header', help='Show column headers' )
+    return p.parse()
+
+
+def main():
+    args = get_args()
+    vsi  = vsl.vmomiConnect( args )
+
+    dvnet = vsi.get_obj_props( [vim.dvs.DistributedVirtualPortgroup], props )
+    if dvnet:
+        print( dvnet )
+    else:
+        vnet = vsi.get_obj_props( [vim.Network] )
+        if vnet:
+            print( vnet )
+
+##########
+
+if __name__ == '__main__':
+    main()
+
+# eof

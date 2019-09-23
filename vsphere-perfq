@@ -1,0 +1,85 @@
+#!/usr/bin/env python
+
+from   __future__ import print_function
+from   pyVmomi    import vim
+import vspherelib     as vsl
+
+import pprint
+repl_pp = pprint.PrettyPrinter( indent=2, width=80 )
+def pp( *args, **kwargs ):
+    for arg in args:
+        repl_pp.pprint( arg, **kwargs )
+
+
+def get_args():
+    p = vsl.ArgumentParser( loadrc=True )
+    return p.parse()
+
+def deep_copy( obj, exclude=None ):
+    new = vsl.pseudoPropAttr()
+    attrs = filter( lambda s: s not in exclude, obj.__dict__ )
+    for attr in attrs:
+        if hasattr( obj, attr ):
+            val = getattr( obj, attr )
+            if ( isinstance( val, vim.DataObject )
+                 and not isinstance( val, vim.ManagedObject ) ):
+                val = deep_copy( val, exclude=exclude )
+            setattr( new, attr, val )
+    return new
+
+def PerfTables( vsi ):
+    pm = vsi.si.content.perfManager
+    exclude = ['dynamicProperty', 'dynamicType', 'associatedCounterId']
+    for ci in pm.perfCounter:
+        elt = deep_copy( ci, exclude=exclude )
+        elt.name = vsl.pseudoPropAttr( vsi.clone_obj( ci.nameInfo, *exclude  ))
+        group = vsl.pseudoPropAttr( vsi.clone_obj( ci.groupInfo ))
+
+
+def getCounter( group, name ):
+    for counter in pm.perfCounter:
+        if counter.nameInfo.key == name and counter.groupInfo.key == group:
+            return counter
+
+def main():
+    args = get_args()
+    vsi    = vsl.vmomiConnect( args )
+
+    vm = vsi.find_vm( 'old-man-yells-at-cloud' )[0]
+
+    pm = vsi.si.content.perfManager
+    refreshRate = pm.QueryProviderSummary( entity=vm ).refreshRate
+
+    vm_cids = set( o.counterId for o in pm.QueryAvailablePerfMetric( entity=vm, intervalId=refreshRate ))
+    # These additional ids are usually just disk used/provisioned/unshared
+    # stats, which are not available as realtime stats.
+    #vm_cids = vm_cids.union( o.counterId for o in pm.QueryAvailablePerfMetric( entity=vm ))
+    vm_counters = pm.QueryPerfCounter( list( vm_cids ))  # errors on sets
+
+    counters = {}
+    for ci in vm_counters:
+        try:
+            group = counters[ ci.groupInfo.key ]
+        except KeyError:
+            group = counters[ ci.groupInfo.key ] = []
+        group.append( (ci.nameInfo.key,
+                       ci.unitInfo.label,
+                       ci.rollupType,
+                       ci.statsType,
+                       ci.level,
+                       ci.key) )
+
+    metrics = [vim.PerformanceManager.MetricId( counterId=id, instance="*" ) for id in vm_cids]
+
+    intervals = [refreshRate]
+    intervals.extend( i.samplingPeriod for i in pm.historicalInterval if i.enabled )
+    for interval in intervals:
+        qspec = [vim.PerformanceManager.QuerySpec( maxSample=1, entity=vm, intervalId=interval, metricId=metrics )]
+        query = pm.QueryPerf( querySpec=qspec )
+        pp( query )
+
+    pp( counters )
+
+
+if __name__ == '__main__':
+    main()
