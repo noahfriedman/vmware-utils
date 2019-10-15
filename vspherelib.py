@@ -118,9 +118,11 @@ def conditional_stacktrace_exception( wrapped_class ):
     decorator = with_conditional_stacktrace( wrapped_class )
     return decorator( wrapped_class )
 
+# These should always produce a stacktrace, even in non-debug mode
 class vmomiError( Exception ): pass
 class ApiError( vmomiError ):  pass
 
+# These should not
 @conditional_stacktrace_exception
 class vmomiErrorCST(         vmomiError ):    pass
 class cliGeneralError(       vmomiErrorCST ): pass
@@ -129,9 +131,6 @@ class NameNotUniqueError(    vmomiErrorCST ): pass
 class ConnectionFailedError( vmomiErrorCST ): pass
 class RequiredArgumentError( vmomiErrorCST ): pass
 class GuestOperationError(   vmomiErrorCST ): pass
-
-# These should always produce a stacktrace, even in non-debug mode
-
 
 
 class Diag( object ):
@@ -302,7 +301,7 @@ class ArgumentParser( argparse.ArgumentParser, _super, _with ):
                     source( os.getenv( elt[0] ) + '/' + elt[1] )
                     break
                 # TypeError can result if envvar is unset
-                except ( TypeError, IOError ):
+                except (TypeError, IOError):
                     continue
         return opt
 
@@ -1183,7 +1182,7 @@ class _vmomiGuestInfo( object ):
                 if len( search[i] ) > 0 and search[ i ][ -1 ] == '.':
                     search[ i ] = search[ i ][:-1]
 
-            dns.append ( elt )
+            dns.append( elt )
         return dns
 
     def vmguest_ip_routes( self, vm ):
@@ -1691,7 +1690,7 @@ class _vmomiVmGuestOperation_Env( object ):
             env = self.pmgr.ReadEnvironmentVariableInGuest(
                 vm    = self.vm,
                 auth  = self.auth )
-            self._guest_environ = environ_to_dict ( env, preserve_case=False )
+            self._guest_environ = environ_to_dict( env, preserve_case=False )
             return self._guest_environ
 
     def getenv( self, name ):
@@ -2186,7 +2185,7 @@ class vmomiVmGuestProcess( object ):
                   separate_stderr = False ):
 
         if script_file:
-            script = file_contents ( script_file )
+            script = file_contents( script_file )
         elif script is None:
             raise GuestOperationError( '''one of `script' or `script_file' arg is not optional''' )
 
@@ -2608,8 +2607,11 @@ def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
         sys.exit( 130 ) # WIFSIGNALED(128) + SIGINT(2)
 
 def yes_or_no_p( prompt, default=None ):
-    return y_or_n_p( prompt, yes = 'yes', no = 'no',
-                     response = { 'yes' : True, 'no' : False },
+    return y_or_n_p( prompt,
+                     yes      = 'yes',
+                     no       = 'no',
+                     response = { 'yes' : True,
+                                  'no'  : False },
                      default  = default )
 
 # eof
