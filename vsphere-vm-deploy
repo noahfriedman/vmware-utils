@@ -12,17 +12,17 @@
 #
 # Currently it does not:
 #	* create ova or ovf files
-#       * deploy any other format besides ova or ovf (e.g. not vmx)
-# 	* convert between any formats
+#	* deploy any other format besides ova or ovf (e.g. not vmx)
+#	* convert between any formats
 #	* support vi:// URIs or other network methods for either
 #	  source or destination
 #	* validate checksums in .mf file
-#       * export (download) virtual machines
+#	* export (download) virtual machines
 #
 # What it does do:
-#       * provide more readable status of upload progress and more
-#         informative diagnostics when something goes wrong.
-#       * support loading of deployment defaults from $VSPHERELIBRC
+#	* provide more readable status of upload progress and more
+#	  informative diagnostics when something goes wrong.
+#	* support loading of deployment defaults from $VSPHERELIBRC
 
 # Code:
 
@@ -46,6 +46,7 @@ class OvfHandlerBase( vsl._super, vsl._with ):
     required_kwargs = [ 'vm_name', 'host', 'vsi', 'pool', 'ds', 'disk_format', 'network', 'folder' ]
     default_disk_format = 'thin'
 
+
     def __init__( self, **kwargs ):
         missing = { name : None for name in self.required_kwargs }
         for arg in kwargs:
@@ -57,7 +58,8 @@ class OvfHandlerBase( vsl._super, vsl._with ):
             msg = fmt.format( ', '.join( missing.keys() ))
             raise vsl.ApiError( msg )
 
-    def _ovfd_readin( self, fh ):
+
+    def ovfd_readin( self, fh ):
         # Change the name of the vm in the ovf descriptor from whatever
         # it has currently to that of the one named on the command line.
         #
@@ -69,8 +71,9 @@ class OvfHandlerBase( vsl._super, vsl._with ):
             str.format( '<\\1>{}</\\1>', self.vm_name ),
             fh.read() )
 
+
     @vsl.tidy_vimfaults
-    def _init_spec( self ):
+    def init_spec( self ):
         vimOvfM = vim.OvfManager
         natmap  = vimOvfM.NetworkMapping( name='nat', network=self.network )
         param   = vimOvfM.CreateImportSpecParams()
@@ -84,9 +87,9 @@ class OvfHandlerBase( vsl._super, vsl._with ):
         if not self.spec.importSpec:
             summary = "Could not create import spec:"
             if len( self.spec.error ) == 1:
-                diag = vsl.Diag ( summary, self.spec.error[0].msg, sep=' ' )
+                diag = vsl.Diag( summary, self.spec.error[0].msg, sep=' ' )
             else:
-                diag = vsl.Diag ( summary )
+                diag = vsl.Diag( summary )
                 for error in self.spec.error:
                     diag.append( '\t' + error.msg )
             raise vsl.cliGeneralError( diag )
@@ -94,9 +97,11 @@ class OvfHandlerBase( vsl._super, vsl._with ):
         vd = vim.vm.device.VirtualDisk
         for disk in filter( lambda elt: isinstance( elt.device, vd ),
                             self.spec.importSpec.configSpec.deviceChange ):
-            disk.device.backing = self._disk_backing_spec()
+            disk.device.backing = self.disk_backing_spec()
 
-    def _disk_backing_spec( self ):
+
+
+    def disk_backing_spec( self ):
         vd = vim.vm.device.VirtualDisk
         fmt = self.disk_format or self.default_disk_format
         if fmt in ['sesparse']:
@@ -113,11 +118,12 @@ class OvfHandlerBase( vsl._super, vsl._with ):
         backing.diskMode = 'persistent'
         return backing
 
-    def _init_lease( self ):
+
+    def init_lease( self ):
         lease = self.pool.ImportVApp( self.spec.importSpec, self.folder )
         self.lease = lease
 
-        msg   = "Initializing... {:d}%"
+        msg = "Initializing... {:d}%"
         while lease.state == vim.HttpNfcLease.State.initializing:
             self.print_status( msg.format( lease.initializeProgress ))
             time.sleep( 1 )
@@ -129,48 +135,58 @@ class OvfHandlerBase( vsl._super, vsl._with ):
 
         return lease
 
-    def _device_url( self, entry ):
+
+    def device_url( self, fileItem ):
         for url in self.lease.info.deviceUrl:
-            if url.importKey == entry.deviceId:
+            if url.importKey == fileItem.deviceId:
                 return url
 
+
     def upload( self ):
-        lease = self._init_lease()
+        self.upload_total_size = sum( elt.size for elt in self.spec.fileItem )
+        self.upload_completed_offset = 0
+
+        lease = self.init_lease()
         try:
             self.start_timer()
             for elt in self.spec.fileItem:
-                self._upload_entry( elt )
+                self.upload_fileItem( elt )
             lease.Complete()
-
             self.print_status( "Finished.\n" )
             return 0
-        except vmodl.MethodFault as e:
-            lease.Abort( e )
-            raise vsl.cliGeneralError( str( e ) )
-        except Exception as e:
-            reason = vmodl.fault.SystemError( reason=str( e ) )
-            lease.Abort( reason )
+        except Exception:
+            lease.Abort()
             raise
 
-    def _upload_entry( self, name ):
-        self.current_entry = self.get_entry( name )
-        url = self._device_url( name ).url.replace( '*', self.host )
-        headers = { 'Content-length': self.current_entry.size }
+
+    def upload_fileItem( self, name ):
+        item = self.current_fileItem = self.get_fileItem( name )
+        size = item.size
+        url  = self.device_url( name ).url.replace( '*', self.host )
+        headers = { 'Content-length': size }
         try:
             sslContext = ssl._create_unverified_context()
         except AttributeError:
             sslContext = None
-        req = request.Request( url, self.current_entry, headers )
+        req = request.Request( url, item, headers )
         request.urlopen( req, context=sslContext )
         time.sleep( 1 )
         self.print_upload_status( end='\n' )
+        self.upload_completed_offset += size
+
+
+    def progress( self ):
+        pos = self.upload_completed_offset + self.current_fileItem.tell()
+        return round( 100.0 * pos / self.upload_total_size, 2 )
+
 
     def print_upload_status( self, end='' ):
-        entry = self.current_entry
-        size  = entry.size
-        pos = '{0:>{1},d} / {2:<,d}'.format( entry.tell(), len( str( size )), size )
+        item = self.current_fileItem
+        size = item.size
+        pos  = '{0:>{1},d} / {2:<,d}'.format( item.tell(), len( str( size )), size )
         pcts = '... {:.2f}%'.format( self.progress() )
-        self.print_status( 'Uploading', self.current_entry.name, pos, pcts, end=end )
+        self.print_status( 'Uploading', item.name, pos, pcts, end=end )
+
 
     def print_status( self, *args, **kwargs ):
         file = kwargs.get( 'file', sys.stderr )
@@ -187,8 +203,10 @@ class OvfHandlerBase( vsl._super, vsl._with ):
         if kwargs.get( 'flush', True ):
             file.flush()
 
+
     def start_timer(self):
         threading.Timer( 1, lambda: self.timer() ).start()
+
 
     def timer( self ):
         try:
@@ -205,28 +223,19 @@ class OvfHandlerBase( vsl._super, vsl._with ):
 class OvaHandler( OvfHandlerBase ):
     def __init__( self, filename, **kwargs ):
         self.super.__init__( **kwargs )
+        self.tar = tarfile.open( filename )
+        self.ovfd_readin( self.get_fileItem( lambda x: x.endswith( ".ovf" ) ))
+        self.init_spec()
 
-        self.fh      = open( filename, 'rb' )
-        self.fh_size = os.fstat( self.fh.fileno() ).st_size
-        self.tar     = tarfile.open( fileobj=self.fh )
 
-        self._ovfd_readin( self.get_entry( lambda x: x.endswith( ".ovf" ) ))
-        self._init_spec()
-
-    def get_entry( self, entry ):
+    def get_fileItem( self, item ):
         members = self.tar.getnames()
-        if callable( entry ):
-            res = filter( entry, members )
+        if callable( item ):
+            res = filter( item, members )
         else:
-            try:
-                res = filter( lambda p: p == entry.path, members )
-            except AttributeError:
-                res = filter( lambda p: p == entry, members )
+            res = filter( lambda p: p == item.path, members )
         if res:
             return self.tar.extractfile( res[0] )
-
-    def progress( self ):
-        return round( 100.0 * self.fh.tell() / self.fh_size, 2 )
 
 
 class OvfHandler( OvfHandlerBase ):
@@ -241,35 +250,21 @@ class OvfHandler( OvfHandlerBase ):
                 self.st_size = os.fstat( self.fileno() ).st_size
                 return self.st_size
 
+
     def __init__( self, ovf, **kwargs ):
         self.super.__init__( **kwargs )
-
-        with open( ovf, 'r' ) as f:
-            self._ovfd_readin ( f )
 
         self.dirname = re.sub( '/[^/]+$', '/', ovf )
         if self.dirname == ovf:
             self.dirname = ''
 
-        self._init_spec()
-        self.entry_total_size = 0
-        self.entry_uploaded_offset = 0
-        self.entry_sizes = []
-        self.entry_curno = -1
-        for elt in self.spec.fileItem:
-            self.entry_total_size += elt.size
-            self.entry_sizes.append( elt.size )
+        with open( ovf, 'r' ) as f:
+            self.ovfd_readin( f )
+        self.init_spec()
 
-    def get_entry( self, entry ):
-        if self.entry_curno >= 0:
-            self.entry_uploaded_offset += self.entry_sizes.pop( 0 )
-        self.entry_curno += 1
-        return self.DiskFile( self.dirname + entry.path )
 
-    def progress( self ):
-        pos = self.entry_uploaded_offset + self.current_entry.tell()
-        return round( 100.0 * pos / self.entry_total_size, 2 )
-
+    def get_fileItem( self, item ):
+        return self.DiskFile( self.dirname + item.path, 'rb' )
 
 
 formats = [ 'sesparse', 'thin', 'zeroedthick', 'eagerzeroedthick' ]
@@ -277,10 +272,10 @@ formats = [ 'sesparse', 'thin', 'zeroedthick', 'eagerzeroedthick' ]
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
     p.add( '-n', '--name',        required=1,      help='VM name' )
-    p.add( '-a', '--annotation',                   help='Annotation for new VM' )
     p.add( '-F', '--disk-format', choices=formats, help='Format for VM disks' )
     p.add( 'ova',  nargs=1,                        help='ova or ovf file' )
     return p.parse()
+
 
 def main():
     args    = get_args()
@@ -299,7 +294,7 @@ def main():
         OVATYPE = OvfHandler
     else:
         OVATYPE = OvaHandler
-    ova = OVATYPE(     args.ova[ 0 ],
+    ova = OVATYPE( args.ova[ 0 ],
                        vm_name = args.name,
                           host = args.host,
                            vsi = vsi,
@@ -309,6 +304,7 @@ def main():
                        network = network,
                         folder = folder )
     return ova.upload()
+
 
 if __name__ == '__main__':
     sys.exit( main() )
