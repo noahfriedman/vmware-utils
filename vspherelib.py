@@ -4,8 +4,6 @@
 # Created: 2017-10-31
 # Public domain
 
-# $Id: vspherelib.py,v 1.84 2019/08/02 21:03:58 friedman Exp $
-
 # Commentary:
 # Code:
 
@@ -112,21 +110,28 @@ def tidy_vimfaults( fn ):
         vim.fault.GuestOperationsUnavailable,
         vim.fault.GuestRegistryKeyInvalid,
         vim.fault.NoPermission,
-        vim.fault.InvalidGuestLogin )
+        vim.fault.InvalidGuestLogin,
+        vmodl.MethodFault, )
     return decorator( fn )
 
 def conditional_stacktrace_exception( wrapped_class ):
     decorator = with_conditional_stacktrace( wrapped_class )
     return decorator( wrapped_class )
 
-@conditional_stacktrace_exception
 class vmomiError( Exception ): pass
-class cliGeneralError(       vmomiError ): pass
-class NameNotFoundError(     vmomiError ): pass
-class NameNotUniqueError(    vmomiError ): pass
-class ConnectionFailedError( vmomiError ): pass
-class RequiredArgumentError( vmomiError ): pass
-class GuestOperationError(   vmomiError ): pass
+class ApiError( vmomiError ):  pass
+
+@conditional_stacktrace_exception
+class vmomiErrorCST(         vmomiError ):    pass
+class cliGeneralError(       vmomiErrorCST ): pass
+class NameNotFoundError(     vmomiErrorCST ): pass
+class NameNotUniqueError(    vmomiErrorCST ): pass
+class ConnectionFailedError( vmomiErrorCST ): pass
+class RequiredArgumentError( vmomiErrorCST ): pass
+class GuestOperationError(   vmomiErrorCST ): pass
+
+# These should always produce a stacktrace, even in non-debug mode
+
 
 
 class Diag( object ):
@@ -767,7 +772,7 @@ class _vmomiFind( object ):
                         return childpools[0]
 
                 err( NameNotUniqueError,
-                     'More than one {0} exists; specify {0}s to use.'.format( label, label ),
+                     'More than one {0} exists; specify {0} to use.'.format( label, label ),
                      found )
         return found[0]
 
@@ -1414,9 +1419,10 @@ class vmomiConnect( _vmomiCollect,
     def connect( self ):
         timer = Timer( 'vmomiConnect.connect' )
         try:
-            sslContext = None
-            if hasattr( ssl, '_create_unverified_context' ):
+            try:
                 sslContext = ssl._create_unverified_context()
+            except AttributeError:
+                sslContext = None
 
             # These stubs enable automatic reconnection if a session times out.
             smart_stub = pyVconnect.SmartStubAdapter(
@@ -2568,11 +2574,9 @@ def printerr( *args, **kwargs ):
         pargs.insert( 0, progname )
     print( *pargs, sep=sep, end=end, file=file )
 
-def file_contents( filename ):
-    f = open( filename, 'r' )
-    s = f.read()
-    f.close()
-    return s
+def file_contents( filename, mode='r' ):
+    with open( filename, mode ) as f:
+        return f.read()
 
 
 def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
