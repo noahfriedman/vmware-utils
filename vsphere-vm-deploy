@@ -273,6 +273,7 @@ def get_args():
     p = vsl.ArgumentParser( loadrc=True )
     p.add( '-n', '--name',        required=1,      help='VM name' )
     p.add( '-F', '--disk-format', choices=formats, help='Format for VM disks' )
+    p.add_bool( '-E', '--allow-extraconfig', help='Include any ExtraConfig settings (usually disallowed)')
     p.add( 'ova',  nargs=1,                        help='ova or ovf file' )
     return p.parse()
 
@@ -303,6 +304,10 @@ def main():
                    disk_format = args.disk_format,
                        network = network,
                         folder = folder )
+
+    if not args.allow_extraconfig:
+        ova.spec.importSpec.configSpec.extraConfig = None
+
     return ova.upload()
 
 
