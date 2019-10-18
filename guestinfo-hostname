@@ -33,7 +33,7 @@
 # To enable with systemd, create /etc/systemd/system/guestinfo-hostname.service
 # with the following lines:
 #	[Unit]
-#	Description=set hostname from VMware guestinfo
+#	Description=Set hostname from vmware guestinfo attributes before bringing up network
 #	SourcePath=/etc/systemd/system/guestinfo-hostname
 #	Before=graphical.target
 #	Before=network-online.target
@@ -138,6 +138,6 @@ main()
     set_forceHostname || set_initHostname
 }
 
-main "$@"
+main "$@" || :
 
 # eof
