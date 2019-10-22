@@ -271,9 +271,15 @@ formats = [ 'sesparse', 'thin', 'zeroedthick', 'eagerzeroedthick' ]
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
-    p.add( '-n', '--name',        required=1,      help='VM name' )
+    p.add( '-v', '--vm-name',      required=True,  help='Name for new vm' )
+    p.add( '-f', '--folder',                       help='Path of vSphere folder for vm to appear' )
+    p.add( '-r', '--pool',                         help='Resource pool for vm' )
+    p.add( '-D', '--datacenter',                   help='Name of data center' )
+    p.add( '-d', '--datastore',                    help='Name of datastore for vm storage' )
+    p.add( '-c', '--cluster',                      help='Name of the cluster or hypervisor host for new vm' )
+    p.add( '-n', '--network',                      help='Network label for first virtual nic' )
     p.add( '-F', '--disk-format', choices=formats, help='Format for VM disks' )
-    p.add_bool( '-E', '--allow-extraconfig', help='Include any ExtraConfig settings (usually disallowed)')
+    p.add_bool( '-E', '--allow-extraconfig',       help='Include any ExtraConfig settings (usually disallowed)')
     p.add( 'ova',  nargs=1,                        help='ova or ovf file' )
     return p.parse()
 
@@ -296,7 +302,7 @@ def main():
     else:
         OVATYPE = OvaHandler
     ova = OVATYPE( args.ova[ 0 ],
-                       vm_name = args.name,
+                       vm_name = args.vm_name,
                           host = args.host,
                            vsi = vsi,
                           pool = pool,
