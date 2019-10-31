@@ -40,6 +40,9 @@ try:
 except:
     pass
 
+debug     = bool( os.getenv( 'VSPHERELIB_DEBUG' ) )
+debug_rpc = bool( os.getenv( 'VSPHERELIB_DEBUG_RPC' ) )
+
 
 POSIX = object()  # posix system, e.g. unix or osx
 WinNT = object()  # MICROS~1
@@ -47,8 +50,6 @@ Undef = object()  # distinct default from None since None is hashable
 
 # WOW32, WOW64, WOWNative; methods use Native by default
 wowBitness = vim.vm.guest.WindowsRegistryManager.RegistryKeyName.RegistryKeyWowBitness
-
-debug = bool( os.getenv( 'VSPHERELIB_DEBUG' ))
 
 
 def with_conditional_stacktrace( *exceptions ):
@@ -2638,5 +2639,43 @@ def yes_or_no_p( prompt, default=None ):
                      response = { 'yes' : True,
                                   'no'  : False },
                      default  = default )
+
+
+# rpc debug hooks
+
+def __vspherelib_debug_Deserialize( self, *args, **kwargs ):
+    res = self.__vspherelib_orig_Deserialize( *args, **kwargs )
+    if debug_rpc:
+        msg = str( res ).replace( '\n', '\nresult: ' )
+        print( 'result:', msg )
+    return res
+
+def __set_debug_rpc( toggle=None ):
+    from pyVmomi import SoapAdapter
+    dser = SoapAdapter.SoapResponseDeserializer
+    if not hasattr( dser, '__vspherelib_orig_Deserialize' ):
+        dser.__vspherelib_orig_Deserialize = dser.Deserialize
+        dser.Deserialize = __vspherelib_debug_Deserialize
+
+    # There has got to be a better way to do this.  The http_client
+    # debugging is woefully primitive; it even prints to stdout!
+    # Probably we should patch the SoapAdapter serializer instead.
+    from six.moves import http_client
+
+    global debug_rpc
+    if toggle:
+        debug_rpc = True
+        http_client.HTTPConnection.debuglevel = 9
+    elif toggle is not None:
+        debug_rpc = False
+        http_client.HTTPConnection.debuglevel = 0
+
+    return debug_rpc
+
+def debug_rpc_enable():  __set_debug_rpc( toggle=True )
+def debug_rpc_disable(): __set_debug_rpc( toggle=False )
+
+# We must install our hook before any soap adapters are instantiated
+__set_debug_rpc( debug_rpc )
 
 # eof
