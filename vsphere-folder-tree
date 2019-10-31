@@ -24,89 +24,193 @@ poweredOff = vim.VirtualMachine.PowerState.poweredOff
 slash  = '/'
 indent = '    '
 
-def get_args():
-    p = vsl.ArgumentParser( loadrc=True )
-    p.add_bool( '-a', '--all',     help='Display all folder hierarchies; default is vm-only' )
-    p.add_bool( '-v', '--verbose', help='Display extended info' )
-    return p.parse()
+def basename( string, sep=slash ):
+    return string[ string.rfind( sep ) + 1 : ]
 
-def print_hier( folder_to_path, path_to_folder, vm_table ):
-    def print_vms( folder, depth ):
+
+
+class Hier( object ):
+    class Container( object ): pass
+
+    # Prefetching any attributes we may reference (e.g. .childEntity) can make
+    # a *huge* difference in performance because it eliminates round trips to
+    # the server.  This is especially noticable on long haul networks.
+    class moProps( dict ):
+        def __init__( self, vsi, types, props=[ 'name' ] ):
+            res = vsi.get_obj_props( types, props )
+            for elt in res:
+                obj = elt[ 'obj' ]
+                del   elt[ 'obj' ]
+                elt = vsl.flat_to_nested_dict( elt, objtype=vsl.pseudoPropAttr )
+                self[ obj ] = elt
+
+    def __init__( self, vsi, args, path_to_folder, folder_to_path ):
+        self.vsi            = vsi
+        self.args           = args
+        self.path_to_folder = path_to_folder.copy()
+        self.folder_to_path = folder_to_path
+
+        self.propMaps       = self.Container()
+
+        if self.args.verbose:
+            props = [ 'name', 'config.template', 'runtime.powerState' ]
+            if args.verbose > 1:
+                props.append( 'config.instanceUuid' )
+            vm_table = { vm[ 'obj' ].id : vm for vm in
+                         self.vsi.get_obj_props( [vim.VirtualMachine], props ) }
+            self.vm_table = vm_table
+        else:
+            self.vm_table = {}
+
+        self.print_hier()
+
+    def name( self, obj ):
+        if not hasattr( self.propMaps, 'name' ):
+            self.propMaps.name = self.moProps( self.vsi,
+                                               [ vim.Datastore,
+                                                 vim.Network,
+                                                 vim.HostSystem,
+                                                 vim.ComputeResource,
+                                                 vim.ClusterComputeResource,
+                                                ],
+                                               [ 'name' ] )
+        return self.propMaps.name[ obj ].name
+
+    def children( self, obj ):
+        if not hasattr( self.propMaps, 'folder' ):
+            self.propMaps.folder = self.moProps( self.vsi,
+                                                 [ vim.Folder ],
+                                                 [ 'childEntity' ] )
+        return self.propMaps.folder[ obj ].childEntity
+
+    @staticmethod
+    def obj_typename( obj ):
+        return basename( type( obj ).__name__, '.' )
+
+    def printobj( self, *args, **kwargs ):
+        obj   = kwargs.get( 'obj',   None )
+        depth = kwargs.get( 'depth', 0 )
+        sep   = kwargs.get( 'sep',   ' ' )
+
+        pargs = []
+        if depth > 0:
+            pargs.append( indent * depth )
+        if obj:
+            if self.args.verbose > 1:
+                pargs.append( '{}:'.format( self.obj_typename( obj ) ) )
+            pargs.append( self.name( obj ))
+
+        if sep != ' ':
+            pargs.append( sep.join( args ) )
+        else:
+            pargs.extend( args )
+
+        print( *pargs )
+
+    def print_vms( self, folder, depth ):
         try:
-            vmlist = map( lambda vm: vm_table[ vm.id ],
-                          vsl.get_seq_type( folder.childEntity, vim.VirtualMachine ))
+            child_entities = self.children( folder )
+            vmlist = map( lambda vm: self.vm_table[ vm.id ],
+                          vsl.get_seq_type( child_entities, vim.VirtualMachine ))
         except AttributeError:
             return
+
+        if not vmlist:
+            return
+
         # Display virtual machines before templates,
         # but within each group display in alphabetical order.
-        vmlist.sort( lambda a, b: (
-            cmp( a[ 'config.template' ], b[ 'config.template' ] )
-            or cmp( a[ 'name' ].lower(), b[ 'name' ].lower() )))
-        ws = indent * depth
+        vmlist.sort( key=lambda elt: elt[ 'name' ].lower() )
+        vmlist.sort( key=lambda elt: elt[ 'config.template' ] )
+
+        show_uuid = self.args.verbose > 1
         for vm in vmlist:
+            cols = []
             if vm[ 'config.template' ]:
-                flag = '+ '
+                cols.append( '+' )
             elif vm[ 'runtime.powerState' ] == poweredOff:
-                flag = 'o '
+                cols.append( 'o' )
             else:
-                flag = '  '
-            print( ws, flag, vm[ 'name' ], sep='' )
+                cols.append( ' ' )
 
-    def print_folder( path, depth ):
-        last = path[ path.rfind( slash ) + 1 : ]
-        print( depth * indent, last, slash, sep='' )
+            if show_uuid:
+                cols.append( vm[ 'config.instanceUuid' ] )
 
-        folder = path_to_folder[ path ]
-        del path_to_folder[ path ]
+            cols.append( vm[ 'name' ] )
+            self.printobj( *cols, depth=depth )
+
+    def print_ccr( self, compute_resource, depth ):
+        for obj in compute_resource.host:
+            self.printobj( obj=obj, depth=depth )
+
+    def print_folder( self, path, depth ):
+        self.printobj( basename( path ), slash, sep='', depth=depth )
+
+        p2f = self.path_to_folder
+        f2p = self.folder_to_path
+
+        folder = p2f[ path ]
+        del p2f[ path ] # print_hier shouldn't do this folder again
+
         if isinstance( folder, vim.Datacenter ):
-            # Datastore objects have no childEntity attr
-            subpaths = [ folder_to_path[ obj ] for obj in
-                         ( getattr( folder, attr ) for attr in
-                           ( 'datastoreFolder',
-                             'hostFolder',
-                             'networkFolder',
-                             'vmFolder') ) ]
+            # Datacenter objects have no childEntity attr
+            props = ('datastoreFolder', 'hostFolder', 'networkFolder', 'vmFolder')
+            dcf = self.vsi.get_obj_props( [vim.Datacenter], props, root=[folder])[ 0 ]
+            subpaths = [ f2p[ dcf[ f ] ] for f in props ]
         else:
-            subpaths = [ folder_to_path[ obj ] for obj in
-                         vsl.get_seq_type( folder.childEntity, vim.Folder ) ]
+            subpaths = [ f2p[ obj ] for obj in
+                         vsl.get_seq_type( self.children( folder ), vim.Folder ) ]
         subpaths.sort()
         for subpath in subpaths:
-            print_folder( subpath, depth + 1 )
+            self.print_folder( subpath, depth + 1 )
 
-        if vm_table:
-            print_vms( folder, depth + 1 )
+        if isinstance( folder, vim.Datacenter ):
+            return
 
-    path_list = path_to_folder.keys()
-    path_list.sort( cmp=lambda a, b: cmp( a.lower(), b.lower() ) )
-    for path in path_list:
-        if path in path_to_folder:
-            depth = path.count( slash ) - 1
-            print_folder( path, depth )
+        if self.vm_table:
+            for obj in self.children( folder ):
+                if isinstance( obj, vim.Folder ):
+                    continue
+                elif isinstance( obj, vim.VirtualMachine ):
+                    self.print_vms( folder, depth + 1 )
+                    break
+                else:
+                    self.printobj( obj=obj, depth=depth+1 )
+                    if isinstance( obj, ( vim.ComputeResource, vim.ClusterComputeResource ) ):
+                        self.print_ccr( obj, depth + 2 )
 
+    def print_hier( self ):
+        p2f = self.path_to_folder
+        for path in sorted( p2f.keys() ):
+            # We may have traversed this path as a nested directory already
+            if path in p2f:
+                depth = path.count( slash ) - 1
+                self.print_folder( path, depth )
+
+
+def get_args():
+    p = vsl.ArgumentParser( loadrc=True )
+    p.add_bool( '-a', '--all',                     help='Display all folder hierarchies; default is vm-only' )
+    p.add(      '-v', '--verbose', action='count', help='Display extended info (repeat to increase)' )
+    return p.parse()
 
 def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
 
     if args.all:
-        path_to_folder = vsi.path_to_folder_map().copy()
-        folder_to_path = vsi.folder_to_path_map()
+        p2f = vsi.path_to_folder_map()
+        f2p = vsi.folder_to_path_map()
     else:
-        path_to_folder = vsi.path_to_subfolder_map( 'vm' )
-        folder_to_path = vsl.inverted_dict( path_to_folder )
+        p2f = vsi.path_to_subfolder_map( 'vm' )
+        f2p = vsl.inverted_dict( p2f )
 
     if args.verbose:
-        props = [ 'name', 'config.template', 'runtime.powerState' ]
-        vm_table = { vm[ 'obj' ].id : vm for vm in
-                     vsi.get_obj_props( [vim.VirtualMachine], props ) }
-        print_hier( folder_to_path, path_to_folder, vm_table )
+        Hier( vsi, args, p2f, f2p )
     else:
-        path_list = sorted( path_to_folder.keys() )
-        for path in path_list:
+        for path in sorted( p2f.keys() ):
             depth = path.count( slash ) - 1
-            last = path[ path.rfind( slash ) + 1 : ]
-            print( depth * indent, last, slash, sep='' )
-
+            print( depth * indent, basename( path ), slash, sep='' )
 
 if __name__ == '__main__':
     main()
