@@ -66,14 +66,13 @@ class Hier( object ):
 
     def name( self, obj ):
         if not hasattr( self.propMaps, 'name' ):
-            self.propMaps.name = self.moProps( self.vsi,
-                                               [ vim.Datastore,
-                                                 vim.Network,
-                                                 vim.HostSystem,
-                                                 vim.ComputeResource,
-                                                 vim.ClusterComputeResource,
-                                                ],
-                                               [ 'name' ] )
+            moTypes = [ vim.Datastore,
+                        vim.Network,
+                        vim.HostSystem,
+                        vim.ComputeResource,
+                        vim.ClusterComputeResource,
+                        vim.dvs.VmwareDistributedVirtualSwitch, ]
+            self.propMaps.name = self.moProps( self.vsi, moTypes, [ 'name' ] )
         return self.propMaps.name[ obj ].name
 
     def children( self, obj ):
