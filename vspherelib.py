@@ -668,7 +668,7 @@ class _vmomiCollect( object ):
         hierarchy as the original managed object, but only of those
         properties requested.  The advantage of using these objects instead
         of actual managed objects is that they do not invoke RPC calls over
-        the wire every time an attribute is accessed..
+        the wire every time an attribute is accessed.
 
         Of course, no method calls are available via these ersatz objects either.
 
@@ -676,10 +676,12 @@ class _vmomiCollect( object ):
         res = self.get_obj_props( *args, **kwargs )
         if res:
             for elt in res:
+                obj = elt[ 'obj' ]
                 del elt[ 'obj' ]
+                elt[ '_moId' ] = obj._moId  # useful as unique key
+                elt[ 'id' ]    = obj._moId  # mimic our vim.ManagedObject.id patch
             return [ flat_to_nested_dict( elt, objtype=pseudoPropAttr )
                      for elt in res ]
-
 
     def get_obj( self, *args, **kwargs):
         result = self.get_obj_props( *args, **kwargs )
@@ -741,9 +743,13 @@ class _vmomiFind( object ):
             try:
                 names = [ elt.name for elt in res ]
                 if len( set( names ) ) != len( names ):
-                    # Names are not unique; show their object id.
-                    names = [ '{} ({})'.format( elt.name, elt._moId )
-                              for elt in res ]
+                    # Names are not unique; show their uuid/location or object id.
+                    if isinstance( res[0], vim.VirtualMachine ):
+                        f2p = inverted_dict ( self.path_to_subfolder_map( 'vm' ) )
+                        names = [ '{} {}/{}'.format( elt.config.instanceUuid, f2p[ elt.parent ], elt.name )
+                                  for elt in res ]
+                    else:
+                        names = [ '{} ({})'.format( elt.name, elt._moId ) for elt in res ]
             except TypeError as e:
                 if not res or isinstance( res, vim.ManagedObject ):
                     names = self.name_to_mo_map( mot, res ).keys()
@@ -753,6 +759,7 @@ class _vmomiFind( object ):
             diag = Diag( msg )
             if True or names:
                 local_label = label
+                # Apologies in advance to any future l10n engineers.
                 if local_label[-2:] == 'ch':
                     local_label += 'e'
                 diag.append( 'Available {0}s:'.format( local_label ) )
@@ -855,6 +862,7 @@ class _vmomiFind( object ):
 
         idx = self.si_content.searchIndex
         searchfns = [
+            lambda pat: idx.FindAllByUuid(    vmSearch=True,    uuid=pat, instanceUuid=True ),
             lambda pat: idx.FindAllByUuid(    vmSearch=True,    uuid=pat ),
             lambda pat: idx.FindAllByIp(      vmSearch=True,      ip=pat ),
             lambda pat: find_by_name( pat ),
@@ -1917,7 +1925,7 @@ class _vmomiVmGuestOperation_File( object ):
 
         # TODO: verify the connection using the host cert.
         # The urllib3 interface requires certs to be stored in a file and
-        # the location passed in, which another annoying setup nit.
+        # the location passed in, which is another annoying setup nit.
         resp = requests.get( ftinfo.url, verify=False )
         if resp.status_code != 200:
             raise GuestOperationError( str( status_code ), resp.reason )
@@ -2441,9 +2449,9 @@ def flat_to_nested_dict( flat, sep='.', objtype=dict ):
 
     The optional keyword arg OBJTYPE can be used to specify the datatype for
     the new tree object.  For example using objtype=pseudoPropAttr provides a
-    dict object whose keys can also be accessed as objects, e.g.
+    dict-like object whose keys can also be accessed as attributes, e.g.
 
-            result['a']['b']['c'] == result.a.b.c
+            result[ 'a' ][ 'b' ][ 'c' ] == result.a.b.c
     '''
     nested = objtype()
     for k in flat:
@@ -2474,7 +2482,7 @@ def environ_to_dict( names, preserve_case=False ):
 def dict_to_environ( names ):
     return sorted( str.join( '=', (k, names[ k ])) for k in names )
 
-# n.b. this only works if values are hashable
+# n.b. this only works if values are hashable, and may lose elements if not 1:1
 def inverted_dict( d ):
     return { v : k for k, v in d.items() }
 
@@ -2674,8 +2682,6 @@ def __set_debug_rpc( toggle=None ):
 
 def debug_rpc_enable():  __set_debug_rpc( toggle=True )
 def debug_rpc_disable(): __set_debug_rpc( toggle=False )
-
-# We must install our hook before any soap adapters are instantiated
-__set_debug_rpc( debug_rpc )
+if debug_rpc: debug_rpc_enable()
 
 # eof
