@@ -660,6 +660,26 @@ class _vmomiCollect( object ):
                 result.append( elt )
             return result
 
+    def get_pseudo_obj( self, *args, **kwargs ):
+        '''Like 'get_obj_props', but instead of returning an array of dicts with
+        the managed object and requested property names, return a
+        list of pseudoPropAttr objects.  These will have the same attribute
+        hierarchy as the original managed object, but only of those
+        properties requested.  The advantage of using these objects instead
+        of actual managed objects is that they do not invoke RPC calls over
+        the wire every time an attribute is accessed..
+
+        Of course, no method calls are available via these ersatz objects either.
+
+        '''
+        res = self.get_obj_props( *args, **kwargs )
+        if res:
+            for elt in res:
+                del elt[ 'obj' ]
+            return [ flat_to_nested_dict( elt, objtype=pseudoPropAttr )
+                     for elt in res ]
+
+
     def get_obj( self, *args, **kwargs):
         result = self.get_obj_props( *args, **kwargs )
         if not result:
