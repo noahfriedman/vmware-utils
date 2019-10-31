@@ -523,8 +523,8 @@ class _vmomiCollect( object ):
 
     def create_container_view( self, vimtype, root=None, recursive=True ):
         if root is None:
-            root = self.si.content.rootFolder
-        return self.si.content.viewManager.CreateContainerView(
+            root = self.si_content.rootFolder
+        return self.si_content.viewManager.CreateContainerView(
             container = root,
             type      = vimtype,
             recursive = recursive )
@@ -535,7 +535,7 @@ class _vmomiCollect( object ):
                 objs = map( lambda o: o.obj, objs )
             except AttributeError:
                 pass
-        return self.si.content.viewManager.CreateListView( obj=objs )
+        return self.si_content.viewManager.CreateListView( obj=objs )
 
     def _get_obj_props_nofilter( self, vimtype,
                                  props = None,
@@ -564,7 +564,7 @@ class _vmomiCollect( object ):
             result = container.view
         else:
             props      = propList( props )
-            spc        = self.si.content.propertyCollector
+            spc        = self.si_content.propertyCollector
             filterSpec = self.create_filter_spec( vimtype, container, props )
 
             timer  = Timer( lambda: 'retrieve {} '.format( ', '.join( v._wsdlName for v in vimtype )))
@@ -695,7 +695,7 @@ class _vmomiCollect( object ):
 class _vmomiFind( object ):
     def name_to_mo_map( self, typelist, root=None ):
         if root is None:
-            root = self.si.content.rootFolder
+            root = self.si_content.rootFolder
         typestr  = str.join( ', ', sorted( [elt.__name__ for elt in typelist] ))
         map_name = 'name to mo map: type=[{}] root={}'.format( typestr, root._moId )
         try:
@@ -832,7 +832,7 @@ class _vmomiFind( object ):
             except KeyError:
                 pass
 
-        idx = self.si.content.searchIndex
+        idx = self.si_content.searchIndex
         searchfns = [
             lambda pat: idx.FindAllByUuid(    vmSearch=True,    uuid=pat ),
             lambda pat: idx.FindAllByIp(      vmSearch=True,      ip=pat ),
@@ -1036,7 +1036,7 @@ class _vmomiNetworkMap( object ):
         elif type( host ) is vim.VirtualMachine:
             host = [ host.runtime.host ]
 
-        dvs_mgr = self.si.content.dvSwitchManager
+        dvs_mgr = self.si_content.dvSwitchManager
         for obj in host:
             ct = dvs_mgr.QueryDvsConfigTarget( host=obj )
             for pg in ct.distributedVirtualPortgroup:
@@ -1331,7 +1331,7 @@ class _vmomiMonitor( object ):
     # or an exception occurs (including any unhandled exception in the callback).
     # Otherwise the return value is the final return value of the callback.
     def monitor_property_changes( self, objlist, proplist, callback ):
-        spc = self.si.content.propertyCollector
+        spc = self.si_content.propertyCollector
         vpc = vmodl.query.PropertyCollector
 
         types = set( type( obj ) for obj in objlist )
@@ -1411,7 +1411,8 @@ class vmomiConnect( _vmomiCollect,
     def close( self ):
         try:
             pyVconnect.Disconnect( self.si )
-            self.si = None
+            del self.si_content
+            del self.si
         except:
             pass
 
@@ -1434,10 +1435,13 @@ class vmomiConnect( _vmomiCollect,
             session_stub = vsos( smart_stub, login_method )
             self.si = vim.ServiceInstance( 'ServiceInstance', session_stub )
 
-            # SmartStubAdapter doesn't seem to work with ESXi 4.1 (or earlier?)
             try:
-                self.si.content
+                # si.content is a property which refetches this object across
+                # the wire every time it's referenced.  For performance
+                # reasons, we fetch it once and uses that cached value throughout.
+                self.si_content = self.si.content
             except (vmodl.fault.MethodNotFound, vmodl.fault.SystemError) as e:
+                # SmartStubAdapter doesn't seem to work with ESXi 4.1 (or earlier?)
                 #printerr( 'warning', 'using non-reconnectable connection mechanism' )
                 self.si = pyVconnect.SmartConnect(
                         host = self.host,
@@ -1445,6 +1449,7 @@ class vmomiConnect( _vmomiCollect,
                         user = self.user,
                         pwd  = self.pwd,
                         sslContext=sslContext )
+                self.si_content = self.si.content
 
         except Exception as e:
             msg = ': '.join(( self.host,
@@ -1484,7 +1489,7 @@ class vmomiMKS( object ):
 
         vc_cert   = ssl.get_server_certificate( (self.host, self.port) )
         vc_pem    = OpenSSL.crypto.load_certificate( OpenSSL.crypto.FILETYPE_PEM, vc_cert )
-        content   = vsi.si.content
+        content   = vsi.si_content
 
         self.fingerprint = vc_pem.digest( 'sha1' )
         self.serverGUID  = content.about.instanceUuid
@@ -1636,7 +1641,7 @@ class vmomiDataStoreFile( _with ):
         spec = vim.SessionManager.HttpServiceRequestSpec()
         spec.url    = url
         spec.method = method
-        sm = self.vsi.si.content.sessionManager
+        sm = self.vsi.si_content.sessionManager
         ticket = sm.AcquireGenericServiceTicket( spec=spec )
         return { 'vmware_cgi_ticket' : ticket.id }
 
@@ -2066,7 +2071,7 @@ class vmomiVmGuestOperation( _vmomiVmGuestOperation_Env,
             if isinstance( arg, argparse.Namespace ):
                 kwargs.update( vars( arg ))
 
-        content      = vsi.si.content
+        content      = vsi.si_content
         gomgr        = content.guestOperationsManager
         self.almgr   = gomgr.aliasManager
         self.fmgr    = gomgr.fileManager
