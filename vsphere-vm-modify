@@ -18,6 +18,7 @@ from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
 import sys
 import re
+import uuid
 
 class NotSupportedError( vsl.vmomiError ): pass
 
@@ -182,6 +183,11 @@ def get_args():
              upgrades will normally be scheduled after the VM guest shuts
              down cleanly.  Using this option means schedule the upgrade no
              matter how the VM might be reset, including host faults. ''' ) )
+
+    ## uuid
+    p_uuid = p_sub.add_parser( 'uuid', parents=[p_com_vm], help='Change/reset UUID' )
+    p_uuid.add(      '-u', '--uuid',                    help='Set to this explicit value' )
+    p_uuid.add_bool( '-i', '--instance', default=False, help='modify instanceUuid instead of SMBIOS uuid' )
 
     ## vcpu
     p_vcpu = p_sub.add_parser( 'vcpu', parents=[p_com_vm], help='Configure number of virtual processors' )
@@ -635,6 +641,8 @@ class mVM():
 
     def reload( self, vm_name ):
         self.vsi.get_vm( vm_name ).Reload()
+        # If no exception was raised, it succeeded.
+        print( vm_name, 'Success', sep=': ' )
 
 
     def rename( self, vm_name ):
@@ -656,7 +664,9 @@ class mVM():
 
 
     def to_template( self, vm_name ):
-        return self.vsi.get_vm( vm_name ).MarkAsTemplate()
+        self.vsi.get_vm( vm_name ).MarkAsTemplate()
+        # If no exception was raised, it succeeded.
+        print( vm_name, 'Success', sep=': ' )
 
 
     def to_vm( self, vm_name ):
@@ -666,7 +676,9 @@ class mVM():
         else:
             cluster = vm.runtime.host.parent
         pool = self.vsi.get_pool( self.args.pool, root=cluster )
-        return vm.MarkAsVirtualMachine( pool=pool )
+        vm.MarkAsVirtualMachine( pool=pool )
+        # If no exception was raised, it succeeded.
+        print( vm_name, 'Success', sep=': ' )
 
 
     def tools( self, vm_name ):
@@ -713,6 +725,16 @@ class mVM():
             return vm.ReconfigVM_Task( cfgspec )
         else:
             return vm.UpgradeVM_Task( version=version )
+
+
+    def uuid( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        new_uuid = self.args.uuid or str( uuid.uuid4() )
+        if self.args.instance:
+            cfgspec.instanceUuid = new_uuid
+        else:
+            cfgspec.uuid = new_uuid
+        return vm.ReconfigVM_Task( cfgspec )
 
 
     def vcpu( self, vm_name ):
