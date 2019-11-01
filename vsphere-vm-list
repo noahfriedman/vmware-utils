@@ -73,7 +73,7 @@ def main():
                 pass
 
     if show:
-        show.sort( lambda a, b: cmp( a[ 'name' ], b[ 'name' ]))
+        show.sort( key=lambda elt: elt[ 'name' ] )
         for vm in show:
             cols = []
             if args.verbose:
