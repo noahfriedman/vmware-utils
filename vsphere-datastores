@@ -27,27 +27,24 @@ def get_args():
     return p.parse()
 
 
-def cmp_ds_name(a, b):
-    aL = a[ 'summary.name' ].split( '-' )
-    bL = b[ 'summary.name' ].split( '-' )
-    i = 0
-    m = re.compile( '^([0-9]+)[MGT]B$' )
-    while i < len( aL ) and i < len( bL ):
-        ae = aL[i]
-        be = bL[i]
-        am = m.match( ae )
-        bm = m.match( be )
-        if am and bm:
-            i += 1
-            continue
+# Match 1 to 3 digits not preceded by or followed by other digits.
+# The negative assertions are required to anchor the match to the start of
+# a digit sequence, not something in the middle of a sequence of digits
+# which just happens to consist of 1 to 3 of them.
+re_lt999  = re.compile( '(?<!\d)(\d{1,3})(?!\d)' )
+re_ds_cap = re.compile( '\d+[KMGTPE]i?B', flags=re.I )
 
-        res = (ae > be) - (be > ae)
-        if res != 0:
-            return res
+# The motivation for this particular sort key was one IT group's habit of
+# naming volumes as "<group>-<san>-VMFS-<cap>-<n>" where <n> was a
+# volume number.  For all volumes in the same <group>/<san> combo, I
+# wanted the ordering of <n> to matter, but not <cap>.
+def key_ds_name( elt ):
+    # Strip out any volume sizes in name; we can see that in a separate column.
+    s = re_ds_cap.sub( '', elt[ 'summary.name' ] )
+    # Pad remaining numbers less than 4 digits wide with leading zeroes,
+    # so that a lexicographic ordering will not put "10" before "2".
+    return re_lt999.sub( lambda m: '{:04d}'.format( int( m.group( 1 ))), s )
 
-        i += 1
-    res = (len( aL ) > len( bL )) - (len( bL ) > len( aL ))
-    return res
 
 def main():
     args = get_args()
@@ -73,7 +70,7 @@ def main():
                      '    {2[0]:>5} {2[1]:>3} ({3:2d}%)',
                      '    {4[0]:>5} {4[1]:>3} ({5:3d}%)' ))
 
-    for elt in sorted( ds, cmp=cmp_ds_name ):
+    for elt in sorted( ds, key=key_ds_name ):
         name = elt['summary.name']
         size = int( elt['summary.capacity'] )
         free = int( elt['summary.freeSpace'] )
