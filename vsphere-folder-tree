@@ -54,11 +54,11 @@ class Hier( object ):
                 elt = vsl.flat_to_nested_dict( elt, objtype=vsl.pseudoPropAttr )
                 self[ obj ] = elt
 
-    def __init__( self, vsi, args, path_to_folder, folder_to_path ):
+    def __init__( self, vsi, args, path_to_folder_map ):
         self.vsi            = vsi
         self.args           = args
-        self.path_to_folder = path_to_folder.copy()
-        self.folder_to_path = folder_to_path
+        self.path_to_folder = path_to_folder_map.copy()
+        self.folder_to_path = vsl.inverted_dict( path_to_folder_map )
 
         self.propMaps       = self.Container()
 
@@ -197,8 +197,6 @@ class Hier( object ):
                     self.print_ccr( obj, depth + 2 )
         self.print_vms( folder, depth + 1 )
 
-
-
     def print_hier( self ):
         p2f = self.path_to_folder
         for path in sorted( p2f.keys() ):
@@ -220,13 +218,11 @@ def main():
 
     if args.all:
         p2f = vsi.path_to_folder_map()
-        f2p = vsi.folder_to_path_map()
     else:
         p2f = vsi.path_to_subfolder_map( 'vm' )
-        f2p = vsl.inverted_dict( p2f )
 
     if args.verbose:
-        Hier( vsi, args, p2f, f2p )
+        Hier( vsi, args, p2f )
     else:
         for path in sorted( p2f.keys() ):
             depth = path.count( slash ) - 1
