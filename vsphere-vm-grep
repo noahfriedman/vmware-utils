@@ -68,8 +68,12 @@ def matches( regex, obj, name=None, all=False ):
                 if m:
                     result.extend( m )
             except (TypeError, IndexError) as e:
-                subname = '{}[{}]'.format( name, i )
-                m = matches( regex, elt, name=subname, all=all )
+                if isinstance( elt, vim.option.OptionValue ):
+                    subname = "{}[{}, key='{}'].value".format( name, i, elt.key )
+                    m = matches( regex, elt.value, name=subname, all=all )
+                else:
+                    subname = '{}[{}]'.format( name, i )
+                    m = matches( regex, elt, name=subname, all=all )
                 if m:
                     result.extend( m )
             if result and not all:
@@ -112,7 +116,8 @@ def get_obj_props_best_effort( vsi, orig_proplist ):
 def filter_nonrequested( result, requested ):
     want = []
     for elt in result:
-        name = re.sub( '\[[0-9]+\]', '', elt[0] )
+        name = re.sub( '\[[0-9]+,\s*(?:key=\'?)?(.*?)\'?\]', '.\\1', elt[0] )
+        name = re.sub( '\[[0-9]+\]', '', name )
         if (name in requested
             # the name is a child of any of the requested props
             or any( name.startswith( req ) and name[ len( req ) ] == '.'
