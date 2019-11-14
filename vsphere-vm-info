@@ -70,6 +70,8 @@ proplist = [
     'summary.storage', ]
 
 proplist_verbose = [
+    'capability',
+
     'config.extraConfig',
 
     'config.instanceUuid',
@@ -82,6 +84,7 @@ proplist_verbose = [
     'config.tools.beforeGuestStandby',
     'config.tools.syncTimeWithHost',
     'config.tools.toolsUpgradePolicy',
+    'config.tools.toolsInstallType',
     'config.flags.disableAcceleration',
     'config.flags.diskUuidEnabled',
     'config.flags.enableLogging',
@@ -173,10 +176,11 @@ def pi( *parm ):
     p( *parm )
 
 def pf( label, dic, attrs, extra='' ):
-    p( label, extra )
+    if label:
+        p( label, extra )
     for n, attr in enumerate( attrs ):
         try:
-            if n == 0 and not extra:
+            if n == 0 and label and not extra:
                 fn = p
             else:
                 fn = pi
@@ -199,6 +203,8 @@ class DisplayVM( object ):
             self.vm.config.extraConfig = vsl.flat_to_nested_dict(
                 vsl.attr_to_dict( self.vm.config.extraConfig ),
                 objtype=vsl.pseudoPropAttr )
+
+            self.vm.capability = vsl.pseudoPropAttr( self.vm.capability.__dict__ )
         except AttributeError:
             pass
         self.verbose = verbose
@@ -344,8 +350,9 @@ class DisplayVM( object ):
               ('Standby'  , 'beforeGuestStandby'),
               ('Shutdown' , 'beforeGuestShutdown'),
               ('Reboot'   , 'beforeGuestReboot'),
-              ('Upgrade'  , 'toolsUpgradePolicy'),
-              ('syncTime' , 'syncTimeWithHost'), ))
+              ('syncTime' , 'syncTimeWithHost'),
+              ('Tools type', 'toolsInstallType'),
+              ('Upgrade'  , 'toolsUpgradePolicy'), ))
 
     def display_guest( self ):
         pf( 'Guest Tools', self.vm.guest,
@@ -356,10 +363,16 @@ class DisplayVM( object ):
               ('Version',         'toolsVersion'),
               ('State',           'guestState'),
             ))
+        cap = self.vm.capability
+        pi( farindentL, 'Auto-update supported',  cap.toolsAutoUpdateSupported )
         try:
             pf( 'Screen', self.vm.guest.screen,
                  ( ('Width',    'width'),
                    ('Height',  'height'),
+                 ))
+            pf( '', cap,
+                 ( ('Set resolution supported', 'settingScreenResolutionSupported'),
+                   ('Set topology supported',   'settingDisplayTopologySupported'),
                  ))
         except AttributeError:
             pass
