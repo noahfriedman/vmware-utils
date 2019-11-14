@@ -64,8 +64,8 @@ del traceback
 
 # Now on to the repl proper:
 
-args = vsl.ArgumentParser( loadrc=True ).parse()
-vsi  = vsl.vmomiConnect( args )
+args = None
+vsi  = None
 
 def restart():
     reload( vsl )
@@ -87,6 +87,9 @@ def load( filename ):
     exec( text, globals() )
 
 if __name__ == '__main__':
+    args = vsl.ArgumentParser( loadrc=True ).parse()
+    vsi  = vsl.vmomiConnect( args )
+
     # Don't display 'None' if there is nothing to display.
     sys.displayhook = lambda arg: (arg is None) or pp( arg )
     code.interact(
