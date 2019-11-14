@@ -150,10 +150,55 @@ class Diag( object ):
             self.lines.append( self.sep.join( args ))
 
 
-# This is just a dictionary but you can access
-# or assign elements as either d['x'] or d.x
-
 class pseudoPropAttr( dict ):
+    '''
+    This is just a dictionary but you can access or assign elements as any of:
+
+            d['x.y']
+            d['x']['y']
+            d.x.y
+
+    If there are keys which are prefixes of other keys, the shorter key's
+    value will be moved to the None slot of the subkey dict, since a key
+    cannot have both an immediate end value and a link to subkeys.
+
+    Example:
+
+            >>> x = vsl.pseudoPropAttr()
+            >>> x[ 'foo' ] = 'quux'
+            >>> x
+            { 'foo': 'quux'}
+            >>> x[ 'foo.bar' ] = 'baz'
+            >>> x
+            { 'foo': { None: 'quux', 'bar': 'baz'}}
+
+    Or assigned in opposite order:
+
+            >>> x = pseudoPropAttr()
+            >>> x[ 'foo.bar' ] = 'baz'
+            >>> x
+            { 'foo': { 'bar': 'baz'}}
+            >>> x[ 'foo' ]
+            { 'bar': 'baz'}
+            >>> x[ 'foo' ] = 'quux'
+            >>> x[ 'foo' ]
+            'quux'
+            >>> x[ 'foo.bar' ]
+            'baz'
+            >>> x
+            { 'foo': { None: 'quux', 'bar': 'baz'}}
+
+    When you delete a key, if it has an immediate value, that is removed.
+    If it doesn't, any subtree it might have is removed:
+
+            >>> del x['foo']
+            >>> x
+            { 'foo': { 'bar': 'baz'}}
+            >>> del x['foo']
+            >>> x
+            { }
+    '''
+
     def __setattr__( self, name, value ):
         self[ name ] = value
         return value
@@ -169,6 +214,83 @@ class pseudoPropAttr( dict ):
             del self[ name ]
         except KeyError as e:
             raise AttributeError( *e.args )
+
+    def ___tail___( self, key, afap=False ):
+        try:
+            seq = key.split( '.' )
+        except AttributeError: # not a str
+            return dict.__getitem__( self, key ), None
+
+        prev = walk = self
+        stopat = 1 if afap else 0
+        while len( seq ) > stopat:
+            try:
+                obj = dict.__getitem__( walk, seq[ 0 ] )
+            except (KeyError, TypeError):
+                if afap: # return as far as possible
+                    return prev, seq
+                else:
+                    raise KeyError( key )
+            if afap and not isinstance( obj, type( self ) ):
+                break
+            prev, walk = walk, obj
+            seq.pop( 0 )
+        return walk, seq
+
+    def __getitem__( self, key ):
+        obj, _ = self.___tail___( key )
+        try:
+            return dict.__getitem__( obj, None )
+        except (KeyError, TypeError):
+            return obj
+
+    def __setitem__( self, key, val ):
+        try:
+            seq = key.split( '.' )
+        except TypeError:
+            return dict.__setitem__( self, key, val )
+
+        selftype = type( self )
+        tail, rest = self.___tail___( key, afap=True )
+        while len( rest ) > 1:
+            new = selftype()
+            if rest[ 0 ] in tail:
+                orig = dict.__getitem__( tail, rest[ 0 ] )
+                dict.__setitem__( new, None, orig )
+            dict.__setitem__( tail, rest.pop( 0 ), new )
+            tail = new
+
+        try:
+            last = dict.__getitem__( tail, rest[0] )
+            if isinstance( last, selftype ):
+                dict.__setitem__( last, None, val )
+            else:
+                dict.__setitem__( tail, rest[ 0 ], val )
+        except KeyError:
+            dict.__setitem__( tail, rest[ 0 ], val )
+        return val
+
+    def __delitem__( self, key ):
+        tail, rest = self.___tail___( key, afap=True )
+        if len( rest ) > 1:
+            raise KeyError( key )
+        last = dict.__getitem__( tail, rest[ 0 ] )
+        if isinstance( last, type( self ) ):
+            try:
+                dict.__delitem__( last, None )
+            except (KeyError, TypeError):
+                dict.__delitem__( tail, rest[ 0 ] )
+        else:
+            dict.__delitem__( tail, rest[ 0 ] )
+
+        if not tail and key.find( '.' ) >= 0:
+            # we want recursion to restructure parent as leaves are removed
+            del self[ key.rsplit( '.', 1 )[ 0 ] ]
+        elif len( tail ) == 1 and None in tail:
+            pkey, _    =  key.rsplit( '.', 1 )
+            pkey, ekey = pkey.rsplit( '.', 1 )
+            parent, _  = self.___tail___( pkey )
+            dict.__setitem__( parent, ekey, tail[ None ] )
 
 # end class pseudoPropAttr
 
