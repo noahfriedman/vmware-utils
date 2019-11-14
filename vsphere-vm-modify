@@ -159,6 +159,10 @@ def get_args():
     p_tools.add_mxbool( ['-t', '--sync-time'], ['-T', '--no-sync-time'],
                         help_true  = 'Sync guest time with the hypervisor',
                         help_false = 'Do not sync guest time' )
+    p_tools.add_mxbool( ['-u', '--upgrade-at-boot'], ['-U', '--no-upgrade-at-boot'],
+                        help_true  = 'Auto update guest tools at boot, if possible',
+                        help_false = 'Tools update must be performed manually' )
+
 
     ## tools_mount
     p_sub.add_parser( 'tools-mount',   parents=[p_com_vm], help='Mount guest tools installer on virtual cd-rom' )
@@ -690,6 +694,10 @@ class mVM():
         cfgspec.tools.beforeGuestShutdown = self.args.shutdown
         cfgspec.tools.beforeGuestStandby  = self.args.standby
         cfgspec.tools.syncTimeWithHost    = self.args.sync_time
+        if self.args.upgrade_at_boot is True:
+            cfgspec.tools.toolsUpgradePolicy = 'upgradeAtPowerCycle'
+        elif self.args.upgrade_at_boot is False:
+            cfgspec.tools.toolsUpgradePolicy = 'manual'
         return vm.ReconfigVM_Task( cfgspec )
 
 
