@@ -19,6 +19,50 @@ import pprint
 import vspherelib     as vsl
 from   pyVmomi    import vim, vmodl
 
+
+# This is a hideous hack.
+#
+# I want attributes to be displayed in sorted order interactively,
+# but if you tamper with the order of elements unconditionally, you
+# will break SOAP serialization and deserialization.
+#
+# The pyVmomi.VmomiSupport.FormatObject function is used as the __str__ and
+# __repr__ methods.  Modifying the property list order is only safe there.
+# How to distinguish?  Look at the stack and see who called us.
+#
+# While we're at it, get rid of some useless attributes.
+
+import traceback
+
+def _overrideGetPropertyList( orig, traceback=traceback ):
+    FormatObject_elide = ( 'dynamicProperty', 'dynamicType' )
+    orig_func = orig._GetPropertyList.__func__  # we want the unbound method
+
+    def _GetPropertyList( cls, includeBaseClassProps=True ):
+        res = orig_func( cls, includeBaseClassProps=includeBaseClassProps )
+
+        callstack = [ frame[ 2 ] for frame in traceback.extract_stack( None, 2 ) ]
+        if callstack[ 0 ] == 'FormatObject':
+            try:
+                for elt in res[:]:  # copy list since we're modifying it
+                    if elt.name in FormatObject_elide:
+                        res.remove( elt )
+                res.sort( key=lambda elt: elt.name )
+            except:
+                raise
+        return res
+
+    orig._GetPropertyList = classmethod( _GetPropertyList )
+
+_overrideGetPropertyList( vim.ManagedObject )
+_overrideGetPropertyList( vim.DataObject )
+
+# Clean up our namespace after patching
+del _overrideGetPropertyList
+del traceback
+
+
+# Now on to the repl proper:
 
 args = vsl.ArgumentParser( loadrc=True ).parse()
 vsi  = vsl.vmomiConnect( args )
