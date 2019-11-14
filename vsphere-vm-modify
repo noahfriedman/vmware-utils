@@ -1,0 +1,878 @@
+#!/usr/bin/env python
+# vsphere-vm-modify --- make common modifications to virtual machine configuration
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2018-09-05
+# Public domain
+
+# $Id: vsphere-vm-modify,v 1.37 2019/06/22 03:51:36 friedman Exp $
+
+# Commentary:
+
+# TODO: customize taskwait success status depending on operation.
+
+# Code:
+
+from   __future__ import print_function
+from   pyVmomi    import vim, vmodl
+import vspherelib     as vsl
+import sys
+import re
+import uuid
+
+class NotSupportedError( vsl.vmomiError ): pass
+
+def get_args():
+    p = vsl.ArgumentParser( loadrc=True )
+    p.add_bool('-w', '--wildcard', help='Allow wildcard expressions for vm names')
+
+    p_sub = p.add_subparsers( dest='cmd' )
+
+    p_com_vm = vsl.ArgumentParser( add_help=False )
+    p_com_vm.add( 'vm', nargs='+', help='Virtual machines' )
+
+    ## annotate
+    p_annotate = p_sub.add_parser( 'annotate', parents=[p_com_vm], help='Set annotation (notes) for VM' )
+    p_anno_g   = p_annotate.add_mutually_exclusive_group( required=True )
+    p_anno_g.add_argument('-a', '--annotation', default=None, help='Annotation string' )
+    p_anno_g.add_argument('-f', '--file', type=vsl.argparse.FileType('r'), default=None, help='Read annotation from file' )
+
+    ## boot-options
+    # Todo: add option(s) to specify boot order
+    p_boot = p_sub.add_parser( 'boot-options', parents=[p_com_vm], help='Configure bios boot options' )
+    p_boot.add(      '-d', '--delay',                              help='Delay in ms before bios initiates boot')
+    p_boot.add_bool( '-e', '--enter-setup',                        help='Enter BIOS setup on next boot (one-time only)')
+
+    ## connect, disconnect
+    p_com_conn = vsl.ArgumentParser( add_help=False )
+    p_com_conn.add_mxbool( ['-C', '--start-connected'],
+                           ['-D', '--start-disconnected'],
+                           help_true  = 'Keep device connected at boot',
+                           help_false = 'Keep device disconnected at boot' )
+    p_com_conn.add_mxbool( ['-g', '--allow-guest-control'],
+                           ['-G', '--no-guest-control'],
+                           help_true  = 'Enable guest control',
+                           help_false = 'Disable guest control' )
+
+    p_com_conn.add( 'vm',      nargs=1, help='Virtual machine' )
+    p_com_conn.add( 'label',   nargs=1, help='Device label to modify' )
+
+    p_sub.add_parser( 'connect',     help='Connect virtual device',    parents=[p_com_conn] )
+    p_sub.add_parser( 'disconnect',  help='Disconnect virtual device', parents=[p_com_conn] )
+
+    ## disk-extend, extend-disk
+    p_disk_extend = p_sub.add_parser( 'disk-extend', parents=[p_com_vm], help='Increase size of virtual disk' )
+    p_disk_extend.add( '-l', '--label', dest='disknum', required=True,  help='Disk device number or label')
+    p_disk_extend.add( '-s', '--size',  '--resize', dest='size',    required=False, help=(
+        'New disk size.  Must be integer value but may be suffixed with'
+        ' "K", "KiB", "M", "MiB", "G", "GiB" to abbreviate in power of 2^n units;'
+        ' use "KB", "MB", "GB" to specify 10^n (SI) units.') )
+    p_sub.alias( 'extend-disk', 'disk-extend' )
+
+    ## extraconfig
+    p_econfig = p_sub.add_parser( 'extraconfig', help='set or delete config variables in vmx file' )
+    p_econfig.add( 'vm',    nargs=1,             help='Virtual machine' )
+    p_econfig.add( 'entry', nargs='+',           help='KEY=VALUE pairs; leave VALUE empty to delete' )
+
+    ## folder
+    p_folder = p_sub.add_parser( 'folder', help='Move VM(s) to name folder' )
+    p_folder.add( '-f', '--folder',  help='Destination vmFolder path' )
+    p_folder.add( 'vm',  nargs='+',  help='Virtual machines' )
+
+    ## guest-type
+    p_guest = p_sub.add_parser( 'guest-type', parents=[p_com_vm], help='Modify virtual machine guest type' )
+    p_guest_xgr = p_guest.add_mutually_exclusive_group( required=True )
+    p_guest_xgr.add_argument( '-L', '--list-types', action='store_true', help='List supported guest types for current VM machine version')
+    p_guest_xgr.add_argument( '-t', '--type',       dest='guestId',      help='New guest id')
+    p_guest.add_argument(     '-n', '--name',       dest='altname',      help='OS description for "other" or "other64" guest ids')
+
+    ## mem
+    p_mem = p_sub.add_parser( 'mem', help='Configure memory settings' )
+    p_mem.add( '-s', '--size',       help='Memory size; if not specified, do not change' )
+    p_mem.add_mxbool( ['-E', '--enable-hot-add'], ['-D', '--disable-hot-add'], dest='enable_hot_add' )
+    p_mem.add( 'vm',  nargs='+', help='Virtual machines' )
+
+    ## nested-hv
+    p_mem = p_sub.add_parser( 'nested-hv', parents=[p_com_vm], help='Nested virtualization configuration' )
+    p_mem.add_mxbool( ['-E', '--enable'], ['-D', '--disable'], dest='nestedHV' )
+
+    ## network
+    p_net = p_sub.add_parser( 'network', parents=[p_com_vm], help='Modify ethernet device' )
+    p_net_xgr = p_net.add_mutually_exclusive_group( required=True )
+    p_net_xgr.add_argument( '-L', '--list-types', action='store_true', help='List supported ethernet devices for this VM')
+    p_net_xgr.add_argument( '-n', '--nic',   dest='nicnum',            help='NIC device number or label, or "new"' )
+    p_net.add( '-l', '--label',              dest='netlabel',          help='Assign nic to network identified by label')
+    p_net.add( '-t', '--type',               dest='ethtype',           help='Change ethernet hardware device type')
+    p_net.add( '-m', '--mac',                                          help='Set explicit MAC address')
+    p_net.add( '-r', '--reset-mac', action='store_true', default=None, help='Assign new, random MAC address')
+    p_net.add( '-d', '--remove',    action='store_true', default=None, help='Remove NIC from vm')
+
+    ## register
+    p_register = p_sub.add_parser( 'register',       help='Add existing VM to inventory' )
+    p_register.add( '-n', '--name',    default=None, help='Change name of VM; default uses previously registered name')
+    p_register.add( '-f', '--folder',  default=None, help='(sub)Folder to place VM in' )
+    p_register.add( '-r', '--pool',    default=None, help='Resource pool' )
+    p_register.add( '-c', '--cluster', default=None, help='Compute cluster or Host' )
+    p_register.add_bool( '-t', '--as-template', default=False, help='Register VM as template' )
+    p_register.add_bool( '-k', '--keep-macs',        help='Do not change existing ethernet MAC addresses' )
+    p_register.add( 'vmx', nargs=1,                  help='Path to existing vmx file, in the form "[datastore] vm_directory/vm.vmx"' )
+
+    ## reload
+    p_sub.add_parser( 'reload', parents=[p_com_vm], help='Reload VM configuration from .vmx' )
+
+    ## rename
+    p_rename = p_sub.add_parser( 'rename', help='Rename virtual machine or template' )
+    p_rename.add( 'vm',      nargs=1,      help='VM to modify' )
+    p_rename.add( 'newname', nargs=1,      help='New name' )
+
+    ## reset_guest_info
+    p_sub.add_parser( 'reset-guest-info', parents=[p_com_vm], help='Flush vsphere guest identity cache' )
+
+    ## resolution
+    p_res = p_sub.add_parser( 'resolution', help='Set console resolution' )
+    p_res.add( 'WxH', nargs=1,   help='Width x Height in pixels' )
+    p_res.add( 'vm',  nargs='+', help='Virtual machines' )
+
+    ## to_template
+    p_sub.add_parser( 'to-template', parents=[p_com_vm], help='Convert VM to template' )
+
+    ## to_vm
+    p_to_vm = p_sub.add_parser( 'to-vm', parents=[p_com_vm], help='Convert template to virtual machine' )
+    p_to_vm.add( '-r', '--pool',    default=None, help='Resource pool' )
+    p_to_vm.add( '-c', '--cluster', default=None, help='Compute cluster or Host' )
+
+    ## tools
+    p_tools = p_sub.add_parser( 'tools', parents=[p_com_vm], help='Configure VMware Tools guest operations' )
+    p_tools.add_mxbool( ['-p', '--poweron'],   ['-P', '--no-poweron'],
+                        help_true  = 'Run scripts after VM powers on',
+                        help_false = 'Do not run scripts after power-on' )
+    p_tools.add_mxbool( ['-b', '--reboot'],    ['-B', '--no-reboot'],
+                        help_true  = 'Run scripts before VM reboots',
+                        help_false = 'Do not run scripts before reboot' )
+    p_tools.add_mxbool( ['-o', '--shutdown'],  ['-O', '--no-shutdown'],
+                        help_true  = 'Run scripts before VM powers off',
+                        help_false = 'Do not run scripts before power-off' )
+    p_tools.add_mxbool( ['-r', '--resume'],    ['-R', '--no-resume'],
+                        help_true  = 'Run scripts after VM resumes',
+                        help_false = 'Do not run scripts after resume' )
+    p_tools.add_mxbool( ['-s', '--standby'],   ['-S', '--no-standby'],
+                        help_true  = 'Run scripts before VM suspends',
+                        help_false = 'Do not run scripts before suspend' )
+    p_tools.add_mxbool( ['-t', '--sync-time'], ['-T', '--no-sync-time'],
+                        help_true  = 'Sync guest time with the hypervisor',
+                        help_false = 'Do not sync guest time' )
+    p_tools.add_mxbool( ['-u', '--upgrade-at-boot'], ['-U', '--no-upgrade-at-boot'],
+                        help_true  = 'Auto update guest tools at boot, if possible',
+                        help_false = 'Tools update must be performed manually' )
+
+
+    ## tools_mount
+    p_sub.add_parser( 'tools-mount',   parents=[p_com_vm], help='Mount guest tools installer on virtual cd-rom' )
+
+    ## tools_unmount
+    p_sub.add_parser( 'tools-unmount', parents=[p_com_vm], help='Unmount guest tools installer' )
+
+    ## tools_update
+    p_sub.add_parser( 'tools-update',  parents=[p_com_vm], help='Update guest tools automatically (when supported)' )
+
+    ## unregister
+    p_sub.add_parser( 'unregister',    parents=[p_com_vm], help="Remove VM from inventory but don't delete" )
+
+    ## upgrade
+    p_upgrade = p_sub.add_parser( 'upgrade', parents=[p_com_vm], help='Upgrade guest hardware version' )
+    p_upgrade.add( '-v', '--version', type=int, default=None, metavar='N',   help='Upgrade to version N' )
+    p_upgrade.add( '-a', '--always',
+                   dest   = 'upgradePolicy', default = 'onSoftPowerOff',
+                   action = 'store_const',   const   = 'always',
+                   help = ( '''
+             If the machine is currently powered on, virtual hardware
+             upgrades will normally be scheduled after the VM guest shuts
+             down cleanly.  Using this option means schedule the upgrade no
+             matter how the VM might be reset, including host faults. ''' ) )
+
+    ## uuid
+    p_uuid = p_sub.add_parser( 'uuid', parents=[p_com_vm], help='Change/reset UUID' )
+    p_uuid.add(      '-u', '--uuid',                    help='Set to this explicit value' )
+    p_uuid.add_bool( '-i', '--instance', default=False, help='modify instanceUuid instead of SMBIOS uuid' )
+
+    ## vcpu
+    p_vcpu = p_sub.add_parser( 'vcpu', parents=[p_com_vm], help='Configure number of virtual processors' )
+    p_vcpu.add( '-n', '--number',  help='Total number of vcpus' )
+    p_vcpu.add( '-s', '--sockets', help='Number of cpu sockets' )
+    p_vcpu.add_mxbool( ['-A', '--enable-hot-add'],    ['-D', '--disable-hot-add'],    dest='enable_hot_add' )
+    p_vcpu.add_mxbool( ['-R', '--enable-hot-remove'], ['-S', '--disable-hot-remove'], dest='enable_hot_remove' )
+    #vvtdEnabled vim.vm.FlagInfo()
+    #p_vcpu.add_mxbool( ['-V', '--enable-vvtd'], ['-W', '--disable-vvtd'], dest='enable_vvtd' )
+
+    ## vnc
+    p_vnc = p_sub.add_parser( 'vnc', parents=[p_com_vm], help='Configure VNC console parameters' )
+    p_vnc.add_mxbool( ['-E', '--enable'], ['-D', '--disable'] )
+    p_vnc.add( '-p', '--vnc-port', help='Listening port on host' )
+    p_vnc.add( '-k', '--vnc-key',  help='VNC password' )
+
+    return p.parse()
+
+
+class mVM():
+    def __init__( self, vsi, args ):
+        self.vsi     = vsi
+        self.args    = args
+        self.task    = []
+        self.operand = {}
+        self.method  = getattr( self, args.cmd.replace( '-', '_' ) )
+
+        self.name_to_uuid = {}
+        self.uuid_to_name = {}
+        self.uuid_to_vm   = {}
+        self.vm_to_uuid   = {}
+
+
+    def cache_add( self, vm ):
+        if vm in self.vm_to_uuid:
+            return
+        vm_name = vm.name
+        vm_uuid = vm.config.instanceUuid
+        try:
+            self.name_to_uuid[ vm_name ].append( vm_uuid )
+        except KeyError:
+            self.name_to_uuid[ vm_name ] = [ vm_uuid ]
+        self.uuid_to_name[ vm_uuid ] = vm_name
+        self.uuid_to_vm[   vm_uuid ] = vm
+        self.vm_to_uuid[   vm      ] = vm_uuid
+        return True
+
+
+    def get_vm( self, name ):
+        if isinstance( name, vim.VirtualMachine ):
+            return name
+        elif name in self.uuid_to_vm:
+            return [ self.uuid_to_vm[ name ] ]
+        elif name in self.name_to_uuid:
+            return [ self.uuid_to_vm[ uuid ]
+                     for uuid in self.name_to_uuid[ name ] ]
+        else:
+            vm = self.vsi.get_vm( name )
+            self.cache_add( vm )
+            return [ vm ]
+
+    def vm_uuid( vm ):
+        return self.vm_to_uuid[ vm ]
+
+    def vm_name( vm ):
+        if isinstance( vm, vim.VirtualMachine ):
+            return self.uuid_to_name[ self.vm_uuid( vm ) ]
+        else:
+            return self.uuid_to_name[ vm ]
+
+    def expand_wildcards( self, globlist ):
+        expanded = []
+        for pat in globlist:
+            for vm in self.vsi.find_vm( pat ):
+                self.cache_add( vm )
+                expanded.append( self.vm_uuid( vm ) )
+        return expanded
+
+
+    def doit( self ):
+        try:
+            targets = self.args.vm
+        except AttributeError:
+            targets = self.args.vmx
+
+        if self.args.wildcard:
+            targets = self.expand_wildcards( targets )
+
+        for arg in targets:
+            for vm in self.get_vm( arg ):
+                try:
+                    vm_name = self.vm_name( vm )
+                    vm_uuid = self.vm_uuid( vm )
+
+                    task = self.method( vm_uuid )
+                    if task:
+                        self.task.append( task )
+                        # Save the vm of the task because sometimes the task
+                        # itself actually operates on something different,
+                        # e.g. VMs are located in folders by a method call on
+                        # the folder, not on the vm.  The task object for that
+                        # has no reference to the vm.
+                        self.operand[ task ] = vm_name
+                except vmodl.MethodFault as e:
+                    if vsl.debug:
+                        raise
+                    else:
+                        vsl.printerr( vm_name, e.msg )
+
+    def _tw_callback( self, change, objSet, *args ):
+        if change.name == 'info':
+            state = change.val.state
+        elif change.name == 'info.state':
+            state = change.val
+        else:
+            return
+        info = objSet.obj.info
+        operand = self.operand[ info.task ]
+        if state == vim.TaskInfo.State.success:
+            print( operand, 'Success', sep=': ' )
+        elif state == vim.TaskInfo.State.error:
+            vsl.printerr( operand, info.error.msg )
+
+
+    def taskwait( self ):
+        return self.vsi.taskwait(
+            self.task,
+            printsucc = False,
+            callback  = self._tw_callback )
+
+
+    def _vm_reconfig_prep( self, vm_name ):
+        vm = self.get_vm( vm_name )[ 0 ]
+        cfgspec = vim.vm.ConfigSpec()
+        cfgspec.changeVersion = vm.config.changeVersion
+        return (vm, cfgspec)
+
+
+    @staticmethod
+    def clone_obj( obj, *attrs ):
+        if not attrs:
+            exclude = ['dynamicProperty', 'dynamicType']
+            attrs = filter( lambda s: s not in exclude, obj.__dict__ )
+        new = type( obj )()
+        for attr in attrs:
+            if hasattr( obj, attr ):
+                setattr( new, attr, getattr( obj, attr ))
+        return new
+
+    def cfgo( self, vm ):
+        return vm.environmentBrowser.QueryConfigOptionEx()
+
+    # Return the configoptions for the vm's compute resource.
+    # This may be wider in scope than the vm's itself.
+    # For instance if a vm is a guest type 'other', its own config spec
+    # might not show any other guest types.
+    def cfgo_cr( self, vm ):
+        spec = vim.EnvironmentBrowser.ConfigOptionQuerySpec( key=vm.config.version )
+        eb   = vm.runtime.host.parent.environmentBrowser
+        return eb.QueryConfigOptionEx( spec=spec )
+
+    @staticmethod
+    def _setopt( cfgspec, key, value ):
+        if value is not None:
+            opt = vim.option.OptionValue( key=key, value=str( value ) )
+            cfgspec.extraConfig.append( opt )
+
+
+    def annotate( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        if self.args.file:
+            cfgspec.annotation = self.args.file.read()
+            self.args.file.close()
+        else:
+            cfgspec.annotation = self.args.annotation
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+    def boot_options( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        bootspec = vim.vm.BootOptions()
+        bootspec.enterBIOSSetup = self.args.enter_setup
+        try:
+            bootspec.bootDelay = long( self.args.delay )
+        except TypeError:
+            pass
+        cfgspec.bootOptions = bootspec
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+    def connect( self, vm_name, connect=True ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+
+        devlabel = self.args.label[0]
+        dev = filter( lambda n: n.deviceInfo.label == devlabel,
+                      vm.config.hardware.device )
+        if not dev:
+            raise vsl.NameNotFoundError(
+                '{}: "{}" device not found'.format( vm_name, devlabel ))
+
+        devspec           = vim.vm.device.VirtualDeviceSpec()
+        devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
+        devspec.device    = dev[0]
+
+        connectable = devspec.device.connectable
+        connectable.connected = connect
+        if self.args.start_connected is not None:
+            connectable.startConnected = self.args.start_connected
+        if self.args.allow_guest_control is not None:
+            connectable.allowGuestControl = self.args.allow_guest_control
+
+        cfgspec.deviceChange = [ devspec ]
+        return vm.ReconfigVM_Task( cfgspec )
+
+    @staticmethod
+    def _to_bytes( str_val ):
+        unit = { 'b'   : 512,
+
+                 'k'   : 1024,         't'   : 1024 ** 4,
+                 'kib' : 1024,         'tib' : 1024 ** 4,
+                 'kb'  : 1000,         'tb'  : 1000 ** 4,
+
+                 'm'   : 1024 ** 2,    'p'   : 1024 ** 5,
+                 'mib' : 1024 ** 2,    'pib' : 1024 ** 5,
+                 'mb'  : 1000 ** 2,    'pb'  : 1000 ** 5,
+
+                 'g'   : 1024 ** 3,    'e'   : 1024 ** 6,
+                 'gib' : 1024 ** 3,    'eib' : 1024 ** 6,
+                 'gb'  : 1000 ** 3,    'eb'  : 1000 ** 6, }
+        regex = re.compile( "^\s*(\d+)\s*([bkmgtpei]+)\s*$", flags=re.I )
+        match = regex.search( str_val )
+        if match:
+            size, factor = match.groups()
+            return long( size ) * unit[ factor.lower() ]
+        else:
+            return long( str_val )
+
+    def disk_extend( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        try:
+            disknum = int( self.args.disknum )
+            disklabel = 'Hard disk {}'.format( disknum )
+        except ValueError:
+            disklabel = self.args.disknum
+        disk = filter( lambda n: n.deviceInfo.label == disklabel,
+                      vsl.get_seq_type( vm.config.hardware.device,
+                                        vim.vm.device.VirtualDisk ))
+        if not disk:
+            raise vsl.NameNotFoundError(
+                '{}: "{}" disk not found'.format( self.vm_name( vm ), disklabel ))
+        devspec           = vim.vm.device.VirtualDeviceSpec()
+        devspec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
+        devspec.device    = disk[0]
+        #if self.args.mode:
+        #    devspec.device.backing.diskMode = self.args.mode
+        if self.args.size:
+            devspec.device.capacityInBytes = self._to_bytes( self.args.size )
+        cfgspec.deviceChange = [ devspec ]
+        return vm.ReconfigVM_Task( cfgspec )
+
+    extend_disk = disk_extend # alias
+
+
+    def disconnect( self, vm_name ):
+        return self.connect( vm_name, connect=False )
+
+
+    def extraconfig( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        for entry in self.args.entry:
+            kv = entry.split( '=', 1 )
+            if len( kv ) < 2:
+                kv.append( '' )
+            self._setopt( cfgspec, *kv )
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+    def folder( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        try:
+            p2f = self._p2f
+        except AttributeError:
+            p2f = self._p2f = self.vsi.path_to_subfolder_map( 'vm' )
+
+        try:
+            fmo = p2f[ self.args.folder ]
+        except KeyError:
+            raise vsl.NameNotFoundError( self.args.folder, 'folder not found' )
+
+        return fmo.MoveIntoFolder_Task( vm.Array( [vm] ) )
+
+    def guest_type( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        cfgo = self.cfgo_cr( vm )
+        # strip 'Guest' from names
+        valid = { x.id.replace( 'Guest', '' ) : [ x.family, x.id, x.fullName ]
+                  for x in cfgo.guestOSDescriptor }
+
+        def names():
+            mw  = max( map( len, valid ) ) + 8
+            fmt = '{{:<{}}} {{}}'.format( mw ).format
+            return [ fmt( k, v[2] ) for k,v in valid.items() ]
+
+        if self.args.list_types:
+            for name in sorted( names() ):
+                print( name )
+        else:
+            new = self.args.guestId
+            if new not in valid:
+                hw_ver = cfgo.version[ 4: ]  # skip 'vmx-'
+                if hw_ver[ 0 ] == '0':
+                    hw_ver = hw_ver[ 1: ]
+                diag = vsl.Diag( new,
+                                 'Unsupported or unknown guest type for '
+                                 'hardware version {}'.format( hw_ver) )
+                diag.append( 'Supported types:' )
+                for name in sorted( names() ):
+                    diag.append( '\t' + name )
+                raise NotSupportedError( diag )
+
+            nattr = valid[ new ]
+            cfgspec.guestId = nattr[ 1 ]
+            if nattr[ 0 ] == 'otherGuestFamily':
+                if self.args.altname:
+                    cfgspec.alternateGuestName = self.args.altname
+                else:
+                    cfgspec.alternateGuestName = nattr[ 2 ]
+            elif self.args.altname:
+                raise NotSupportedError( "cannot set OS name for non-'other' guest types" )
+
+            return vm.ReconfigVM_Task( cfgspec )
+
+    def mem( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        mb = self._to_bytes( self.args.size ) / (1024 ** 2)
+        cfgspec.memoryMB            = long( mb )
+        cfgspec.memoryHotAddEnabled = self.args.enable_hot_add
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+    def nested_hv( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        cfgspec.nestedHVEnabled = self.args.nestedHV
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+    def network( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        ethernet = vim.vm.device.VirtualEthernetCard
+        Op = vim.vm.device.VirtualDeviceSpec.Operation
+
+        def card_name( card ):
+            name = card._wsdlName.lower()
+            for substr in ['virtual', 'ethernetcard']:
+                name = name.replace( substr, '' )
+            return name
+
+        def supported_cards():
+            cfgo = self.cfgo( vm )
+            osd = cfgo.guestOSDescriptor[0]
+            return [ card_name( card ) for card in osd.supportedEthernetCard ]
+
+        def card_type( name, unsupported=False ):
+            cfgo = self.cfgo( vm )
+            for card in cfgo.guestOSDescriptor[0].supportedEthernetCard:
+                if name == card_name( card ):
+                    return card
+            diag = vsl.Diag( name, "Unsupported or unknown ethernet type." )
+            diag.append( 'Supported types:' )
+            for sup in sorted( supported_cards() ):
+                diag.append( '\t' + sup )
+            raise NotSupportedError( diag )
+
+        def make_backing( netlabel ):
+            if isinstance( netlabel, vim.vm.device.VirtualEthernetCard ):
+                nic = netlabel
+                backing = type( nic.backing )()
+                try:
+                    backing.port = type( nic.backing.port )(
+                            portgroupKey = nic.backing.port.portgroupKey,
+                            switchUuid   = nic.backing.port.switchUuid )
+                except AttributeError:
+                    backing.network = nic.backing.network
+            else:
+                net = self.vsi.get_network( netlabel )
+                try:
+                    try:
+                        uuid = net.config.distributedVirtualSwitch.uuid
+                    except AttributeError:
+                        uuid = self.vsi.get_portgroup_switchUUID( netlabel, host=vm )
+
+                    backing = ethernet.DistributedVirtualPortBackingInfo(
+                        port = vim.dvs.PortConnection(
+                            portgroupKey = net.key,
+                            switchUuid   = uuid ))
+                except AttributeError:
+                    backing = ethernet.NetworkBackingInfo( network = net )
+                    backing.deviceName = netlabel
+            return backing
+
+        if self.args.list_types:
+            for sup in sorted( supported_cards() ):
+                print( sup )
+            return
+
+        try:
+            nicnum = int( self.args.nicnum )
+            niclabel = 'Network adapter {}'.format( nicnum )
+        except ValueError:
+            niclabel = self.args.nicnum
+
+        nic = filter( lambda n: n.deviceInfo.label == niclabel,
+                      vsl.get_seq_type( vm.config.hardware.device, ethernet ))
+        if not nic:
+            if niclabel == 'new':
+                if not self.args.netlabel:
+                    raise vsl.RequiredArgumentError( 'netlabel required for new NICs' )
+
+                nic = card_type( self.args.ethtype )()
+                nic.addressType = 'Generated'
+                nic.connectable = vim.vm.device.VirtualDevice.ConnectInfo(
+                    #connected         = True,
+                    startConnected    = True,
+                    allowGuestControl = True )
+
+                devspec = vim.vm.device.VirtualDeviceSpec(
+                    device    = nic,
+                    operation = Op.add )
+            else:
+                raise vsl.NameNotFoundError(
+                    '{}: "{}" adapter not found'.format( self.vm_name( vm ), niclabel ))
+        else:
+            nic = nic[0]
+            devspec = vim.vm.device.VirtualDeviceSpec(
+                device    = nic,
+                operation = Op.edit )
+            if self.args.remove:
+                devspec.operation = Op.remove
+
+        if self.args.ethtype and devspec.operation == Op.edit:
+            # To change the card type we actually have to destroy the old card
+            # and create a new one.  We do that here, copying the properties we
+            # want to preserve.
+            delspec = vim.vm.device.VirtualDeviceSpec()
+            delspec.operation = Op.remove
+            delspec.device    = nic
+            cfgspec.deviceChange.append( delspec )
+
+            newcard = card_type( self.args.ethtype )(
+                addressType = 'assigned',
+                macAddress  = nic.macAddress,
+                connectable = self.clone_obj( nic.connectable,
+                                              'connected',
+                                              'startConnected',
+                                              'allowGuestControl' ) )
+            if not self.args.netlabel:
+                newcard.backing = make_backing( nic )
+
+            devspec.operation = Op.add
+            devspec.device    = newcard
+
+        if self.args.netlabel:
+            devspec.device.backing = make_backing( self.args.netlabel )
+
+        if self.args.reset_mac:
+            devspec.device.addressType = 'Generated'
+            devspec.device.macAddress  = ''
+        elif self.args.mac:
+            devspec.device.addressType = 'assigned'
+            devspec.device.macAddress  = self.args.mac
+
+        cfgspec.deviceChange.append( devspec )
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+    def register( self, vmx ):
+        folder_map = self.vsi.path_to_subfolder_map()
+        folder     = folder_map[ self.args.folder ]
+        cluster    = self.vsi.get_compute_resource( self.args.cluster )
+        if self.args.pool:
+            pool = self.vsi.get_pool( self.args.pool, cluster.resourcePool.resourcePool )
+        else:
+            pool = cluster.resourcePool
+
+        istmpl = self.args.as_template
+        if vmx.find( '.vmtx', -5 ) >= 0:
+            istmpl = True
+
+        return folder.RegisterVM_Task( name       = self.args.name,
+                                       path       = vmx,
+                                       pool       = pool,
+                                       asTemplate = istmpl )
+
+
+    def register_mark_moved( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        kv = vim.option.OptionValue( key='uuid.action', value='keep' )
+        cfgspec.extraConfig.append( kv )
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+    def reload( self, vm_name ):
+        self.get_vm( vm_name ).Reload()
+        # If no exception was raised, it succeeded.
+        print( vm_name, 'Success', sep=': ' )
+
+
+    def rename( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        cfgspec.name = self.args.newname[0]
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+    def reset_guest_info( self, vm_name ):
+        self.get_vm( vm_name ).ResetGuestInformation()
+
+
+    def resolution( self, vm_name ):
+        vm = self.get_vm( vm_name )
+        width, height = self.args.WxH[0].split( 'x' )
+        vm.SetScreenResolution(
+            width  = int( width ),
+            height = int( height ))
+
+
+    def to_template( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        vm.MarkAsTemplate()
+        # If no exception was raised, it succeeded.
+        print( self.vm_name( vm ), 'Success', sep=': ' )
+
+
+    def to_vm( self, vm_name ):
+        vm = self.get_vm( vm_name )
+        if self.args.cluster:
+            cluster = self.vsi.get_compute_resource( self.args.cluster )
+        else:
+            cluster = vm.runtime.host.parent
+        pool = self.vsi.get_pool( self.args.pool, root=cluster )
+        vm.MarkAsVirtualMachine( pool=pool )
+        # If no exception was raised, it succeeded.
+        print( self.vm_name( vm ), 'Success', sep=': ' )
+
+
+    def tools( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        cfgspec.tools = vim.vm.ToolsConfigInfo()
+        cfgspec.tools.afterPowerOn        = self.args.poweron
+        cfgspec.tools.afterResume         = self.args.resume
+        cfgspec.tools.beforeGuestReboot   = self.args.reboot
+        cfgspec.tools.beforeGuestShutdown = self.args.shutdown
+        cfgspec.tools.beforeGuestStandby  = self.args.standby
+        cfgspec.tools.syncTimeWithHost    = self.args.sync_time
+        if self.args.upgrade_at_boot is True:
+            cfgspec.tools.toolsUpgradePolicy = 'upgradeAtPowerCycle'
+        elif self.args.upgrade_at_boot is False:
+            cfgspec.tools.toolsUpgradePolicy = 'manual'
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+    def tools_mount( self, vm_name ):
+        self.get_vm( vm_name ).MountToolsInstaller()
+
+
+    def tools_unmount( self, vm_name ):
+        self.get_vm( vm_name ).UnmountToolsInstaller()
+
+
+    def tools_update( self, vm_name ):
+        return self.get_vm( vm_name ).UpgradeTools_Task()
+
+
+    def unregister( self, vm_name ):
+        return self.get_vm( vm_name ).UnregisterVM()
+
+
+    def upgrade( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        try:
+            version = 'vmx-{:02d}'.format( self.args.version )
+        except ValueError:
+            version = None
+        pst = vim.VirtualMachine.PowerState
+        if vm.runtime.powerState == pst.poweredOn:
+            # Cannot upgrade vm while powered on; schedule upgrade instead.
+            hui = vim.vm.ScheduledHardwareUpgradeInfo(
+                versionKey    = version,
+                upgradePolicy = self.args.upgradePolicy )
+            cfgspec.scheduledHardwareUpgradeInfo = hui
+            return vm.ReconfigVM_Task( cfgspec )
+        else:
+            return vm.UpgradeVM_Task( version=version )
+
+
+    def uuid( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        new_uuid = self.args.uuid or str( uuid.uuid4() )
+        if self.args.instance:
+            cfgspec.instanceUuid = new_uuid
+        else:
+            cfgspec.uuid = new_uuid
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+    def vcpu( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        try:
+            cfgspec.numCPUs = int( self.args.number )
+        except TypeError:
+            cfgspec.numCPUs = vm.config.hardware.numCPU
+        try:
+            nsock = int( self.args.sockets )
+            cfgspec.numCoresPerSocket = cfgspec.numCPUs / nsock
+        except (TypeError, ZeroDivisionError):
+            pass
+        cfgspec.cpuHotAddEnabled    = self.args.enable_hot_add
+        cfgspec.cpuHotRemoveEnabled = self.args.enable_hot_remove
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+
+    def _vnckey( self, plain ):
+        try_imports = [ 'import d3des',
+                        'from vnc2flv   import d3des',
+                        'from vncpasswd import d3des', ]
+        for expr in try_imports:
+            try:
+                exec expr
+                break
+            except ImportError:
+                pass
+        else:
+            raise vsl.cliGeneralError( 'Cannot set vnc key without d3des module.' )
+        import base64
+        import struct
+        ek  = d3des.deskey( (plain + '\x00'*8)[ :8 ], False )
+        buf = struct.pack( '32I', *ek )
+        return base64.standard_b64encode( buf )
+
+
+    def vnc( self, vm_name ):
+        vm, cfgspec = self._vm_reconfig_prep( vm_name )
+        self._setopt ( cfgspec, 'RemoteDisplay.vnc.enabled', self.args.enable )
+        self._setopt ( cfgspec, 'RemoteDisplay.vnc.port', self.args.vnc_port )
+        if self.args.vnc_key is not None:
+            encoded = '' if self.args.vnc_key == '' else self._vnckey( self.args.vnc_key )
+            self._setopt ( cfgspec, 'RemoteDisplay.vnc.key',  encoded )
+        return vm.ReconfigVM_Task( cfgspec )
+
+
+def main():
+    args = get_args()
+    vsi  = vsl.vmomiConnect( args )
+    mi   = mVM( vsi, args )
+
+    mi.doit()
+    if mi.task:
+        succ1 = mi.taskwait()
+        if ( args.cmd == 'register'
+             and     args.keep_macs
+             and not args.as_template ):
+            mtask = []
+            for task in mi.task:
+                if task.info.error:
+                    continue
+                vm = task.info.result
+                mtask.append( mi.register_mark_moved ( vm.name ) )
+            if mtask:
+                succ2 = vsi.taskwait( mtask )
+                if not succ2:
+                    sys.exit( 1 )
+        if not succ1:
+            sys.exit( 1 )
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+
+# vsphere-vm-modify ends here
