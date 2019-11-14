@@ -671,13 +671,19 @@ class _vmomiCollect( object ):
         the wire every time an attribute is accessed.
 
         Of course, no method calls are available via these ersatz objects either.
+        Optional keyword arg `keepobj=True' will include the actual vm
+        object in the `obj' attribute.
 
         '''
+        keepobj = kwargs.get( 'keepobj', False )
+        if 'keepobj' in kwargs: del kwargs[ 'keepobj' ]
+
         res = self.get_obj_props( *args, **kwargs )
         if res:
             for elt in res:
                 obj = elt[ 'obj' ]
-                del elt[ 'obj' ]
+                if not keepobj:
+                    del elt[ 'obj' ]
                 elt[ '_moId' ] = obj._moId  # useful as unique key
                 elt[ 'id' ]    = obj._moId  # mimic our vim.ManagedObject.id patch
             return [ flat_to_nested_dict( elt, objtype=pseudoPropAttr )
@@ -892,16 +898,16 @@ class _vmomiFind( object ):
         return found
 
     def search_by_name( self, name, objtype=vim.VirtualMachine, regex=False ):
-	'''Return a list of managed objects with name matching NAME.
+        '''Return a list of managed objects with name matching NAME.
 
-	NAME is treated as a shell-style glob pattern or a list of
+        NAME is treated as a shell-style glob pattern or a list of
         patterns, in which case objects which match any one of them are
         included in the results.
 
-	Optional keyword arg OBJTYPE specifies one or more managed object
+        Optional keyword arg OBJTYPE specifies one or more managed object
         types to include.  It defaults to `vim.VirtualMachine'.
 
-	Optional keyword arg REGEX may be `True' or a set of regex compiler
+        Optional keyword arg REGEX may be `True' or a set of regex compiler
         flags (e.g. `re.I', `re.M', etc. logically ORed together) in which
         case the NAME pattern(s) are all treated as regular expressions
         instead of glob patterns.
