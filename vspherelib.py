@@ -35,10 +35,11 @@ requests.packages.urllib3.disable_warnings()
 # Get the id for a managed object type: Folder, Datacenter, Datastore, etc.
 vim.ManagedObject.id = property( lambda self: self._moId )
 
-try:
-    progname = os.path.basename( sys.argv[0] )
-except:
-    pass
+progname = os.path.basename( sys.argv[0] )
+
+# Setting this to a strftime-format template prepends timestamps to messages
+# e.g.  '[%H:%M:%S%f]' or  '[%Y-%m-%d %H:%M:%S %z]'
+timestring_format = None
 
 debug     = bool( os.getenv( 'VSPHERELIB_DEBUG' ) )
 debug_rpc = bool( os.getenv( 'VSPHERELIB_DEBUG_RPC' ) )
@@ -54,6 +55,8 @@ wowBitness = vim.vm.guest.WindowsRegistryManager.RegistryKeyName.RegistryKeyWowB
 
 def with_conditional_stacktrace( *exceptions ):
     def print_exception( exc, val, sta ):
+        if timestring_format:
+            print( timestring(), '', end='', file=sys.stderr )
         args = [os.path.basename( sys.argv[0] ) or exc.__name__]
         try:
             args.append( val.object.name )
@@ -2720,20 +2723,52 @@ def scale_size( size, fmtsize=1024 ):
 
     return fmtstr % (size, suffix[ idx ], unit)
 
-def printerr( *args, **kwargs ):
-    sep  = kwargs.get( 'sep',  ': ' )
-    end  = kwargs.get( 'end',  '\n' )
-    file = kwargs.get( 'file', sys.stderr )
 
-    pargs = args
+def timestring( spec=None ):
+    sec = time.time()
+    spec = spec or timestring_format or '%c' # '%Y-%m-%dT%H:%M:%S%z'
+
+    if spec.find( '%f' ) >= 0:
+        frac = sec - int( sec )
+        ms = '{:f}'.format( frac )[ 1: ] if frac > 0 else ''
+        spec = spec.replace( '%f', ms )
+
+        if spec.find( '%z' ) >= 0:
+            # python2 time.strftime reports '+0000' whenever any explicit
+            # time is given to it, so process that separately without our
+            # timestamp.  Yes, this is slightly racy.
+            spec = spec.replace( '%z', time.strftime( '%z' ) )
+
+        return time.strftime( spec, time.localtime( sec ) )
+    else:
+        return time.strftime( spec )
+
+
+def printmsg( *args, **kwargs ):
+    kwargs.setdefault( 'sep',  ': ' )
+    kwargs.setdefault( 'file', sys.stdout )
+    fh = kwargs[ 'file' ]
+
+    prefix = []
+    if timestring_format:
+        prefix.append( timestring() )
     if kwargs.has_key( 'progname' ):
         if kwargs[ 'progname' ] is not None:
-            pargs = list( args )
-            pargs.insert( 0, kwargs[ 'progname' ] )
-    elif progname:
-        pargs = list( args )
-        pargs.insert( 0, progname )
-    print( *pargs, sep=sep, end=end, file=file )
+            prefix.append( kwargs[ 'progname' ] + ':' )
+        del kwargs[ 'progname' ]
+    else:
+        prefix.append( progname + ':' )
+    if prefix:
+        print( ' '.join( prefix ), '', file=fh, end='' )
+
+    print( *args, **kwargs )
+    fh.flush()
+
+
+def printerr( *args, **kwargs ):
+    kwargs.setdefault( 'file', sys.stderr )
+    printmsg( *args, **kwargs )
+
 
 def file_contents( filename, mode='r' ):
     with open( filename, mode ) as f:
