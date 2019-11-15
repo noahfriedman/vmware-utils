@@ -30,7 +30,9 @@ from   pyVmomi    import vim, vmodl
 # __repr__ methods.  Modifying the property list order is only safe there.
 # How to distinguish?  Look at the stack and see who called us.
 #
-# While we're at it, get rid of some useless attributes.
+# While we're at it, get rid of some almost always useless attributes.
+# It might have been simpler to set vim.DynamicData._propList=[]
+# but I'm not sure what that might break.
 
 import traceback
 
@@ -44,7 +46,7 @@ def _overrideGetPropertyList( orig, traceback=traceback ):
         callstack = [ frame[ 2 ] for frame in traceback.extract_stack( None, 2 ) ]
         if callstack[ 0 ] == 'FormatObject':
             try:
-                for elt in res[:]:  # copy list since we're modifying it
+                for elt in res[:]:  # work on slice since we're modifying list
                     if elt.name in FormatObject_elide:
                         res.remove( elt )
                 res.sort( key=lambda elt: elt.name )
