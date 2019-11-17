@@ -154,8 +154,7 @@ class Diag( object ):
 
 
 class pseudoPropAttr( dict ):
-    '''
-    This is just a dictionary but you can access or assign elements as any of:
+    '''This is just a dictionary but you can access or assign elements as any of:
 
             d['x.y']
             d['x']['y']
@@ -200,7 +199,50 @@ class pseudoPropAttr( dict ):
             >>> del x['foo']
             >>> x
             { }
+
+     The original DataObject's type is preserved in the attribute
+     `__vimtype__' on the converted object.
+
     '''
+
+    class pseudoPropList( list ): pass  # allows us to add attributes
+    pseudoPropList.__name__ = 'pseudoPropAttr[]'
+
+    kwargs_noprop = ( '__vimtype__', 'convertManagedObject' )
+
+    # Setting this to True means that if there are keys 'foo.bar' and
+    # 'foo.baz' in obj, You can access obj.foo, but obj['foo'] will
+    # raise an exception because there is no value for it.
+    # You may want to do this if you expect to use expressions
+    # like `` 'guestinfo.vmtools' in obj.self.extraConfig ''
+    # and not have it return true just because
+    # guestinfo.vmtools.description is defined but nothing else is.
+    #
+    # When false, you can access subkeys the same as in attribute notation.
+    #
+    # This classwide parameter affects all instances
+    strict = False
+
+    def __init__( self, args={}, **kwargs ):
+        try:
+            for prop in args._GetPropertyList():
+                self[ prop.name ] = getattr( args, prop.name )
+        except AttributeError:
+            for elt in args:
+                try:
+                    self[ elt.key ] = elt.value
+                except AttributeError:
+                    self[ elt ] = args[ elt ]
+        for elt in kwargs:
+            if elt not in self.kwargs_noprop:
+                self[ elt ] = kwargs[ elt ]
+
+        if isinstance( args, vim.DataObject ):
+            dict.__setattr__( self, '__vimtype__', type( args ) )
+        elif hasattr( args, 'get' ) and args.get( 'obj', None ):
+            dict.__setattr__( self, '__vimtype__', type( args[ 'obj' ] ))
+        elif '__vimtype__' in kwargs:
+            dict.__setattr__( self, '__vimtype__', kwargs[ '__vimtype__' ] )
 
     def __setattr__( self, name, value ):
         self[ name ] = value
@@ -208,7 +250,7 @@ class pseudoPropAttr( dict ):
 
     def __getattr__( self, name ):
         try:
-            return self[ name ]
+            return self.__getitem__( name, fromattr=True )
         except KeyError as e:
             raise AttributeError( *e.args )
 
@@ -229,44 +271,63 @@ class pseudoPropAttr( dict ):
         while len( seq ) > stopat:
             try:
                 obj = dict.__getitem__( walk, seq[ 0 ] )
-            except (KeyError, TypeError):
-                if afap: # return as far as possible
-                    return prev, seq
-                else:
-                    raise KeyError( key )
+            except TypeError:
+                if afap: return prev, seq
+                else:    raise KeyError( key )
+            except KeyError:
+                if afap: return walk, seq
+                else:    raise KeyError( key )
             if afap and not isinstance( obj, type( self ) ):
                 break
             prev, walk = walk, obj
             seq.pop( 0 )
         return walk, seq
 
-    def __getitem__( self, key ):
+    def __contains__( self, key ):
+        try:
+            self.__getitem__( key )
+            return True
+        except KeyError:
+            return False
+
+    def __getitem__( self, key, fromattr=False ):
         obj, _ = self.___tail___( key )
         try:
             return dict.__getitem__( obj, None )
-        except (KeyError, TypeError):
+        except TypeError:
             return obj
+        except KeyError:
+            if fromattr or not self.strict:
+                return obj
+            else:
+                raise KeyError( key )
 
     def __setitem__( self, key, val ):
         try:
             seq = key.split( '.' )
-        except TypeError:
+        except (TypeError, AttributeError):
             return dict.__setitem__( self, key, val )
 
-        selftype = type( self )
+        stype = type( self )
         tail, rest = self.___tail___( key, afap=True )
         while len( rest ) > 1:
-            new = selftype()
+            new = stype()
             if rest[ 0 ] in tail:
                 orig = dict.__getitem__( tail, rest[ 0 ] )
                 dict.__setitem__( new, None, orig )
             dict.__setitem__( tail, rest.pop( 0 ), new )
             tail = new
-
         try:
-            last = dict.__getitem__( tail, rest[0] )
-            if isinstance( last, selftype ):
-                dict.__setitem__( last, None, val )
+            last = dict.__getitem__( tail, rest[ 0 ] )
+
+            if isinstance( last, stype ):
+                if isinstance( val, stype):
+                    # Save previous direct value if no new one
+                    if None in last and None not in val:
+                        dict.__setitem__( val, None, last[ None ] )
+                    dict.__setitem__( tail, rest[ 0 ], val )
+                else:
+                    dict.__setitem__( last, None, val )
             else:
                 dict.__setitem__( tail, rest[ 0 ], val )
         except KeyError:
@@ -294,6 +355,79 @@ class pseudoPropAttr( dict ):
             pkey, ekey = pkey.rsplit( '.', 1 )
             parent, _  = self.___tail___( pkey )
             dict.__setitem__( parent, ekey, tail[ None ] )
+
+    # Provide our own method because dict.update doesn't honor our
+    # __setattr__ method, at least not in python2.
+    def update( self, args=[], **kwargs ):
+        for k in args:
+            self[ k ] = args[ k ]
+        for k in kwargs:
+            self[ k ] = kwargs[ k ]
+
+    @classmethod
+    def deep( self, args, **kwargs ):
+        '''Return a new object with all sub-elements converted as well.'''
+
+        def isVimArray( obj ):
+            typename = type( obj ).__name__
+            if typename[ 0:4 ] == 'vim.' and typename[ -2: ] == '[]':
+                return type( obj )
+
+        kwargs.setdefault( 'convertManagedObject', False )
+        kwargs.setdefault( '__vimtype__', None )
+
+        # Some types (including actual types) can't be converted.
+        if isinstance( args, type ):
+            return args
+        if ( hasattr( args, 'zfill' ) # strings
+             and args.lower() in ( 'true', 'false' ) ):
+            return args.lower() == 'true'  # convert to bool
+        elif isVimArray( args ) and not args:
+            arr = self.pseudoPropList()
+            arr.__vimtype__ = type( args )
+            return arr
+        elif ( hasattr( args, 'zfill' )  # strings
+               or ( isinstance( args, vim.ManagedObject )
+                    and not kwargs[ 'convertManagedObject' ] )
+               or not any( hasattr( args, attr ) for attr in
+                           ('__iter__', '_GetPropertyList' ) )):
+            return args
+
+        new = self()  # self is a class
+        if isinstance( args, vim.DataObject ):
+            dict.__setattr__( new, '__vimtype__', type( args ) )
+        elif hasattr( args, 'get' ) and args.get( 'obj', None ):
+            dict.__setattr__( new, '__vimtype__', type( args[ 'obj' ] ))
+        elif kwargs[ '__vimtype__' ]:
+            dict.__setattr__( new, '__vimtype__', kwargs[ '__vimtype__' ] )
+
+        try:
+            dynamic = ('dynamicProperty', 'dynamicType' )
+            for prop in args._GetPropertyList():
+                k = prop.name
+                v = getattr( args, k )
+                if k in dynamic and not v: # Elide these if empty
+                    continue
+                new[ k ] = self.deep( v )
+        except AttributeError:
+            for elt in args:
+                try:
+                    new[ elt.key ] = self.deep( elt.value )
+                except AttributeError:
+                    try:
+                        for elt in args.keys():
+                            new[ elt ] = self.deep( args[ elt ] )
+                    except AttributeError:
+                        arr = self.pseudoPropList(
+                            self.deep( elt, __vimtype__=kwargs[ '__vimtype__' ] )
+                            for elt in args )
+                        if isVimArray( args ):
+                            arr.__vimtype__ = type( args )
+                        return arr
+        for elt in kwargs:
+            if elt not in self.kwargs_noprop:
+                new[ elt ] = kwargs[ elt ]
+        return new
 
 # end class pseudoPropAttr
 
@@ -811,8 +945,8 @@ class _vmomiCollect( object ):
                     del elt[ 'obj' ]
                 elt[ '_moId' ] = obj._moId  # useful as unique key
                 elt[ 'id' ]    = obj._moId  # mimic our vim.ManagedObject.id patch
-            return [ flat_to_nested_dict( elt, objtype=pseudoPropAttr )
-                     for elt in res ]
+            vimtype = args[0][0] if len( args[0] ) == 1 else None
+            return pseudoPropAttr.deep( res, __vimtype__=vimtype )
 
     def get_obj( self, *args, **kwargs):
         result = self.get_obj_props( *args, **kwargs )
@@ -2513,8 +2647,14 @@ class vmomiTaskWait( object ):
 ## vmomi utility routines
 ######
 
+# Handles pseudoPropAttr as well as vim.DataObject
 def get_seq_type( obj, typeref ):
-    return filter( lambda elt: isinstance( elt , typeref ), obj )
+    NoneType = type( None )
+    return filter(
+        lambda elt: isinstance( elt , typeref )
+                    or issubclass( getattr( elt, '__vimtype__', NoneType ),
+                                   typeref ),
+        obj )
 
 
 def attr_get( obj, name ):
