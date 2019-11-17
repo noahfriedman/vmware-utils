@@ -12,9 +12,11 @@
 
 from   __future__ import print_function
 import vspherelib     as vsl
-
 import os
 import sys
+
+vim = vsl.vim
+vsl.timestamp_format = '[%Y:%M:%S%f]'
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
@@ -45,14 +47,15 @@ def output_fixup( vop, s ):
             s = s.replace( *f )
     return s
 
+
+def err( vm, *args, **kwargs ):
+    kwargs.setdefault( 'progname', None )
+    s = kwargs.get( 'sep', ' ').join( args )
+    vsl.printerr( vm.name, s, **kwargs )
+
+
 def main():
     args = get_args()
-    vsi  = vsl.vmomiConnect( args )
-    vm   = vsi.find_vm( args.vm )[0]
-    vop  = vsi.vmguest_ops( vm,
-                            username=args.guest_username,
-                            password=args.guest_password )
-
     if (args.output or args.separate_stderr) and not args.wait:
         vsl.printerr( 'cannot use --no-wait unless output is disabled' )
         sys.exit( 1 )
@@ -67,20 +70,47 @@ def main():
     if args.local_environ:
         pargs[ 'environ' ] = os.environ
 
-    proc = vop.run( **pargs )
-    if not args.wait:
-        sys.exit( 0 )
+    vsi    = vsl.vmomiConnect( args )
+    vmlist = vsi.find_vm( args.vm )
 
-    res = proc.result
-    if res.get( 'output' ):
-        print( output_fixup( vop, res.output ))
-    if res.get( 'stderr' ):
-        print( output_fixup( vop, res.stderr ), file=sys.stderr )
-    if args.verbose:
-        print( '[Exit {}]'.format( str( res.exit )), file=sys.stderr )
-        print( 'Started:', res.startTime, file=sys.stderr )
-        print( 'Ended:  ', res.endTime,   file=sys.stderr )
-    sys.exit( res.exit )
+    exitstat = 0
+    for vm in vmlist:
+        if vm.config.template:
+            err( vm, 'cannot run commands on template.' )
+            continue
+        elif vm.runtime.powerState in ('poweredOff', ):
+            state = vm.runtime.powerState.lower().replace( 'd', 'd ', 1 )
+            err( vm, 'cannot run command in', state, 'state' )
+            continue
+
+        vop  = vsi.vmguest_ops( vm,
+                                username=args.guest_username,
+                                password=args.guest_password )
+        try:
+            proc = vop.run( **pargs )
+        except vim.fault.GuestOperationsFault as e:
+            err( vm, e.msg )
+            continue
+
+        if len( vmlist ) > 1: print( vm.name )
+        if not args.wait:
+            continue
+        if len( vmlist ) > 1: print( '-' * len( vm.name ) )
+
+        res = proc.result
+        if res.get( 'output' ):
+            print( output_fixup( vop, res.output ))
+        if res.get( 'stderr' ):
+            print( output_fixup( vop, res.stderr ), file=sys.stderr )
+        if args.verbose:
+            print( '[Exit {}]'.format( str( res.exit )), file=sys.stderr )
+            print( 'Started:', res.startTime, file=sys.stderr )
+            print( 'Ended:  ', res.endTime,   file=sys.stderr )
+
+        if len( vmlist ) > 1: print()
+        exitstat = exitstat or res.exit
+
+    sys.exit( exitstat )
 
 
 if __name__ == '__main__':
