@@ -27,7 +27,7 @@ import weakref
 from fnmatch    import translate as glob2regex
 
 from pyVim      import connect as pyVconnect
-from pyVmomi    import vim, vmodl
+from pyVmomi    import vim, vmodl, VmomiSupport
 
 import requests
 requests.packages.urllib3.disable_warnings()
@@ -137,6 +137,21 @@ class RequiredArgumentError( vmomiErrorCST ): pass
 class GuestOperationError(   vmomiErrorCST ): pass
 
 
+# stub for supporting `with' statements
+class _with( object ):
+    def __enter__( self ):
+        return self
+
+    def __exit__( self, *exc_info ):
+        try:
+            self.__del__()
+        except:
+            pass
+
+class _super( object ):
+    super = property( lambda self: super( type( self ), self ) )
+
+
 class Diag( object ):
     def __init__( self, *args, **kwargs ):
         self.sep    = kwargs.get( 'sep',  ': ' )
@@ -153,7 +168,7 @@ class Diag( object ):
             self.lines.append( self.sep.join( args ))
 
 
-class pseudoPropAttr( dict ):
+class pseudoPropAttr( dict, _super ):
     '''This is just a dictionary but you can access or assign elements as any of:
 
             d['x.y']
@@ -201,14 +216,22 @@ class pseudoPropAttr( dict ):
             { }
 
      The original DataObject's type is preserved in the attribute
-     `__vimtype__' on the converted object.
+     `_vimtype' on the converted object.
 
     '''
 
-    class pseudoPropList( list ): pass  # allows us to add attributes
-    pseudoPropList.__name__ = 'pseudoPropAttr[]'
+    # This implementation is complicated by the fact that foo.x and foo.x.y
+    # can have direct values as well as one being a parent of the other.
+    # Also, we keep track of the original vim object types for class testing.
 
-    kwargs_noprop = ( '__vimtype__', 'convertManagedObject' )
+    class pseudoPropList( list ): # allows us to add attributes
+        def __init__( self, initial=None, **kwargs ):
+            if initial:
+                self.extend( initial )
+            for k in kwargs:
+                if kwargs[ k ]:
+                    setattr( self, k, kwargs[ k ] )
+    pseudoPropList.__name__ = 'pseudoPropAttr.pseudoPropList'
 
     # Setting this to True means that if there are keys 'foo.bar' and
     # 'foo.baz' in obj, You can access obj.foo, but obj['foo'] will
@@ -223,54 +246,104 @@ class pseudoPropAttr( dict ):
     # This classwide parameter affects all instances
     strict = False
 
-    def __init__( self, args={}, **kwargs ):
+    # attrs in this list will not be copied.  For example, you might not
+    # ever care about 'declaredAlarmState' or 'triggeredAlarmState'
+    ignoreattr = []
+
+    id        = property( lambda self: self._moId )
+    obj       = property( lambda self: self._vimobj ) # transitional
+    _wsdlName = property( lambda self: self._vimtype._wsdlName )
+
+    @staticmethod
+    def _iskvarray( obj ):
+        dynamic_prop  = ('dynamicProperty', 'dynamicType' )
         try:
-            for prop in args._GetPropertyList():
-                self[ prop.name ] = getattr( args, prop.name )
-        except AttributeError:
-            for elt in args:
-                try:
-                    self[ elt.key ] = elt.value
-                except AttributeError:
-                    self[ elt ] = args[ elt ]
+            for elt in obj or None: # raise on empty list
+                proplist = [ prop.name for prop in elt._GetPropertyList()
+                             if prop.name not in dynamic_prop ]
+                if ( 'key'      not in proplist
+                     or 'value' not in proplist
+                     or ( 'featureName' in proplist
+                          and elt.featureName != elt.key )
+                     or len( proplist ) > 3 ):
+                    return
+            return type( obj )
+        except (AttributeError, TypeError):
+            pass
+
+    def __init__( self, orig=None, **kwargs ):
+        # default: identity
+        xform = kwargs.setdefault( '_xform', lambda x, **y: x )
+
+        def copyDataObject( obj ):
+            if self._iskvarray( obj ):
+                for elt in obj:
+                    self[ elt.key ] = xform( elt.value )
+            else:
+                dynamic_prop = ('dynamicProperty', 'dynamicType' )
+                proplist = [ prop.name for prop in obj._GetPropertyList() ]
+                for k in proplist:
+                    try:
+                        v = getattr( obj, k )
+                    except vmodl.query.InvalidProperty:
+                        # This can happen with some defined attributes
+                        # whose getter raises an exception for some reason.
+                        continue
+                    if k in self.ignoreattr:
+                        continue
+                    if k in dynamic_prop and not v: # Elide these if empty
+                        continue
+                    self[ k ] = xform( v )
+
+        if orig is not None:
+            try:
+                copyDataObject( orig )
+            except AttributeError:
+                for elt in orig.keys():
+                    val = orig[ elt ]
+                    if elt == 'obj' and isinstance( val, vim.ManagedObject ):
+                        self._setattr( '_moId',    val._moId )
+                        self._setattr( '_vimobj',  val )
+                        self._setattr( '_vimtype', type( val ))
+                        kwargs[ '_vimtype' ] = None
+                    else:
+                        self[ elt ] = xform( val )
+
         for elt in kwargs:
-            if elt not in self.kwargs_noprop:
+            if not elt in ( '_vimobj', '_vimtype', '_xform', ):
                 self[ elt ] = kwargs[ elt ]
 
-        if isinstance( args, vim.DataObject ):
-            dict.__setattr__( self, '__vimtype__', type( args ) )
-        elif hasattr( args, 'get' ) and args.get( 'obj', None ):
-            dict.__setattr__( self, '__vimtype__', type( args[ 'obj' ] ))
-        elif '__vimtype__' in kwargs:
-            dict.__setattr__( self, '__vimtype__', kwargs[ '__vimtype__' ] )
+        if getattr( orig, '_moId', None ):
+           self._setattr( '_moId', orig._moId )
 
-    def __setattr__( self, name, value ):
-        self[ name ] = value
-        return value
+        if isinstance( orig, vim.ManagedObject ):
+            self._setattr( '_vimobj',  orig )
+        if isinstance( orig, ( vim.DataObject, vim.ManagedObject, VmomiSupport.Array) ):
+            self._setattr( '_vimtype', type( orig ) )
+        elif kwargs.get( '_vimtype', None ):
+            self._setattr( '_vimtype', kwargs[ '_vimtype' ] )
 
-    def __getattr__( self, name ):
-        try:
-            return self.__getitem__( name, fromattr=True )
-        except KeyError as e:
-            raise AttributeError( *e.args )
 
-    def __delattr__( self, name ):
-        try:
-            del self[ name ]
-        except KeyError as e:
-            raise AttributeError( *e.args )
+    # replace dict.x with self.super.x if pedantic
+    def _keys( self ):                 return dict.keys( self )
+    def _delattr( self, name ):        return dict.__delattr__( self, name )
+    def _getattr( self, name ):        return dict.__getattribute__( self, name )
+    def _setattr( self, name, value ): return dict.__setattr__( self, name, value )
+    def _delitem( self, name ):        return dict.__delitem__( self, name )
+    def _getitem( self, name ):        return dict.__getitem__( self, name )
+    def _setitem( self, name, value ): return dict.__setitem__( self, name, value )
 
-    def ___tail___( self, key, afap=False ):
+    def _tail( self, key, afap=False ):
         try:
             seq = key.split( '.' )
         except AttributeError: # not a str
-            return dict.__getitem__( self, key ), None
+            return self._getitem( key ), None
 
         prev = walk = self
         stopat = 1 if afap else 0
         while len( seq ) > stopat:
             try:
-                obj = dict.__getitem__( walk, seq[ 0 ] )
+                obj = walk._getitem( seq[ 0 ] )
             except TypeError:
                 if afap: return prev, seq
                 else:    raise KeyError( key )
@@ -283,6 +356,36 @@ class pseudoPropAttr( dict ):
             seq.pop( 0 )
         return walk, seq
 
+
+    def __delattr__( self, name ):
+        try:
+            del self[ name ]
+        except KeyError as e:
+            raise AttributeError( *e.args )
+
+    def __getattr__( self, name ):
+        try:
+            obj, _ = self._tail( name )
+            return obj
+        except KeyError as e:
+            try:
+                # If we don't have an attribute, see if there is a method
+                # attribute in the original managed object.  This lets us
+                # do method calls transparently.
+                vimobj = self._getattr( '_vimobj' )
+                methods = [ m.name for m in vimobj._GetMethodList() ]
+                if name in methods:
+                    return getattr( vimobj, name )
+                else:
+                    raise AttributeError( *e.args )
+            except AttributeError:
+                raise AttributeError( *e.args )
+
+    def __setattr__( self, name, value ):
+        self[ name ] = value
+        return value
+
+
     def __contains__( self, key ):
         try:
             self.__getitem__( key )
@@ -290,62 +393,18 @@ class pseudoPropAttr( dict ):
         except KeyError:
             return False
 
-    def __getitem__( self, key, fromattr=False ):
-        obj, _ = self.___tail___( key )
-        try:
-            return dict.__getitem__( obj, None )
-        except TypeError:
-            return obj
-        except KeyError:
-            if fromattr or not self.strict:
-                return obj
-            else:
-                raise KeyError( key )
-
-    def __setitem__( self, key, val ):
-        try:
-            seq = key.split( '.' )
-        except (TypeError, AttributeError):
-            return dict.__setitem__( self, key, val )
-
-        stype = type( self )
-        tail, rest = self.___tail___( key, afap=True )
-        while len( rest ) > 1:
-            new = stype()
-            if rest[ 0 ] in tail:
-                orig = dict.__getitem__( tail, rest[ 0 ] )
-                dict.__setitem__( new, None, orig )
-            dict.__setitem__( tail, rest.pop( 0 ), new )
-            tail = new
-        try:
-            last = dict.__getitem__( tail, rest[ 0 ] )
-
-            if isinstance( last, stype ):
-                if isinstance( val, stype):
-                    # Save previous direct value if no new one
-                    if None in last and None not in val:
-                        dict.__setitem__( val, None, last[ None ] )
-                    dict.__setitem__( tail, rest[ 0 ], val )
-                else:
-                    dict.__setitem__( last, None, val )
-            else:
-                dict.__setitem__( tail, rest[ 0 ], val )
-        except KeyError:
-            dict.__setitem__( tail, rest[ 0 ], val )
-        return val
-
     def __delitem__( self, key ):
-        tail, rest = self.___tail___( key, afap=True )
+        tail, rest = self._tail( key, afap=True )
         if len( rest ) > 1:
             raise KeyError( key )
-        last = dict.__getitem__( tail, rest[ 0 ] )
+        last = tail._getitem( rest[ 0 ] )
         if isinstance( last, type( self ) ):
             try:
-                dict.__delitem__( last, None )
+                last._delitem( None )
             except (KeyError, TypeError):
-                dict.__delitem__( tail, rest[ 0 ] )
+                tail._delitem( rest[ 0 ] )
         else:
-            dict.__delitem__( tail, rest[ 0 ] )
+            tail._delitem( rest[ 0 ] )
 
         if not tail and key.find( '.' ) >= 0:
             # we want recursion to restructure parent as leaves are removed
@@ -353,8 +412,77 @@ class pseudoPropAttr( dict ):
         elif len( tail ) == 1 and None in tail:
             pkey, _    =  key.rsplit( '.', 1 )
             pkey, ekey = pkey.rsplit( '.', 1 )
-            parent, _  = self.___tail___( pkey )
-            dict.__setitem__( parent, ekey, tail[ None ] )
+            parent, _  = self._tail( pkey )
+            parent._setitem( ekey, tail[ None ] )
+
+    def __getitem__( self, key ):
+        obj, _ = self._tail( key )
+        if isinstance( obj, type( self ) ):
+            try:
+                return obj._getitem( obj, None )
+            except KeyError:
+                if not self.strict:
+                    return obj
+                else:
+                    raise KeyError( key )
+        else:
+            return obj
+
+    def __setitem__( self, key, val ):
+        try:
+            seq = key.split( '.' )
+        except (TypeError, AttributeError):
+            return self._setitem( key, val )
+
+        stype = type( self )
+        tail, rest = self._tail( key, afap=True )
+        while len( rest ) > 1:
+            new = stype()
+            if rest[ 0 ] in tail:
+                orig = tail._getitem( rest[ 0 ] )
+                new._setitem( None, orig )
+            tail._setitem( rest.pop( 0 ), new )
+            tail = new
+        try:
+            last = tail._getitem( rest[ 0 ] )
+
+            if isinstance( last, stype ):
+                if isinstance( val, stype):
+                    # Save previous direct value if no new one
+                    if None in last and None not in val:
+                        val._setitem( None, last[ None ] )
+                    tail._setitem( rest[ 0 ], val )
+                else:
+                    last._setitem( None, val )
+            else:
+                tail._setitem( rest[ 0 ], val )
+        except KeyError:
+            tail._setitem( rest[ 0 ], val )
+        return val
+
+    def fullkeys( self ):
+        '''Return a list of all fully-qualified key names in object, not just immediate key names'''
+        result = []
+        for k in self._keys():
+            v = self[ k ]
+            if isinstance( v, type( self ) ):
+                for sub in v.fullkeys():
+                    try:
+                        result.append( '.'.join( (k, sub) ) )
+                    except TypeError as e: # sub key is not a str
+                        if sub is None:
+                            result.append( k )
+            else:
+                result.append( k )
+        return result
+
+    def fullvalues( self ):
+        '''Return a list of values from all fully-qualified key names in object, not just immediate key names'''
+        return [ self[ k ] for k in self.fullkeys() ]
+
+    def fullitems( self ):
+        '''Return a list of key/value tuples from all fully-qualified key names in object, not just immediate key names'''
+        return [ (k, self[ k ]) for k in self.fullkeys() ]
 
     # Provide our own method because dict.update doesn't honor our
     # __setattr__ method, at least not in python2.
@@ -365,69 +493,48 @@ class pseudoPropAttr( dict ):
             self[ k ] = kwargs[ k ]
 
     @classmethod
-    def deep( self, args, **kwargs ):
+    def deep( cls, orig, **kwargs ):
         '''Return a new object with all sub-elements converted as well.'''
 
-        def isVimArray( obj ):
-            typename = type( obj ).__name__
-            if typename[ 0:4 ] == 'vim.' and typename[ -2: ] == '[]':
-                return type( obj )
+        xform = None
+        def _deep( orig, **kwargs ):
+            # This function will usually be called without the top-level
+            # kwargs, so we need to keep restoring this for recursion.
+            kwargs.setdefault( '_xform', xform )
 
-        kwargs.setdefault( 'convertManagedObject', False )
-        kwargs.setdefault( '__vimtype__', None )
+            # Some things we can't convert, or don't want to.
+            if isinstance( orig, type ): #  actual type objects
+                return orig
+            elif hasattr( orig, 'zfill' ): #  strings
+                if orig.lower() in ( 'true', 'false' ):
+                    # Convert true/false strings into proper bools
+                    return orig.lower() == 'true'
+                else:
+                    return orig
+            elif isinstance( orig, vim.ManagedObject ):
+                # If the initial arg is a managed object, that will get
+                # converted, but not any of the other ones it might point
+                # to.  We could end up walking the entire inventory of the
+                # server or even get into an infinite regress.
+                # (Circular references could be handled but a full
+                # inventory walk is still not a desirable thing to do.)
+                return orig
 
-        # Some types (including actual types) can't be converted.
-        if isinstance( args, type ):
-            return args
-        if ( hasattr( args, 'zfill' ) # strings
-             and args.lower() in ( 'true', 'false' ) ):
-            return args.lower() == 'true'  # convert to bool
-        elif isVimArray( args ) and not args:
-            arr = self.pseudoPropList()
-            arr.__vimtype__ = type( args )
-            return arr
-        elif ( hasattr( args, 'zfill' )  # strings
-               or ( isinstance( args, vim.ManagedObject )
-                    and not kwargs[ 'convertManagedObject' ] )
-               or not any( hasattr( args, attr ) for attr in
-                           ('__iter__', '_GetPropertyList' ) )):
-            return args
+            elif isinstance( orig, VmomiSupport.Array ):
+                if cls._iskvarray( orig ):
+                    return cls( orig, **kwargs )
+                else:
+                    arr = [ xform( elt, **kwargs ) for elt in orig ]
+                    return cls.pseudoPropList( arr, _vimtype=type( orig ))
 
-        new = self()  # self is a class
-        if isinstance( args, vim.DataObject ):
-            dict.__setattr__( new, '__vimtype__', type( args ) )
-        elif hasattr( args, 'get' ) and args.get( 'obj', None ):
-            dict.__setattr__( new, '__vimtype__', type( args[ 'obj' ] ))
-        elif kwargs[ '__vimtype__' ]:
-            dict.__setattr__( new, '__vimtype__', kwargs[ '__vimtype__' ] )
+            elif not hasattr( orig, '_GetPropertyList' ):
+                return orig
 
-        try:
-            dynamic = ('dynamicProperty', 'dynamicType' )
-            for prop in args._GetPropertyList():
-                k = prop.name
-                v = getattr( args, k )
-                if k in dynamic and not v: # Elide these if empty
-                    continue
-                new[ k ] = self.deep( v )
-        except AttributeError:
-            for elt in args:
-                try:
-                    new[ elt.key ] = self.deep( elt.value )
-                except AttributeError:
-                    try:
-                        for elt in args.keys():
-                            new[ elt ] = self.deep( args[ elt ] )
-                    except AttributeError:
-                        arr = self.pseudoPropList(
-                            self.deep( elt, __vimtype__=kwargs[ '__vimtype__' ] )
-                            for elt in args )
-                        if isVimArray( args ):
-                            arr.__vimtype__ = type( args )
-                        return arr
-        for elt in kwargs:
-            if elt not in self.kwargs_noprop:
-                new[ elt ] = kwargs[ elt ]
-        return new
+            else:
+                return cls( orig, **kwargs )
+
+        xform = kwargs.setdefault( '_xform', _deep )
+        return cls( orig, **kwargs )
 
 # end class pseudoPropAttr
 
@@ -470,20 +577,6 @@ class Timer( object ):
 ######
 ## ArgumentParser subclass with special handling
 ######
-
-# stub for supporting `with' statements
-class _with( object ):
-    def __enter__( self ):
-        return self
-
-    def __exit__( self, *exc_info ):
-        try:
-            self.__del__()
-        except:
-            pass
-
-class _super( object ):
-    super = property( lambda self: super( type( self ), self ) )
 
 class ArgumentParser( argparse.ArgumentParser, _super, _with ):
     searchlist = [ ['XDG_CONFIG_HOME', 'vspherelibrc.py'],
@@ -944,9 +1037,8 @@ class _vmomiCollect( object ):
                 if not keepobj:
                     del elt[ 'obj' ]
                 elt[ '_moId' ] = obj._moId  # useful as unique key
-                elt[ 'id' ]    = obj._moId  # mimic our vim.ManagedObject.id patch
             vimtype = args[0][0] if len( args[0] ) == 1 else None
-            return pseudoPropAttr.deep( res, __vimtype__=vimtype )
+            return pseudoPropAttr.deep( res, _vimtype=vimtype )
 
     def get_obj( self, *args, **kwargs):
         result = self.get_obj_props( *args, **kwargs )
@@ -1588,16 +1680,16 @@ class _vmomiGuestInfo( object ):
                      'fileName'  : backing.fileName,
                      'diskMode'  : backing.diskMode, }
 
-            if isinstance( backing, vd.FlatVer2BackingInfo ):
+            if _isinstance( backing, vd.FlatVer2BackingInfo ):
                 if backing.thinProvisioned:
                     prop[ 'backing' ] = 'thin'
                 elif backing.eagerlyScrub:
                     prop[ 'backing' ] = 'eagerzeroedthick'
                 else:
                     prop[ 'backing' ] = 'zeroedthick'
-            elif isinstance( backing, vd.SeSparseBackingInfo ):
+            elif _isinstance( backing, vd.SeSparseBackingInfo ):
                 prop[ 'backing' ] = 'sesparse'
-            elif isinstance( backing, vd.RawDiskMappingVer1BackingInfo ):
+            elif _isinstance( backing, vd.RawDiskMappingVer1BackingInfo ):
                 prop[ 'deviceName' ] = backing.deviceName
                 prop[ 'backing' ] = 'rawdiskmapping'
             else:
@@ -1866,7 +1958,7 @@ class vmomiDataStoreFile( _with ):
         self.stream       = kwargs.get( 'stream',       True )
         self.chunk_size   = kwargs.get( 'chunk_size',   16384 )
 
-        if isinstance( self.dsName, vim.Datastore ):
+        if _isinstance( self.dsName, vim.Datastore ):
             self.datastore = self.dsName
             self.dsName    = self.datastore.name
         else:
@@ -1897,7 +1989,7 @@ class vmomiDataStoreFile( _with ):
             return 'ha-datacenter' # this is constant for ESXi hosts
         else:
             dc = self.datastore.parent
-            while not isinstance( dc, vim.Datacenter ):
+            while not _isinstance( dc, vim.Datacenter ):
                 dc = dc.parent
             return dc.name
 
@@ -2412,7 +2504,7 @@ class vmomiVmGuestOperation( _vmomiVmGuestOperation_Env,
             for elt in txt:
                 if callable( elt ):
                     result.extend( expand( elt() ))
-                elif isinstance( elt, vim.vm.guest.FileManager.FileAttributes ):
+                elif _isinstance( elt, vim.vm.guest.FileManager.FileAttributes ):
                     attr = self.decodeFileAttributes( elt )
                     p = []
                     for k in attr:
@@ -2647,14 +2739,14 @@ class vmomiTaskWait( object ):
 ## vmomi utility routines
 ######
 
-# Handles pseudoPropAttr as well as vim.DataObject
-def get_seq_type( obj, typeref ):
+def _isinstance( obj, typeref ):
     NoneType = type( None )
-    return filter(
-        lambda elt: isinstance( elt , typeref )
-                    or issubclass( getattr( elt, '__vimtype__', NoneType ),
-                                   typeref ),
-        obj )
+    return ( isinstance( obj, typeref )
+             or issubclass( getattr( obj, '_vimtype', NoneType ), typeref ) )
+
+
+def get_seq_type( obj, typeref ):
+    return filter( lambda elt: _isinstance( elt , typeref ), obj )
 
 
 def attr_get( obj, name ):
