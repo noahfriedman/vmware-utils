@@ -69,10 +69,14 @@ del traceback
 args = None
 vsi  = None
 
+vp   = vsl.pseudoPropAttr      # alias for brevity
+vpa  = vsl.pseudoPropAttr.deep # alias for brevity
+
 def restart():
     reload( vsl )
-    global vsi
-    vsi = vsl.vmomiConnect( args )
+    global vsi; vsi = vsl.vmomiConnect( args )
+    global vp;  vp  = vsl.pseudoPropAttr
+    global vpa; vpa = vsl.pseudoPropAttr.deep
 
 repl_pp = pprint.PrettyPrinter( indent=2, width=40 )
 def pp( *args, **kwargs ):
