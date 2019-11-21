@@ -469,8 +469,9 @@ class mVM():
 
     def mem( self, vm_name ):
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
-        mb = self._to_bytes( self.args.size ) / (1024 ** 2)
-        cfgspec.memoryMB            = long( mb )
+        if self.args.size:
+            mb = self._to_bytes( self.args.size ) / (1024 ** 2)
+            cfgspec.memoryMB = long( mb )
         cfgspec.memoryHotAddEnabled = self.args.enable_hot_add
         return vm.ReconfigVM_Task( cfgspec )
 
