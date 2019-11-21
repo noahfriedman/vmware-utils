@@ -198,15 +198,7 @@ class DisplayVM( object ):
     def __init__( self, vsi, vmprops, verbose=False, sep="" ):
         self.vsi = vsi
         self.vmprops = vmprops
-        self.vm = vsl.flat_to_nested_dict( vmprops, objtype=vsl.pseudoPropAttr )
-        try:
-            self.vm.config.extraConfig = vsl.flat_to_nested_dict(
-                vsl.attr_to_dict( self.vm.config.extraConfig ),
-                objtype=vsl.pseudoPropAttr )
-
-            self.vm.capability = vsl.pseudoPropAttr( self.vm.capability.__dict__ )
-        except AttributeError:
-            pass
+        self.vm = vsl.pseudoPropAttr.deep( vmprops )
         self.verbose = verbose
         self.sep = sep
         self.display()
@@ -267,7 +259,7 @@ class DisplayVM( object ):
         vm      = self.vm
         vm_conf = self.vm.config
 
-        p( 'VM moId', vm.obj._moId )
+        p( 'VM moId', vm._moId )
         p( 'VM UUID', vm_conf.uuid)
         if self.verbose:
             p( 'Instance Id',    vm_conf.instanceUuid )
@@ -576,7 +568,7 @@ def init_moId_map( vsi ):
 
 def display_vmlist( vsi, vmlist, verbose ):
     sep = '-' * 78
-    timer = vsl.Timer('print')
+    timer = vsl.Timer( 'print' )
     n = len( vmlist )
     for vm in vmlist:
         n -= 1
