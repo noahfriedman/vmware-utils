@@ -419,7 +419,7 @@ class pseudoPropAttr( dict, _super ):
         obj, _ = self._tail( key )
         if isinstance( obj, type( self ) ):
             try:
-                return obj._getitem( obj, None )
+                return obj._getitem( key )
             except KeyError:
                 if not self.strict:
                     return obj
@@ -534,7 +534,10 @@ class pseudoPropAttr( dict, _super ):
                 return cls( orig, **kwargs )
 
         xform = kwargs.setdefault( '_xform', _deep )
-        return cls( orig, **kwargs )
+        if isinstance( orig, ( vim.ManagedObject, dict ) ):
+            return cls( orig, **kwargs )
+        else:
+            return xform( orig, **kwargs )
 
 # end class pseudoPropAttr
 
@@ -1036,7 +1039,6 @@ class _vmomiCollect( object ):
                 obj = elt[ 'obj' ]
                 if not keepobj:
                     del elt[ 'obj' ]
-                elt[ '_moId' ] = obj._moId  # useful as unique key
             vimtype = args[0][0] if len( args[0] ) == 1 else None
             return pseudoPropAttr.deep( res, _vimtype=vimtype )
 
@@ -2912,48 +2914,45 @@ def str_to_bytes( str_val ):
         return long( str_val )
 
 
-def scale_size( size, fmtsize=1024 ):
+def scale_size( size, si=False, minimize=False ):
     # x & (x-1) == 0 iff x == 2^n
     # if x == 2^n, only nth bit in x is set.
     # subtracting 1 flips all bits via a borrow; the logical AND is zero.
-    # If x != 2^n, x-1 will flip all bits up to and including the first 1, but
-    # will not negate the entire value and an AND will not produce zero.
+    # If x != 2^n, x-1 will flip all bits up to and including the first 1,
+    # but will not flip every bit.
     def pow2p( n ):
         return (n & (n - 1) == 0)
 
     if size is None or size == 0:
         return '0 B'
 
+    fmtsize = 1000 if si else 1024
     suffix = (' B', ' K', ' M', ' G', ' T', ' P', ' E')
     idx = 0
 
     try:
-        ispow2 = pow2p( size )
-        if not ispow2 or not pow2p( fmtsize ):
+        if not pow2p( size ) or not si:
             size = float( size )
     except TypeError: # size is already float?
-        ispow2 = False
+        pass
 
-    while size > fmtsize:
+    while size >= fmtsize:
         size = size / fmtsize
         idx += 1
 
-    if ispow2 and fmtsize == 1024:
-        fmtstr = '%d%s%s'
-        if size < 10: # Prefer 4096M to 4G
-            size *= fmtsize
-            idx -= 1
-    elif size < 100 and idx > 0:
-        fmtstr = '%.2f%s%s'
-    else:
-        size = round( size )
-        fmtstr = '%d%s%s'
+    if size < 10 and not minimize: # Prefer 4096M to 4G
+        size *= fmtsize
+        idx -= 1
 
-    if idx == 0:           unit = ''
-    elif pow2p( fmtsize ): unit = 'iB'
-    else:                  unit =  'B'
+    if size == int( size ):
+        size = int( size )
 
-    return fmtstr % (size, suffix[ idx ], unit)
+    if idx == 0: unit =   ''
+    elif     si: unit =  'B'
+    else:        unit = 'iB'
+
+    fmtstr = '{:.2f}{}{}' if type( size ) is float else '{}{}{}'
+    return fmtstr.format( size, suffix[ idx ], unit )
 
 
 def timestring( spec=None ):
