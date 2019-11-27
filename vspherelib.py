@@ -1039,8 +1039,7 @@ class _vmomiCollect( object ):
                 obj = elt[ 'obj' ]
                 if not keepobj:
                     del elt[ 'obj' ]
-            vimtype = args[0][0] if len( args[0] ) == 1 else None
-            return pseudoPropAttr.deep( res, _vimtype=vimtype )
+            return [ pseudoPropAttr.deep( mo ) for mo in res ]
 
     def get_obj( self, *args, **kwargs):
         result = self.get_obj_props( *args, **kwargs )
