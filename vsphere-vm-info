@@ -44,6 +44,7 @@ proplist = [
     'config.memoryHotAddEnabled',
     'config.nestedHVEnabled',
     'config.template',
+    'config.instanceUuid',
     'config.uuid',
     'config.version',
 
@@ -74,7 +75,6 @@ proplist_verbose = [
 
     'config.extraConfig',
 
-    'config.instanceUuid',
     'config.locationId',
     'config.changeVersion',
     'config.tools.afterPowerOn',
@@ -117,6 +117,21 @@ proplist_verbose = [
     'guest.ipStack',
 ]
 
+proplist_1line = [
+    'config.guestId',
+    'config.hardware.memoryMB',
+    'config.hardware.numCPU',
+    'config.template',
+    'guest.guestId',
+    'guest.hostName',
+    'guest.ipAddress',
+    'guest.net',
+    'name',
+    'runtime.host',
+    'runtime.powerState',
+    'summary.storage',
+]
+
 moId_types = [ vim.HostSystem, vim.ResourcePool ]
 moId_map   = {}
 folder_map = None
@@ -124,6 +139,7 @@ folder_map = None
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
+    p.add( '-1', '--oneline', action='store_true', help='Display 1 line of info for each VM' )
     p.add( '-a', '--all',     action='store_true', help='Retrieve all known VMs' )
     p.add( '-v', '--verbose', action='count',      help='Display extended info' )
     p.add( '-R', '--refresh', action='store_true', help='Refresh storage info' )
@@ -137,8 +153,14 @@ def get_args():
 
 
 def storage_size( storage ):
-    comb = storage.committed + storage.uncommitted
+    # storage.committed includes disk extents but also vswap, logs, etc.
+    # storage.unshared seems to include only disk extents
+    # These values include storage across all snapshots
+    comb = storage.uncommitted + storage.unshared
     return vsl.scale_size( comb )
+
+def objtype( obj ):
+    return getattr( obj, '_vimtype', type( obj ) )
 
 def plural( text, n ):
     if abs( int( n ) ) != 1:
@@ -197,7 +219,6 @@ def pf( label, dic, attrs, extra='' ):
 class DisplayVM( object ):
     def __init__( self, vsi, vmprops, verbose=False, sep="" ):
         self.vsi = vsi
-        self.vmprops = vmprops
         self.vm = vsl.pseudoPropAttr.deep( vmprops )
         self.verbose = verbose
         self.sep = sep
@@ -217,7 +238,7 @@ class DisplayVM( object ):
         self.display_mem()
         p( 'NICs',    vm.summary.config.numEthernetCards )
         p( 'Disks',   vm.summary.config.numVirtualDisks )
-        p( 'Storage', storage_size( vm.summary.storage ))
+        self.display_storage()
         try:
             p( 'Nested HV', vm.config.nestedHVEnabled )
         except AttributeError:
@@ -260,11 +281,13 @@ class DisplayVM( object ):
         vm_conf = self.vm.config
 
         p( 'VM moId', vm._moId )
-        p( 'VM UUID', vm_conf.uuid)
         if self.verbose:
-            p( 'Instance Id',    vm_conf.instanceUuid )
+            p( 'SMBIOS UUID', vm_conf.uuid)
+        p( 'Instance UUID', vm_conf.instanceUuid )
+        if self.verbose:
             try:
-                p( 'Location Id', vm_conf.locationId)
+                if vm_conf.locationId:
+                    p( 'Location UUID', vm_conf.locationId)
             except AttributeError:
                 pass
             p( 'Config modtime', vm_conf.changeVersion )
@@ -318,6 +341,12 @@ class DisplayVM( object ):
         if getattr( self.vm.config, 'memoryHotAddEnabled', False ):
             memargs.append( 'hot add enabled' )
         p( 'Memory', str.join( ', ', memargs ))
+
+    def display_storage( self ):
+        used = vsl.scale_size( self.vm.summary.storage.unshared )
+        prov = storage_size( self.vm.summary.storage )
+        usage = '{} / {}'.format( used, prov )
+        p( 'Storage', usage )
 
     def display_host( self ):
         host = self.vm.summary.runtime.host
@@ -409,29 +438,34 @@ class DisplayVM( object ):
             return
 
     def display_extraconfig_props( self ):
-        prop = vsl.attr_to_dict( self.vmprops[ 'config.extraConfig' ] )
+        prop = dict( self.vm.config.extraConfig.fullitems() )
         for key in prop:
-            val = prop[ key ]
-            if val == '':
-                val = ' '
-            elif val.find( '\n' ) > 0:
-                val = [ s.strip( '\t\r' ) for s in val.split( '\n' ) ]
-                val = str.join( '\\n', val )
-            prop[ key ] = val
+            try:
+                val = prop[ key ]
+                if val == '':
+                    val = ' '
+                elif val.find( '\n' ) > 0:
+                    val = [ s.strip( '\t\r' ) for s in val.split( '\n' ) ]
+                    val = str.join( '\\n', val )
+                prop[ key ] = val
+            except AttributeError:
+                pass
         pf( 'ExtraConfig', prop, sorted( prop ))
 
     def display_guestinfo_props( self ):
-        ec = self.vmprops[ 'config.extraConfig' ]
-        prop = dict( map( lambda elt: (elt.key[ 10: ], elt.value.strip( ' \t\r' ) ),
-                          filter( lambda elt: elt.key.find( 'guestinfo.' ) == 0, ec ) ))
+        try:
+            prop = self.vm.config.extraConfig.guestinfo.fullitems()
+        except AttributeError: # no guestinfo
+            return
         if prop:
-            for key in prop:
-                val = prop[ key ]
+            dprop = {}
+            for (key, val) in prop:
+                val = val.strip( ' \t\r' )
                 if val.find( '\n' ) > 0:
                     val = [ s.strip() for s in val.split( '\n' ) ]
                     val = str.join( '\\n', val )
-                prop[ key ] = '"{}"'.format( val )
-            pf( 'GuestInfo', prop, sorted( prop ))
+                dprop[ key ] = '"{}"'.format( val )
+            pf( 'GuestInfo', dprop, sorted( dprop ))
 
     def display_dns( self ):
         dns_list = self.vsi.vmguest_dns_config( self.vm )
@@ -455,7 +489,7 @@ class DisplayVM( object ):
 
         for nic in self.vsi.vmguest_nic_info( self.vm ):
             try:
-                backing = sw_map[ type( nic[ 'backing' ])]
+                backing = sw_map[ objtype( nic[ 'backing' ] ) ]
             except KeyError:
                 backing = 'unknown switch type'
 
@@ -551,6 +585,145 @@ class DisplayVM( object ):
             pass
 
 
+class DisplayVMs_1line( object ):
+    def __init__( self, vmlist, verbose ):
+        self.verbose = verbose
+
+        fields = [
+            [ 'P',          '_powerstate',            '',     ' ' ],
+            [ 'VM',          'name',                  ':{}',      ],
+            [ 'C',          'config.hardware.numCPU', ':>{}',     ],
+            [ 'MEM',        '_mem',                   ':>{}',     ],
+            [ 'DISK',       '_vmdk',                  ':>{}',     ],
+            [ 'TYPE',       'config.guestId',         ':{}',      ],
+            [ 'IP',         'guest.ipAddress',        ':{}',      ],
+            [ 'HOSTNAME',   '_gue_name',              ':{}',      ],
+            [ 'HYPERVISOR', '_hyp_name',              '',         ],
+        ]
+        if not verbose:
+            for elt in fields[ : ]:
+                if elt[ 0 ] in ( 'TYPE', 'HYPERVISOR' ):
+                    fields.remove( elt )
+        elif verbose > 1:
+            for elt in fields[ : ]:
+                if elt[ 0 ] in ( 'MEM', 'DISK' ):
+                    elt[ 0 ] = elt[ 0 ] + '(M)'
+
+        maxlen = { f[ 1 ] : len( f[ 0 ] ) for f in fields }
+
+        vmlist = [ vsl.pseudoPropAttr.deep( vm ) for vm in vmlist ]
+        timer = vsl.Timer( '1line.prep' )
+        for vm in vmlist:
+            self.prep_elt( vm )
+            for field in ( elt[ 1 ] for elt in fields ):
+                l = len( str( vm[ field ] ))
+                maxlen[ field ] = max( maxlen.get( field, 0 ), l )
+        timer.report()
+
+        fmtlist = []
+        for i, elt in enumerate( fields ):
+            fmtelt = elt[ 2 ].format( maxlen[ elt[ 1 ]])
+            fmtlist.append( '{{{}}}'.format( fmtelt ) )
+            if i+1 < len( fields ):
+                sep = elt[ 3 ] if len( elt ) > 3 else '  '
+                fmtlist.append( sep )
+
+        self.fmt = ''.join( fmtlist )
+        self.fields = [ field[ 1 ] for field in fields ]
+
+        timer = vsl.Timer( 'print' )
+        if vmlist:
+            header = [ f[0] for f in fields ]
+            print( self.fmt.format( *header ))
+        for vm in vmlist:
+            self.display( vm )
+        timer.report()
+
+    def prep_elt( self, vm ):
+        # guest.ipAddress can be on an unreachable, disconnected interface.
+        # We're not interested in those unless there's really nothing else.
+        for elt in vm.guest.net:
+            if elt.network and elt.ipAddress:
+                vm.guest.ipAddress = sorted( elt.ipAddress )[0]
+                break
+        else:
+            vm.guest.ipAddress = '-'
+
+        vm.config.guestId = self.guestId( vm )
+        vm._powerstate    = self.powerstate( vm )
+        vm._mem           = self.memsize( vm )
+        vm._vmdk          = self.scale_size( vm.summary.storage.unshared
+                                             + vm.summary.storage.uncommitted,
+                                            roundp=True)
+
+        vm._gue_name = self._get( vm, 'guest.hostName' )
+        if not self.verbose:
+            vm._gue_name = self.sans_fqdn( vm._gue_name )
+
+        host = vm.runtime.host
+        try:
+            vm._hyp_name = moId_map[ host._moId ]
+            if not self.verbose:
+                vm._hyp_name = self.sans_fqdn( vm._hyp_name )
+        except KeyError:
+            vm._hyp_name = host._moId
+
+    @staticmethod
+    def _get( vm, name ):
+        try:
+            return vm[ name ].replace( ' ', '_' )
+        except AttributeError:
+            return vm[ name ]
+        except KeyError:
+            return '-'
+
+    @staticmethod
+    def sans_fqdn( s ):
+        e = s.find( '.' )
+        if e >= 0:
+            return s[ 0 : e ]
+        return s
+
+    def powerstate( self, vm ):
+        if vm.config.template:                    return '+'
+        if vm.runtime.powerState == 'poweredOff': return 'o'
+        return '|'  # u'\u23fd' # U23FD POWER ON SYMBOL
+
+    def guestId( self, vm ):
+        try:
+            # guest.guestId might be ''
+            s = vm.guest.guestId or vm.config.guestId
+        except AttributeError:
+            s = vm.config.guestId
+
+        # All guestids:
+        #	cr = vsi.get_obj( [vim.ComputeResource] )[ 0 ]
+        #	qco = cr.environmentBrowser.QueryConfigOption()
+        #	set( x.id.replace('Guest','') for x in qco.guestOSDescriptor )
+        s = s.replace( 'Guest',         '' )
+        s = s.replace( 'solaris',       'sol' )
+        s = s.replace( 'windows',       'win' )
+        s = s.replace( 'Enterprise',    'ent' )
+        s = s.replace( 'Server',        'srv' )
+        return s
+
+    def scale_size( self, size_bytes, roundp=False ):
+        sz = vsl.scale_size( size_bytes,
+                             forceunit = 'M' if self.verbose > 1 else None,
+                             roundp    = roundp,
+                             minimize  = True )
+        sz = sz.replace( 'iB', '' )
+        sz = sz.replace( ' ',  '' )
+        return sz
+
+    def memsize( self, vm ):
+        return self.scale_size( vm.config.hardware.memoryMB * 1024**2 )
+
+    def display( self, vm ):
+        args   = [ self._get( vm, name ) for name in self.fields ]
+        print( self.fmt.format( *args ) )
+
+
 def init_folder_map( vsi ):
     timer = vsl.Timer('init folder map')
     p2f = vsi.path_to_subfolder_map( 'vm' )
@@ -561,47 +734,79 @@ def init_folder_map( vsi ):
 def init_moId_map( vsi ):
     timer = vsl.Timer('init moId map')
     global moId_map
-    moId_map = dict( map( lambda o: ( str( o[ 'obj' ]._moId ), o[ 'name' ] ),
-                          vsi.get_obj_props( moId_types, [ 'name' ] )))
+    moId_map = { elt[ 'obj' ]._moId : elt[ 'name' ]
+                 for elt in vsi.get_obj_props( moId_types, [ 'name' ] ) }
     timer.report()
 
 
-def display_vmlist( vsi, vmlist, verbose ):
-    sep = '-' * 78
-    timer = vsl.Timer( 'print' )
-    n = len( vmlist )
-    for vm in vmlist:
-        n -= 1
-        if not n:
-            sep = ""
-        DisplayVM( vsi, vm, verbose, sep=sep )
-    timer.report()
+def get_vmlist( vsi, props=None, root=None ):
+    return vsi.get_obj_props( [ vim.VirtualMachine ],
+                              props              = props,
+                              root               = root,
+                              ignoreInvalidProps = True, )
+
+def display_vmlist( vsi, vmlist, verbose, oneline ):
+    if oneline:
+        DisplayVMs_1line( vmlist, verbose )
+    else:
+        sep = '-' * 78
+        n = len( vmlist )
+        timer = vsl.Timer( 'print' )
+        for vm in vmlist:
+            n -= 1
+            if not n:
+                sep = ""
+            DisplayVM( vsi, vm, verbose, sep=sep )
+        timer.report()
 
 def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
 
-    init_folder_map( vsi )
-    init_moId_map( vsi )
-
-    if args.verbose:
-        proplist.extend( proplist_verbose )
+    if args.oneline:
+        props = proplist_1line
+    else:
+        props = list( proplist )
+        if args.verbose:
+            props.extend( proplist_verbose )
 
     if args.vm:
-        vmlist = vsi.find_vm( args.vm )
-        if not vmlist:
+        # On first pass, we sort and record the results found from each
+        # param (which may be a wildcard), but maintain the overall order
+        # as provided.  Afterward we use this to sort the results from the
+        # property collector on the second pass.
+        pass1 = []
+        for pat in args.vm:
+            res = vsi.find_vm( pat )
+            if len( res ) > 1:
+                res.sort( key=lambda elt: elt.name )
+            pass1.extend( res )
+        if not pass1:
             return
-        if args.refresh:
-            for vm in vmlist:
+        if args.refresh and not args.oneline:
+            timer = vsl.Timer( 'vm.refresh' )
+            for vm in pass1:
                 vm.RefreshStorageInfo()
-        vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist, vmlist,
-                                    ignoreInvalidProps=True )
-    else:
-        vmlist = vsi.get_obj_props( [vim.VirtualMachine], proplist,
-                                    ignoreInvalidProps=True )
-        vmlist.sort( key=lambda elt: elt[ 'name' ] )
+            timer.report()
 
-    display_vmlist( vsi, vmlist, args.verbose )
+        vmlist = get_vmlist( vsi, props, root=pass1 )
+
+        timer = vsl.Timer( 'sort' )
+        order = { vm : i for i, vm in enumerate( pass1 ) }
+        vmlist.sort( key=lambda elt: order[ elt[ 'obj' ]])
+        timer.report()
+    else:
+        vmlist = get_vmlist( vsi, props )
+        timer = vsl.Timer( 'sort' )
+        # Sort all names, then group all templates at the end.
+        vmlist.sort( key=lambda elt: elt[ 'name' ] )
+        vmlist.sort( key=lambda elt: elt[ 'config.template' ] != 'true' )
+        timer.report()
+
+    init_moId_map( vsi )
+    if not args.oneline:
+        init_folder_map( vsi )
+    display_vmlist( vsi, vmlist, args.verbose, args.oneline )
 
 
 ##########
