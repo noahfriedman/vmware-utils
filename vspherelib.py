@@ -2914,7 +2914,7 @@ def str_to_bytes( str_val ):
         return long( str_val )
 
 
-def scale_size( size, si=False, minimize=False ):
+def scale_size( size, si=False, forceunit=None, roundp=False, fp=2, minimize=False ):
     # x & (x-1) == 0 iff x == 2^n
     # if x == 2^n, only nth bit in x is set.
     # subtracting 1 flips all bits via a borrow; the logical AND is zero.
@@ -2924,35 +2924,42 @@ def scale_size( size, si=False, minimize=False ):
         return (n & (n - 1) == 0)
 
     if size is None or size == 0:
-        return '0 B'
+        return '0'
 
     fmtsize = 1000 if si else 1024
-    suffix = (' B', ' K', ' M', ' G', ' T', ' P', ' E')
-    idx = 0
+    suffix  = ('B', 'K', 'M', 'G', 'T', 'P', 'E')
+    idx     = 0
 
     try:
-        if not pow2p( size ) or not si:
-            size = float( size )
+        size = float( size )
     except TypeError: # size is already float?
         pass
 
-    while size >= fmtsize:
-        size = size / fmtsize
-        idx += 1
+    if forceunit in suffix:
+        while suffix[ idx ] != forceunit:
+            size = size / fmtsize
+            idx += 1
+    else:
+        while size >= fmtsize:
+            size = size / fmtsize
+            idx += 1
+            if suffix[ idx ] == forceunit:
+                break
 
-    if size < 10 and not minimize: # Prefer 4096M to 4G
-        size *= fmtsize
-        idx -= 1
+        if size < 10 and not (forceunit or minimize): # Prefer 4096M to 4G
+            size *= fmtsize
+            idx -= 1
 
-    if size == int( size ):
-        size = int( size )
+    if roundp:              size = round( size )
+    if size == int( size ): size = int( size )
 
-    if idx == 0: unit =   ''
-    elif     si: unit =  'B'
-    else:        unit = 'iB'
+    if  forceunit: unit = ''
+    elif idx == 0: unit = ''
+    elif       si: unit = ''.join(( ' ', suffix[ idx ],  'B' ))
+    else:          unit = ''.join(( ' ', suffix[ idx ], 'iB' ))
 
-    fmtstr = '{:.2f}{}{}' if type( size ) is float else '{}{}{}'
-    return fmtstr.format( size, suffix[ idx ], unit )
+    fmtstr = '{{:.{}f}}{{}}'.format( fp ) if type( size ) is float else '{}{}'
+    return fmtstr.format( size, unit )
 
 
 def timestring( spec=None ):
