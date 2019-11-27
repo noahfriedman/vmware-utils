@@ -53,6 +53,7 @@ proplist = [
 
     'layoutEx.disk',
     'layoutEx.file',
+    'layoutEx.snapshot',
 
     'name',
     'parent',
@@ -115,6 +116,8 @@ proplist_verbose = [
     'guest.screen.width',
     'guest.screen.height',
     'guest.ipStack',
+
+    'snapshot',
 ]
 
 proplist_1line = [
@@ -239,6 +242,8 @@ class DisplayVM( object ):
         p( 'NICs',    vm.summary.config.numEthernetCards )
         p( 'Disks',   vm.summary.config.numVirtualDisks )
         self.display_storage()
+        if vm.layoutEx.snapshot:
+            p( 'Snapshots', len( vm.layoutEx.snapshot ))
         try:
             p( 'Nested HV', vm.config.nestedHVEnabled )
         except AttributeError:
@@ -249,6 +254,8 @@ class DisplayVM( object ):
         self.display_disks()
 
         if self.verbose:
+            if vm.snapshot:
+                self.display_snapshot_tree()
             self.display_dns()
             self.display_tools()
             self.display_power_ops()
@@ -553,6 +560,69 @@ class DisplayVM( object ):
                   vfrcache, ),
                 extra=disk[ 'fileName' ] )
 
+    def display_snapshot_tree( self ):
+        vm_snapshot = self.vm.snapshot
+
+        def walktree( fn, snap_list=vm_snapshot.rootSnapshotList, depth=0 ):
+            result = []
+            for snap in snap_list:
+                result.append( fn( snap, depth ))
+                result.extend( walktree( fn, snap.childSnapshotList, depth+1 ))
+            return result
+
+        snapshot_list = walktree( lambda x, _: x )
+
+        def maxlen( attr ):
+            return max( len( str( getattr( x, attr ))) for x in snapshot_list )
+
+        verbose     = self.verbose
+        indent_incr = 2
+        max_depth   = 1 + max( walktree( lambda _, depth: depth ))
+        max_namelen = maxlen( 'name' ) + max_depth * indent_incr
+        max_desc_col = 78 + indentL  # n.b. indentL is negative
+
+        def snap_timestamp( snap ):
+            ct = snap.createTime.replace( microsecond=0, tzinfo=None )
+            fmt = '%Y-%m-%d %H:%M:%SZ' if verbose > 1 else '%y-%m-%d %H:%M'
+            return ct.strftime( fmt )
+
+        def format_snapshot( snap, indent=0, depth=0 ):
+            indent = depth * indent_incr
+            num    = '#{}'.format( snap.id )
+            name   = '"{}"'.format( snap.name )
+            ts     = snap_timestamp( snap )
+            fmt    = '{0}* {3:{2:d}} {4} {5:>4}'
+            w      = max( 2, max_namelen - indent )
+            head   = fmt.format( ' ' * indent, num, w, name, ts, num )
+
+            res = [ head ]
+            if verbose > 1:
+                indent += 2
+                ws = ' ' * indent
+                desc = vsl.fold_text( snap.description, indent=indent, maxlen=max_desc_col-indent )
+                if desc:
+                    res.append( ws + desc )
+                res.append( '' )
+            return res
+
+        def format_snaplist( snaplist=vm_snapshot.rootSnapshotList, indent=0, depth=0 ):
+            formatted = []
+            for snap in snaplist:
+                formatted.extend( format_snapshot( snap, indent=indent, depth=depth ))
+
+                subindent = indent + indent_incr + len( str( snap.id ) )
+                formatted.extend( format_snaplist( snap.childSnapshotList,
+                                                   indent=subindent,
+                                                   depth=depth+1 ))
+            return formatted
+
+
+        tree = '\n'.join( format_snaplist() ).replace( '\n', '\n' + indentS ).rstrip()
+        p( 'Snapshot tree', tree )
+
+        cur = [ x for x in snapshot_list
+                if x.snapshot == vm_snapshot.currentSnapshot ][ 0 ]
+        p( 'Current snapshot', '#{} "{}"'.format( cur.id, cur.name ))
 
     def _display_text( self, label, text, *options ):
         text = vsl.fold_text( text, maxlen=70, indent=abs( indentL ) )
