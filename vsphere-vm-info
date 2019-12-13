@@ -254,8 +254,11 @@ class DisplayVM( object ):
         self.display_disks()
 
         if self.verbose:
-            if vm.snapshot:
-                self.display_snapshot_tree()
+            try:
+                if vm.snapshot:
+                    self.display_snapshot_tree()
+            except AttributeError:
+                pass
             self.display_dns()
             self.display_tools()
             self.display_power_ops()
@@ -372,15 +375,20 @@ class DisplayVM( object ):
             pass
 
     def display_tools( self ):
+        try:
+            t = self.vm.config.tools
+            t.toolsInstallType = t.toolsInstallType.replace( 'guestToolsType', '' )
+        except AttributeError:
+            pass
         pf( 'Tools ', self.vm.config.tools,
-            ( ('Power On' , 'afterPowerOn'),
-              ('Resume'   , 'afterResume'),
-              ('Standby'  , 'beforeGuestStandby'),
-              ('Shutdown' , 'beforeGuestShutdown'),
-              ('Reboot'   , 'beforeGuestReboot'),
-              ('syncTime' , 'syncTimeWithHost'),
+            ( ('Power On' ,  'afterPowerOn'),
+              ('Resume'   ,  'afterResume'),
+              ('Standby'  ,  'beforeGuestStandby'),
+              ('Shutdown' ,  'beforeGuestShutdown'),
+              ('Reboot'   ,  'beforeGuestReboot'),
+              ('syncTime' ,  'syncTimeWithHost'),
               ('Tools type', 'toolsInstallType'),
-              ('Upgrade'  , 'toolsUpgradePolicy'), ))
+              ('Upgrade'  ,  'toolsUpgradePolicy'), ))
 
     def display_guest( self ):
         pf( 'Guest Tools', self.vm.guest,
