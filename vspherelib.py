@@ -2914,50 +2914,36 @@ def str_to_bytes( str_val ):
 
 
 def scale_size( size, si=False, forceunit=None, roundp=False, fp=2, minimize=False ):
-    # x & (x-1) == 0 iff x == 2^n
-    # if x == 2^n, only nth bit in x is set.
-    # subtracting 1 flips all bits via a borrow; the logical AND is zero.
-    # If x != 2^n, x-1 will flip all bits up to and including the first 1,
-    # but will not flip every bit.
-    def pow2p( n ):
-        return (n & (n - 1) == 0)
-
-    if size is None or size == 0:
+    if not size:
         return '0'
 
     fmtsize = 1000 if si else 1024
     suffix  = ('B', 'K', 'M', 'G', 'T', 'P', 'E')
     idx     = 0
-
-    try:
-        size = float( size )
-    except TypeError: # size is already float?
-        pass
+    size    = float( size )
 
     if forceunit in suffix:
         while suffix[ idx ] != forceunit:
-            size = size / fmtsize
-            idx += 1
+            size /= fmtsize
+            idx  += 1
     else:
         while size >= fmtsize:
-            size = size / fmtsize
-            idx += 1
-            if suffix[ idx ] == forceunit:
-                break
+            size /= fmtsize
+            idx  += 1
 
-        if size < 10 and not (forceunit or minimize): # Prefer 4096M to 4G
+        if size < 10 and not minimize: # Prefer 4096M to 4G
             size *= fmtsize
-            idx -= 1
+            idx  -= 1
 
     if roundp:              size = round( size )
     if size == int( size ): size = int( size )
 
     if  forceunit: unit = ''
     elif idx == 0: unit = ''
-    elif       si: unit = ''.join(( ' ', suffix[ idx ],  'B' ))
-    else:          unit = ''.join(( ' ', suffix[ idx ], 'iB' ))
+    elif       si: unit = suffix[ idx ] +  'B'
+    else:          unit = suffix[ idx ] + 'iB'
 
-    fmtstr = '{{:.{}f}}{{}}'.format( fp ) if type( size ) is float else '{}{}'
+    fmtstr = '{{:.{}f}} {{}}'.format( fp ) if type( size ) is float else '{} {}'
     return fmtstr.format( size, unit )
 
 
