@@ -125,6 +125,7 @@ proplist_1line = [
     'config.hardware.memoryMB',
     'config.hardware.numCPU',
     'config.template',
+    'config.version',
     'guest.guestId',
     'guest.hostName',
     'guest.ipAddress',
@@ -673,6 +674,7 @@ class DisplayVMs_1line( object ):
             [ 'C',          'config.hardware.numCPU', ':>{}',     ],
             [ 'MEM',        '_mem',                   ':>{}',     ],
             [ 'DISK',       '_vmdk',                  ':>{}',     ],
+            [ 'HW',         '_hw_version',            ':>{}',     ],
             [ 'TYPE',       'config.guestId',         ':{}',      ],
             [ 'IP',         'guest.ipAddress',        ':{}',      ],
             [ 'HOSTNAME',   '_gue_name',              ':{}',      ],
@@ -680,7 +682,7 @@ class DisplayVMs_1line( object ):
         ]
         if not verbose:
             for elt in fields[ : ]:
-                if elt[ 0 ] in ( 'TYPE', 'HYPERVISOR' ):
+                if elt[ 0 ] in ( 'HW', 'TYPE', 'HYPERVISOR' ):
                     fields.remove( elt )
         elif verbose > 1:
             for elt in fields[ : ]:
@@ -733,6 +735,7 @@ class DisplayVMs_1line( object ):
         vm._vmdk          = self.scale_size( vm.summary.storage.unshared
                                              + vm.summary.storage.uncommitted,
                                             roundp=True)
+        vm._hw_version    = self.hw_version( vm.config.version )
 
         vm._gue_name = self._get( vm, 'guest.hostName' )
         if not self.verbose:
@@ -761,6 +764,10 @@ class DisplayVMs_1line( object ):
         if e >= 0:
             return s[ 0 : e ]
         return s
+
+    @staticmethod
+    def hw_version( version):
+        return version.replace( 'vmx-0', '' ).replace( 'vmx-', '' )
 
     def powerstate( self, vm ):
         if vm.config.template:                    return '+'
