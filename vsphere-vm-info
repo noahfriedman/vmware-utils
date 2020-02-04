@@ -22,7 +22,7 @@ import sys
 # ESXi 6.9 and 6.8 are AWS-only, I think.
 hw_compat = {
     '16' : [ 'Workstation 15.x', 'Fusion 11.x', 'Player 15.x', ],
-    '15' : [ 'ESXi 6.9.1', 'ESXi 6.8.7', 'ESXi 6.7 U2', ],
+    '15' : [ 'ESXi 6.7 U2', 'ESXi 6.8.7', 'ESXi 6.9.1', ],
     '14' : [ 'ESXi 6.7', 'Workstation 14.x', 'Fusion 10.x', 'Player 14.x', ],
     '13' : [ 'ESXi 6.5', ],
     '11' : [ 'ESXi 6.0', 'Workstation 11.x', 'Fusion 7.x',  'Player 7.x', ],
