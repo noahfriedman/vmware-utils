@@ -1147,6 +1147,9 @@ class _vmomiFind( object ):
                     found.extend( val )
 
             if not found:
+                if mot[ 0 ] is vim.ResourcePool and isinstance( root, vim.ResourcePool ):
+                    return root
+
                 raise NameNotFoundError( 'No {0}s found!'.format( label ))
             elif len( found ) > 1:
                 if mot[ 0 ] is vim.ResourcePool and len( mot ) == 1:
