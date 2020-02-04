@@ -19,15 +19,19 @@ import sys
 #import httplib
 #httplib.HTTPConnection.debuglevel = 1
 
+# ESXi 6.9 and 6.8 are AWS-only, I think.
 hw_compat = {
-    '14' : [ 'ESXi 6.7', 'Workstation Pro 14.x', 'Fusion 10.x', 'Player 14.x' ],
-    '13' : [ 'ESXi 6.5' ],
-    '11' : [ 'ESXi 6.0', 'Workstation 11.x', 'Fusion 7.x', 'Player 7.x' ],
-    '10' : [ 'ESXi 5.5', 'Workstation 10.x', 'Fusion 6.x', 'Player 6.x' ],
-     '9' : [ 'ESXi 5.1', 'Workstation 9.x',  'Fusion 5.x', 'Player 5.x' ],
-     '8' : [ 'ESXi 5.0', 'Workstation 8.x',  'Fusion 4.x', 'Player 4.x' ],
-     '7' : [ 'ESXi/ESX 4.x', 'Server 2.x', 'Workstation 6.5.x/7.x', 'Fusion 2.x/3.x', 'Player 3.x' ],
-     '4' : [ 'ESX 3.x', 'Server 1.x', 'Lab Manager 2.x', 'ACE 2.x' ],
+    '16' : [ 'Workstation 15.x', 'Fusion 11.x', 'Player 15.x', ],
+    '15' : [ 'ESXi 6.9.1', 'ESXi 6.8.7', 'ESXi 6.7 U2', ],
+    '14' : [ 'ESXi 6.7', 'Workstation 14.x', 'Fusion 10.x', 'Player 14.x', ],
+    '13' : [ 'ESXi 6.5', ],
+    '11' : [ 'ESXi 6.0', 'Workstation 11.x', 'Fusion 7.x',  'Player 7.x', ],
+    '10' : [ 'ESXi 5.5', 'Workstation 10.x', 'Fusion 6.x',  'Player 6.x', ],
+     '9' : [ 'ESXi 5.1', 'Workstation 9.x',  'Fusion 5.x',  'Player 5.x', ],
+     '8' : [ 'ESXi 5.0', 'Workstation 8.x',  'Fusion 4.x',  'Player 4.x', ],
+     '7' : [ 'ESXi/ESX 4.x', 'Server 2.x', 'Workstation 6.5.x/7.x', 'Fusion 2.x/3.x', 'Player 3.x', ],
+     '6' : [ 'Workstation 6.0.x', ],
+     '4' : [ 'ESX 3.x', 'Server 1.x', 'Lab Manager 2.x', 'ACE 2.x', ],
 }
 
 proplist = [
