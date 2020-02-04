@@ -140,6 +140,7 @@ def obj_datacenter( obj ):
 # multi-vm method is available with standalone hosts as well.)
 def power_on( vsi, vmlist ):
     dc = obj_datacenter( vmlist[0] )
+    dc.recentTask # raise exception if we cannot inspect DC tasks
     tasklist = dc.PowerOnMultiVM_Task( vmlist )
     if tasklist:
         callback = powerOnCallback()
@@ -162,7 +163,10 @@ def main():
     # esxi4.x doesn't handle PowerOnMultiVM_Task
     if ( args.cmd in ['on', 'resume']
          and vsi.si.content.about.apiVersion >= '5.5' ):
-        return power_on( vsi, vmlist )
+        try:
+            return power_on( vsi, vmlist )
+        except vim.fault.NoPermission:
+            pass # try legacy methods below
 
     op = getattr( type( vmlist[ 0 ] ), cmds[ args.cmd ] )
     tasklist = []
