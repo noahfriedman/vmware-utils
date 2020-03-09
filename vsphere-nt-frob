@@ -14,9 +14,14 @@
 # Features to add:
 #	change passwords
 #	enable/disable/create accounts  (with specific SID if possible)
-#	enable/disable firewalls
-#	enable/disable remote desktop
 #	enable/disable remote administration
+
+# wmic useraccount where name="noahf" get sid
+# reg query "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\%sid%" /v ProfileImagePath
+# reg_keys_list('HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\DataStore', match='^0$', recursive=True)
+# reg_value_get('HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\DataStore\\{sid}\\0', 'szTargetName')
+# reg_value_get('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\{sid}', 'ProfileImagePath' )
+# 'HKEY_USERS\\{sid}\\Volatile Environment'
 
 # Code:
 
@@ -26,27 +31,52 @@ import vspherelib     as vsl
 import os
 import sys
 
-# wmic useraccount where name="noahf" get sid
-# reg query "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\%sid%" /v ProfileImagePath
-
-# reg_keys_list('HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\DataStore', match='^0$', recursive=True)
-# reg_value_get('HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\DataStore\\{sid}\\0', 'szTargetName')
-# reg_value_get('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\{sid}', 'ProfileImagePath' )
-# 'HKEY_USERS\\{sid}\\Volatile Environment'
-
 cmd_slmgr          = '@cscript //nologo slmgr.vbs '
 cmd_shutdown       = '@shutdown /f /t {} '
 cmd_shutdown_delay = 5  # default
 
-cmd_template = { 'rename' : ( '@wmic computersystem where caption="%COMPUTERNAME%"'
-                              ' call rename name="{}"' ),
+cmd_template = {
+    'rename' : '@wmic computersystem where caption="%COMPUTERNAME%" call rename name="{}"',
 
-                 'reboot'    : cmd_shutdown + '/r',
-                 'halt'      : cmd_shutdown + '/s',
-                 'hibernate' : cmd_shutdown + '/h',
-                 'poweroff'  : cmd_shutdown + '/p',
+    'reboot'    : cmd_shutdown + '/r',
+    'halt'      : cmd_shutdown + '/s',
+    'hibernate' : cmd_shutdown + '/h',
+    'poweroff'  : cmd_shutdown + '/p',
+    'activate'  : cmd_slmgr    + '/ato',
 
-                 'activate'  : cmd_slmgr + '/ato', }
+    'fw-disable' : 'netsh advfirewall set allprofiles state off',
+    'fw-enable'  : 'netsh advfirewall set allprofiles state on',
+
+    'expw-disable' : (
+        'net accounts /minpwage:0 /maxpwage:unlimited /forcelogoff:no' ),
+
+    'rdp-enable' : (
+        'reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f',
+        'reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f',
+        'net localgroup "Remote Desktop Users" "Everyone"  /add' ),
+
+    'wupd-disable' : (
+        'sc config wuauserv start=disabled',
+        'net stop wuauserv' ),
+
+    # Long file name support
+    'lfn-enable' : (
+        'reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f' ),
+
+    # disable windows deaf-ender
+    'defender-disable' : (
+        #'reg add "HKLM\\Software\\Policies\\Microsoft\\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f',
+        'powershell -Command "Uninstall-WindowsFeature -Name Windows-Defender-GUI"',
+        'powershell -Command "Uninstall-WindowsFeature -Name Windows-Defender"' ),
+
+    # turn off annoying auto-launching of server manager at login
+    'srvmgr-disable' : (
+        'reg add "HKLM\\Software\\Microsoft\\ServerManager" /v DoNotOpenServerManagerAtLogon /t REG_DWORD /d 1 /f' ),
+
+    'move-pagefile' : (
+        'wmic pagefileset where name="C:\\pagefile.sys" delete',
+        'wmic pagefileset where name="Z:\\pagefile.sys" set InitialSize=2048,MaximumSize=8150' ),
+}
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
@@ -81,7 +111,7 @@ def main():
     while actions:
         cmd = actions.pop(0)
         if cmd in ('rename'):
-            newname = actions.pop(0)
+            newname = actions.pop( 0 )
             script.append ( cmd_template[ cmd ].format( newname ) )
         elif cmd in ('activate'):
             script.append( cmd_template[ cmd ] )
@@ -97,6 +127,12 @@ def main():
             else:
                 delay = cmd_shutdown_delay
             script.append( cmd_template[ cmd ].format( str( delay )))
+        elif cmd in cmd_template:
+            template = cmd_template[ cmd ]
+            if isinstance( template, (tuple, list) ):
+                script.extend( template )
+            else:
+                script.append( template )
         else:
             vsl.printerr( cmd, 'Undefined action' )
             sys.exit( 1 )
