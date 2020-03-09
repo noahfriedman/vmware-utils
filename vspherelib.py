@@ -1891,7 +1891,7 @@ class vmomiMKS( object ):
         try:
             self.fqdn = attr_get( content.setting.setting, 'VirtualCenter.FQDN' )
         except vmodl.fault.SecurityError:
-            pass
+            self.fqdn = None
         # Might be None for an esxi session
         if not self.fqdn:
             self.fqdn = self.host
