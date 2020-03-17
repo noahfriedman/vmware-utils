@@ -111,6 +111,7 @@ proplist_verbose = [
     'config.defaultPowerOps.standbyAction',
     'config.defaultPowerOps.suspendType',
 
+    'guest.disk',
     'guest.toolsStatus',
     'guest.toolsRunningStatus',
     'guest.toolsVersionStatus',
@@ -264,6 +265,7 @@ class DisplayVM( object ):
                     self.display_snapshot_tree()
             except AttributeError:
                 pass
+            self.display_filesystems()
             self.display_dns()
             self.display_tools()
             self.display_power_ops()
@@ -572,6 +574,26 @@ class DisplayVM( object ):
                   'diskMode',
                   vfrcache, ),
                 extra=disk[ 'fileName' ] )
+
+    # n.b. linux guest tools only return local diskful filesystems.
+    # nfs, tmpfs, etc. mounts are not provided.
+    def display_filesystems( self ):
+        if not self.vm.guest.disk:
+            return
+
+        def _scale_size( size ):
+            res = vsl.scale_size( size, roundp=False, minimize=True )
+            return res.replace( 'iB', '' ).replace( ' ', '' )
+
+        fmt = '{:>8}  {:>8}  {:>3}%  {}'
+        line = [ fmt.format( 'Size', 'Avail', 'Use', 'Mount' ) ]
+        for fs in self.vm.guest.disk:
+            total = _scale_size( fs.capacity )
+            avail = _scale_size( fs.freeSpace )
+            upct  = int( 100 - (100 * fs.freeSpace) / float( fs.capacity ))
+            line.append( fmt.format( total, avail, upct, fs.diskPath ))
+        l = str.join( '\n' + indentS, line )
+        p( 'Filesystems', l )
 
     def display_snapshot_tree( self ):
         vm_snapshot = self.vm.snapshot
