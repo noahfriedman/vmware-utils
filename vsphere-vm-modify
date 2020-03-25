@@ -59,6 +59,9 @@ def get_args():
     p_sub.add_parser( 'disconnect',  help='Disconnect virtual device', parents=[p_com_conn] )
 
     ## disk-extend, extend-disk
+    # n.b. sesparse disks don't seem to be extensible in esxi 6.7.3.
+    # "A specified parameter was not correct: spec.deviceChange.device"
+    # where the same operation works fine for thin/thick virtual disks.
     p_disk_extend = p_sub.add_parser( 'disk-extend', parents=[p_com_vm], help='Increase size of virtual disk' )
     p_disk_extend.add( '-l', '--label', dest='disknum', required=True,  help='Disk device number or label')
     p_disk_extend.add( '-s', '--size',  '--resize', dest='size',    required=False, help=(
@@ -392,7 +395,7 @@ class mVM():
         #    devspec.device.backing.diskMode = self.args.mode
         if self.args.size:
             devspec.device.capacityInBytes = self._to_bytes( self.args.size )
-        cfgspec.deviceChange = [ devspec ]
+        cfgspec.deviceChange.append( devspec )
         return vm.ReconfigVM_Task( cfgspec )
 
     extend_disk = disk_extend # alias
