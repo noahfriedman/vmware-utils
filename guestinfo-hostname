@@ -58,7 +58,45 @@
 # then run:
 #	systmectl enable guestinfo-hostname.service
 
-PATH=/usr/bin:/usr/sbin:$PATH
+# To run automatically on MacOS:
+# Please the following in /Library/LaunchDaemons/com.splode.guestinfo_hostname.plist :
+#
+#	<?xml version="1.0" encoding="UTF-8"?>
+#	<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+#	<plist version="1.0">
+#	<dict>
+#		<key>Label</key>
+#		<string>com.splode.guestinfo_hostname</string>
+#		<key>ProgramArguments</key>
+#		<array>
+#			<string>/etc/guestinfo-hostname</string>
+#		</array>
+#		<key>Disabled</key>
+#		<false/>
+#		<key>KeepAlive</key>
+#		<false/>
+#		<key>RunAtLoad</key>
+#		<true/>
+#	</dict>
+#	</plist>
+#
+# Make sure the shell script is owned by root:wheel and mode 0755.
+# Make sure the plist file is owned by root:wheel and mode 0644.
+# Then run: launchctl load -w /Library/LaunchDaemons/com.splode.guestinfo_hostname.plist
+
+vmtools_macos='/Library/Application Support/VMware Tools'
+PATH=/usr/bin:/usr/sbin:$vmtools_macos:$PATH
+
+: ${U_NODENAME:=`uname -n`}
+: ${U_SYSTEM:=`uname -s`}
+
+info_get()
+{
+    case $U_SYSTEM in
+        Darwin ) vmware-tools-daemon --cmd="info-get $*" ;;
+        *      ) vmware-rpctool            "info-get $*" ;;
+    esac 2> /dev/null
+}
 
 iface_primary()
 {
@@ -95,15 +133,26 @@ set_hostname()
               esac ;;
     esac
 
-    # Record for future reboots
-    if   [ -f /etc/hostname ]; then echo $new > /etc/hostname
-    elif [ -f /etc/HOSTNAME ]; then echo $new > /etc/HOSTNAME
-    elif [ -f /etc/sysconfig/network ]; then
-        sed -i -e "s/^\(HOSTNAME\)=.*/\1=$new/" /etc/sysconfig/network
-    fi
+    case $U_SYSTEM in
+        Darwin )
+            scutil --set HostName      $new        # primary hostname
+            scutil --set LocalHostName ${new%%.*}  # bonjour hostname
+            scutil --set ComputerName  ${new%%.*}  # finder  hostname
+            dscacheutil -flushcache
+            ;;
 
-    hostname $new
-    restart_iface
+        Linux  )
+            # Record for future reboots
+            if   [ -f /etc/hostname ]; then echo $new > /etc/hostname
+            elif [ -f /etc/HOSTNAME ]; then echo $new > /etc/HOSTNAME
+            elif [ -f /etc/sysconfig/network ]; then
+                sed -i -e "s/^\(HOSTNAME\)=.*/\1=$new/" /etc/sysconfig/network
+            fi
+
+            hostname $new
+            restart_iface
+            ;;
+    esac
 }
 
 set_forceHostname()
@@ -131,9 +180,9 @@ main()
         stop | status ) exit 0 ;;
     esac
 
-    forceHostname=`vmware-rpctool "info-get guestinfo.forceHostname" 2> /dev/null`
-    initHostname=`vmware-rpctool  "info-get guestinfo.initHostname"  2> /dev/null`
-    curHostname=`uname -n`
+    forceHostname=`info_get guestinfo.forceHostname`
+    initHostname=`info_get  guestinfo.initHostname`
+    curHostname=$U_NODENAME
 
     set_forceHostname || set_initHostname
 }
