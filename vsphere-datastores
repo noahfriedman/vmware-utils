@@ -59,16 +59,16 @@ def main():
     maxlen = max( map( lambda x: len( x['summary.name'] ), ds ) )
     if args.header:
         hfmt = ' '.join(('{0:%s}' % maxlen,
-                        '{1:>9}',
-                        '{2:>19}',
-                        '{3:>20}'))
+                        '{1:>10}',
+                        '    {2:>17}',
+                        '    {3:>18}'))
         s = hfmt.format( 'NAME', 'SIZE', 'FREE', 'UNCOMMITTED' )
         print( s )
 
     fmt = ' '.join(( '{0:%s}' % maxlen,
-                     '{1[0]:>5} {1[1]:>3}',
-                     '    {2[0]:>5} {2[1]:>3} ({3:2d}%)',
-                     '    {4[0]:>5} {4[1]:>3} ({5:3d}%)' ))
+                     '{1[0]:>6} {1[1]:>3}',
+                     '    {2[0]:>7} {2[1]:>3} ({3:2d}%)',
+                     '    {4[0]:>7} {4[1]:>3} ({5:3d}%)' ))
 
     for elt in sorted( ds, key=key_ds_name ):
         name = elt['summary.name']
