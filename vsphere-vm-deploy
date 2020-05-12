@@ -1,0 +1,392 @@
+#!/usr/bin/env python
+# vsphere-vm-deploy --- upload new vm from ova or ovf spec
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2019-10-10
+# Public domain
+
+# Commentary:
+
+# This is simiilar in purpose to ovftool when used to deploy new virtual
+# machines from local ovf/ova disk files.
+#
+# Currently it does not:
+#	* create ova or ovf files
+#	* deploy any other format besides ova or ovf (e.g. not vmx)
+#	* convert between any formats
+#	* support vi:// URIs or other network methods for either
+#	  source or destination
+#	* validate checksums in .mf file
+#	* export (download) virtual machines
+#
+# What it does do:
+#	* provide more readable status of upload progress and more
+#	  informative diagnostics when something goes wrong.
+#	* support loading of deployment defaults from $VSPHERELIBRC
+
+# API notes:
+#
+# cimType is one of the attributes of the FileItem objects returned
+# from CreateImportSpec.  As best I can discern these correspond to
+# CIM_ResourcePool.ResourceType from the DMTF CIM Schema.
+# The type list (taken from version 2.53.0 of the schema).
+#
+#	 1	Other
+#	 2	Computer System
+#	 3	Processor
+#	 4	Memory
+#	 5	IDE Controller
+#	 6	Parallel SCSI HBA
+#	 7	FC HBA
+#	 8	iSCSI HBA
+#	 9	IB HCA
+#	10	Ethernet Adapter
+#	11	Other Network Adapter
+#	12	I/O Slot
+#	13	I/O Device
+#	14	Floppy Drive
+#	15	CD Drive
+#	16	DVD drive
+#	17	Disk Drive
+#	18	Tape Drive
+#	19	Storage Extent
+#	20	Other storage device
+#	21	Serial port
+#	22	Parallel port
+#	23	USB Controller
+#	24	Graphics controller
+#	25	IEEE 1394 Controller
+#	26	Partitionable Unit
+#	27	Base Partitionable Unit
+#	28	Power
+#	29	Cooling Capacity
+#	30	Ethernet Switch Port
+#	31	Logical Disk
+#	32	Storage Volume
+#	33	Ethernet Connection
+#	34	Multi-Mode Memory
+#	35	Non-Volatile Memory
+#	..	DMTF reserved
+#	0x8000..0xFFFF 	Vendor reserved
+#
+# Typically what we upload are disk drives (17) or cd/dvd images.
+
+# Code:
+
+from   __future__ import print_function
+
+
+import os
+import re
+import sys
+import ssl
+import tarfile
+import threading
+import time
+import six.moves.urllib.request as request
+
+from   pyVmomi    import vim, vmodl
+import vspherelib     as vsl
+
+# FIXME: I don't want to see all those DynamicBlah props while debugging.
+# Remove this before committing
+vim.DynamicData._propList=[]
+
+
+class OvfHandlerBase( vsl._super, vsl._with ):
+    required_kwargs = [ 'vm_name', 'host', 'vsi', 'pool', 'ds', 'disk_format', 'network', 'folder' ]
+    default_disk_format = 'thin'
+
+
+    def __init__( self, **kwargs ):
+        self.sleep_interval = 5  # refresh lease every 5s by default
+
+        missing = { name : None for name in self.required_kwargs }
+        for arg in kwargs:
+            setattr( self, arg, kwargs[ arg ] )
+            if arg in missing:
+                del missing[ arg ]
+        if missing:
+            fmt = 'Missing class keyword parameters: {}'
+            msg = fmt.format( ', '.join( missing.keys() ))
+            raise vsl.ApiError( msg )
+
+    def ovfd_readin( self, fh ):
+        self.ovfd = fh.read()
+
+    @vsl.tidy_vimfaults
+    def init_spec( self ):
+        ovfMv  = vim.OvfManager
+        ovfMs  = self.vsi.si.content.ovfManager
+
+        param  = ovfMv.CreateImportSpecParams(
+            entityName       = self.vm_name,
+            diskProvisioning = self.disk_format or self.default_disk_format, )
+
+        # Provide a mapping to substitute the label in ovf with the network
+        # object provided via command line.
+        # TODO: handle more than one nic
+        pdp    = ovfMv.ParseDescriptorParams()
+        parsed = ovfMs.ParseDescriptor( ovfDescriptor=self.ovfd, pdp=pdp )
+        if parsed and parsed.network:
+            netmap = ovfMv.NetworkMapping( name    = parsed.network[0].name,
+                                           network = self.network )
+            param.networkMapping.append( netmap )
+
+        # If anything is wrong this will raise an exception in some
+        # circumstances (e.g. permission error), or just return error
+        # messages in others (missing or incomplete items, etc)
+        self.spec = ovfMs.CreateImportSpec( self.ovfd, self.pool, self.ds, param )
+        if not self.spec.importSpec:
+            summary = "Could not create import spec:"
+            if len( self.spec.error ) == 1:
+                diag = vsl.Diag( summary, self.spec.error[0].msg, sep=' ' )
+            else:
+                diag = vsl.Diag( summary )
+                for error in self.spec.error:
+                    diag.append( '\t' + error.msg )
+            raise vsl.cliGeneralError( diag )
+
+        configSpec = self.spec.importSpec.configSpec
+
+        vvc = vim.vm.device.VirtualVideoCard
+        for vcard in [ elt for elt in configSpec.deviceChange
+                       if isinstance( elt.device, vvc ) ]:
+            vcard.device.videoRamSizeInKB = None
+            vcard.device.graphicsMemorySizeInKB = None
+            vcard.device.useAutoDetect = True
+
+
+    def disk_backing_spec( self ):
+        vd = vim.vm.device.VirtualDisk
+        fmt = self.disk_format or self.default_disk_format
+        if fmt in ['sesparse']:
+            backing = vd.SeSparseBackingInfo()
+        else:
+            backing = vd.FlatVer2BackingInfo()
+            backing.split = False
+            if fmt in ['thin']:
+                backing.thinProvisioned = True
+            elif fmt in ['thick', 'zeroedthick']:
+                pass
+            elif fmt in ['eagerzeroedthick']:
+                backing.eagerlyScrub = True
+        backing.diskMode = 'persistent'
+        return backing
+
+
+    def init_lease( self ):
+        lease = self.pool.ImportVApp( self.spec.importSpec, self.folder )
+        self.lease = lease
+
+        msg = "Initializing... {:d}%"
+        while lease.state == vim.HttpNfcLease.State.initializing:
+            self.print_status( msg.format( lease.initializeProgress ))
+            time.sleep( 1 )
+        self.print_status( msg.format( 100 ), end='\n' )
+
+        if lease.state == vim.HttpNfcLease.State.error:
+            diag = vsl.Diag( "Error: %s\n" % lease.error.msg )
+            raise vsl.cliGeneralError( diag )
+
+        return lease
+
+
+    def device_url( self, fileItem ):
+        for url in self.lease.info.deviceUrl:
+            if url.importKey == fileItem.deviceId:
+                return url
+
+
+    def upload( self ):
+        self.upload_total_size = sum( elt.size for elt in self.spec.fileItem )
+        self.upload_completed_offset = 0
+
+        lease = self.init_lease()
+        try:
+            self.start_timer()
+            for elt in self.spec.fileItem:
+                self.current_completed_offset = 0
+                self.upload_fileItem( elt )
+            lease.Complete()
+            self.print_status( "Finished.\n" )
+            return 0
+        except Exception:
+            lease.Abort()
+            raise
+
+
+    def upload_fileItem( self, name ):
+        item = self.current_fileItem = self.get_fileItem( name )
+        size = item.size
+        url  = self.device_url( name ).url.replace( '*', self.host )
+        headers = { 'Content-length': size }
+        try:
+            sslContext = ssl._create_unverified_context()
+        except AttributeError:
+            sslContext = None
+        req = request.Request( url, item, headers )
+        request.urlopen( req, context=sslContext )
+        time.sleep( 1 )
+        self.print_upload_status( end='\n' )
+        self.upload_completed_offset += size
+
+
+    def progress( self ):
+        pos = self.upload_completed_offset + self.current_fileItem.tell()
+        return round( 100.0 * pos / self.upload_total_size, 2 )
+
+
+    def print_upload_status( self, end='' ):
+        item = self.current_fileItem
+        size = item.size
+
+        ippos = self.current_completed_offset
+        ipos  = item.tell()
+        self.current_completed_offset = ipos
+        frate = ( ipos - ippos ) / float( self.sleep_interval )
+
+        pos  = '{0:>{1},d} / {2:<,d}'.format( ipos, len( str( size )), size )
+        pcts = '... {:.2f}%'.format( self.progress() )
+        rate = '   ({}/s)'.format( vsl.scale_size( frate ))
+        self.print_status( 'Uploading', item.name, pos, pcts, rate, end=end )
+
+
+    def print_status( self, *args, **kwargs ):
+        file = kwargs.get( 'file', sys.stderr )
+        sep  = kwargs.get( 'sep',  ' ' )
+        end  = kwargs.get( 'end',  '' if file.isatty() else '\n' )
+        if args[0][0] in ['\r', '\n']:
+            args = list( args )  # need to modify
+            prefix = args[0][0]
+            args[0] = args[0][ 1: ]
+        else:
+            prefix = '\r'
+        arg0 = '{}{}: {}'.format( prefix, self.vm_name, args[0] )
+        print( arg0, *args[ 1: ], sep=sep, end=end, file=file )
+        if kwargs.get( 'flush', True ):
+            file.flush()
+
+
+    def start_timer( self ):
+        threading.Timer( self.sleep_interval, lambda: self.timer() ).start()
+
+
+    def timer( self ):
+        try:
+            if self.lease.state not in [ vim.HttpNfcLease.State.done,
+                                         vim.HttpNfcLease.State.error ]:
+                self.lease.Progress( int( self.progress() ))
+                self.print_upload_status()
+                self.start_timer()
+        except (AttributeError, vmodl.fault.ManagedObjectNotFound) as e:
+            print(e)
+            pass
+
+
+class OvaHandler( OvfHandlerBase ):
+    def __init__( self, filename, **kwargs ):
+        self.super.__init__( **kwargs )
+        self.tar = tarfile.open( filename )
+        self.ovfd_readin( self.get_fileItem( lambda x: x.endswith( ".ovf" ) ))
+        self.init_spec()
+
+
+    def get_fileItem( self, item ):
+        members = self.tar.getnames()
+        if callable( item ):
+            res = filter( item, members )
+        else:
+            res = filter( lambda p: p == item.path, members )
+        if res:
+            return self.tar.extractfile( res[0] )
+
+
+class OvfHandler( OvfHandlerBase ):
+    class DiskFile( file ):
+        # Provides one additional property over base file class, which
+        # cannot itself be modified with arbitrary instance attributes.
+        size = property( lambda self: self._size() )
+        def _size( self ):
+            try:
+                return self.st_size
+            except AttributeError:
+                self.st_size = os.fstat( self.fileno() ).st_size
+                return self.st_size
+
+
+    def __init__( self, ovf, **kwargs ):
+        self.super.__init__( **kwargs )
+
+        self.dirname = re.sub( '/[^/]+$', '/', ovf )
+        if self.dirname == ovf:
+            self.dirname = ''
+
+        with open( ovf, 'r' ) as f:
+            self.ovfd_readin( f )
+        self.init_spec()
+
+
+    def get_fileItem( self, item ):
+        return self.DiskFile( self.dirname + item.path, 'rb' )
+
+
+formats = { 'sesparse'         : 'seSparse',
+            'thin'             : 'thin',
+            'thick'            : 'thick',
+            'zeroedthick'      : 'thick',
+            'eagerzeroedthick' : 'eagerZeriedThick',
+            None               : None,
+           }
+
+
+def get_args():
+    p = vsl.ArgumentParser( loadrc=True )
+    p.add( '-v', '--vm-name',      required=True,  help='Name for new vm' )
+    p.add( '-f', '--folder',                       help='Path of vSphere folder for vm to appear' )
+    p.add( '-r', '--pool',                         help='Resource pool for vm' )
+    p.add( '-D', '--datacenter',                   help='Name of data center' )
+    p.add( '-d', '--datastore',                    help='Name of datastore for vm storage' )
+    p.add( '-c', '--cluster',                      help='Name of the cluster or hypervisor host for new vm' )
+    p.add( '-n', '--network',                      help='Network label for first virtual nic' )
+    p.add( '-F', '--disk-format', choices=formats.keys(), help='Format for VM disks' )
+    p.add_bool( '-E', '--allow-extraconfig',       help='Include any ExtraConfig settings (usually disallowed)')
+    p.add( 'ova',  nargs=1,                        help='ova or ovf file' )
+    return p.parse()
+
+
+def main():
+    args    = get_args()
+    vsi     = vsl.vmomiConnect( args )
+
+    dc      = vsi.get_datacenter(       args.datacenter )
+    cl      = vsi.get_compute_resource( args.cluster,   root=dc.hostFolder.childEntity )
+    ds      = vsi.get_datastore(        args.datastore, root=cl.datastore )
+    pool    = vsi.get_resource_pool(    args.pool,      root=cl.resourcePool )
+    network = vsi.get_network(          args.network,   root=cl.network )
+    folder  = vsi.path_to_subfolder_map( 'vm' )[ args.folder ]
+
+    with open( args.ova[ 0 ] ) as f:
+        beg = f.read( 16 )
+    if beg.startswith( '<?xml version=' ):
+        OVATYPE = OvfHandler
+    else:
+        OVATYPE = OvaHandler
+    ova = OVATYPE( args.ova[ 0 ],
+                       vm_name = args.vm_name,
+                          host = args.host,
+                           vsi = vsi,
+                          pool = pool,
+                            ds = ds,
+                   disk_format = formats[ args.disk_format ],
+                       network = network,
+                        folder = folder )
+
+    if not args.allow_extraconfig:
+        ova.spec.importSpec.configSpec.extraConfig = None
+
+    return ova.upload()
+
+
+if __name__ == '__main__':
+    sys.exit( main() )
