@@ -245,8 +245,16 @@ class DisplayVM( object ):
         self.display_hw_ver()
         self.display_cpu()
         self.display_mem()
-        p( 'NICs',    vm.summary.config.numEthernetCards )
-        p( 'Disks',   vm.summary.config.numVirtualDisks )
+        try:
+            # Since we requested these individual attributes, there might
+            # not have been any value returned by the property collector if
+            # they were undefined, even though they would have been present
+            # if we collected all of vm.summary.config.
+            # In the former case these attributes wouldn't exist here.
+            p( 'NICs',    vm.summary.config.numEthernetCards )
+            p( 'Disks',   vm.summary.config.numVirtualDisks )
+        except AttributeError:
+            pass
         self.display_storage()
         if vm.layoutEx.snapshot:
             p( 'Snapshots', len( vm.layoutEx.snapshot ))
