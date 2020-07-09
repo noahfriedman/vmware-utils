@@ -152,6 +152,7 @@ def get_args():
     p.add( '-a', '--all',     action='store_true', help='Retrieve all known VMs' )
     p.add( '-v', '--verbose', action='count',      help='Display extended info' )
     p.add( '-R', '--refresh', action='store_true', help='Refresh storage info' )
+    p.add( '--raw-text',      action='store_true', help='Do not format text for page')
     p.add( 'vm', nargs='*',                        help='VM names, if not all' )
 
     args = p.parse()
@@ -226,10 +227,11 @@ def pf( label, dic, attrs, extra='' ):
 
 
 class DisplayVM( object ):
-    def __init__( self, vsi, vmprops, verbose=False, sep="" ):
+    def __init__( self, vsi, vmprops, cmdargs, sep="" ):
         self.vsi = vsi
         self.vm = vsl.pseudoPropAttr.deep( vmprops )
-        self.verbose = verbose
+        self.verbose  = cmdargs.verbose
+        self.raw_text = cmdargs.raw_text
         self.sep = sep
         self.display()
 
@@ -456,19 +458,22 @@ class DisplayVM( object ):
     def display_vnc( self ):
         try:
             vnc = self.vm.config.extraConfig.RemoteDisplay.vnc
-            if getattr( vnc, 'key', False ):
-                vnc.key = '(set)'
-            else:
-                vnc.key = 'None'
-            pf( 'VNC', vnc,
-                ( 'enabled',
-                  'port',
-                  'key', ))
-        except AttributeError:
+        except AttributeError: # no vnc config
             return
+        if getattr( vnc, 'key', False ):
+            vnc.key = '(set)'
+        else:
+            vnc.key = 'None'
+        pf( 'VNC', vnc,
+            ( 'enabled',
+              'port',
+              'key', ))
 
     def display_extraconfig_props( self ):
-        prop = dict( self.vm.config.extraConfig.fullitems() )
+        try:
+            prop = dict( self.vm.config.extraConfig.fullitems() )
+        except AttributeError: # no extraconfig
+            return
         for key in prop:
             try:
                 val = prop[ key ]
@@ -485,7 +490,7 @@ class DisplayVM( object ):
     def display_guestinfo_props( self ):
         try:
             prop = self.vm.config.extraConfig.guestinfo.fullitems()
-        except AttributeError: # no guestinfo
+        except AttributeError: # no extraconfig or guestinfo
             return
         if prop:
             dprop = {}
@@ -642,7 +647,10 @@ class DisplayVM( object ):
             if verbose > 1:
                 indent += 2
                 ws = ' ' * indent
-                desc = vsl.fold_text( snap.description, indent=indent, maxlen=max_desc_col-indent )
+                if self.raw_text:
+                    desc = snap.description
+                else:
+                    desc = vsl.fold_text( snap.description, indent=indent, maxlen=max_desc_col-indent )
                 if desc:
                     res.append( ws + desc )
                 res.append( '' )
@@ -668,9 +676,11 @@ class DisplayVM( object ):
         p( 'Current snapshot', '#{} "{}"'.format( cur.id, cur.name ))
 
     def _display_text( self, label, text, *options ):
-        text = vsl.fold_text( text, maxlen=70, indent=abs( indentL ) )
-        if text.find ("\n") >= 0:
-            text = "\n" + indentS + text
+        if self.raw_text:
+            if text.find ("\n") >= 0:
+                text = "\n\n" + text
+        else:
+            text = vsl.fold_text( text, maxlen=70, indent=abs( indentL ) )
         if text != "":
             p( label, text )
         if options:
@@ -870,9 +880,9 @@ def get_vmlist( vsi, props=None, root=None ):
                               root               = root,
                               ignoreInvalidProps = True, )
 
-def display_vmlist( vsi, vmlist, verbose, oneline ):
-    if oneline:
-        DisplayVMs_1line( vmlist, verbose )
+def display_vmlist( vsi, vmlist, args ):
+    if args.oneline:
+        DisplayVMs_1line( vmlist, args.verbose )
     else:
         sep = '-' * 78
         n = len( vmlist )
@@ -881,7 +891,7 @@ def display_vmlist( vsi, vmlist, verbose, oneline ):
             n -= 1
             if not n:
                 sep = ""
-            DisplayVM( vsi, vm, verbose, sep=sep )
+            DisplayVM( vsi, vm, args, sep=sep )
         timer.report()
 
 def main():
@@ -931,7 +941,7 @@ def main():
     init_moId_map( vsi )
     if not args.oneline:
         init_folder_map( vsi )
-    display_vmlist( vsi, vmlist, args.verbose, args.oneline )
+    display_vmlist( vsi, vmlist, args )
 
 
 ##########
