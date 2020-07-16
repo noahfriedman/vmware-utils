@@ -36,6 +36,8 @@ main()
                          vmware/vmnet8/nat/nat.conf \
                          vmware/vmnet8/nat.mac
     )
+
+    sed -i.bak -e '/^accept.*EULA/s/none/yes/' /etc/vmware/config
 }
 
 main "$@"
