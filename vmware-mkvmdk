@@ -2,7 +2,7 @@
 
 exec qemu-img create               \
      -f vmdk                       \
-     -o compat6                    \
+     -o hwversion=7                \
      -o adapter_type=lsilogic      \
      -o subformat=monolithicSparse \
      "$@"
