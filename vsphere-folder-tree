@@ -123,13 +123,10 @@ class Hier( object ):
         print( *pargs )
 
     def print_vms( self, folder, depth ):
-        try:
-            child_entities = self.children( folder )
-            vmlist = map( lambda vm: self.vm_table[ vm.id ],
-                          vsl.get_seq_type( child_entities, vim.VirtualMachine ))
-        except AttributeError:
-            return
-
+        child_entities = self.children( folder )
+        vmlist = [ self.vm_table[ vm.id ]
+                   for vm in vsl.get_seq_type( child_entities, vim.VirtualMachine )
+                   if self.vm_table[ vm.id ] ]
         if not vmlist:
             return
 
@@ -141,7 +138,7 @@ class Hier( object ):
         show_uuid = self.args.verbose > 1
         for vm in vmlist:
             cols = []
-            if vm[ 'config.template' ]:
+            if vm.get( 'config.template', None ):
                 cols.append( '+' )
             elif vm[ 'runtime.powerState' ] == poweredOff:
                 cols.append( 'o' )
@@ -187,8 +184,8 @@ class Hier( object ):
 
         if self.args.all:
             excluded = ( vim.Folder, vim.VirtualMachine )
-            children = filter( lambda elt: not isinstance( elt, excluded ),
-                               self.children( folder ) )
+            children = [ elt for elt in self.children( folder )
+                         if not isinstance( elt, excluded ) ]
             children.sort( key=lambda elt: pad_digits( self.name( elt ) ))
 
             for obj in children:

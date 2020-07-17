@@ -9,7 +9,6 @@
 
 from __future__ import print_function
 
-import __builtin__
 import argparse
 import getpass
 import os
@@ -31,6 +30,18 @@ from pyVmomi    import vim, vmodl, VmomiSupport
 
 import requests
 requests.packages.urllib3.disable_warnings()
+
+try:
+    import builtins
+except ImportError:
+    import __builtin__ as builtins
+
+try:
+    long
+except NameError:  # python3
+    long    = int
+    unicode = str
+
 
 # Get the id for a managed object type: Folder, Datacenter, Datastore, etc.
 vim.ManagedObject.id = property( lambda self: self._moId )
@@ -742,7 +753,7 @@ class propList( object ):
         if isinstance( args[0], self ):
             return args[0]
         else:
-            return super( self, self ).__new__( self, *args )
+            return super( self, self ).__new__( self )
 
     def __init__( self, *args ):
         if type( args[0] ) is propList:
@@ -795,7 +806,9 @@ class Cache( object ):
         self.mutex = threading.Lock()
 
         for method in self.valid_table_methods:
-            setattr( self, method, getattr( self.table, method ))
+            fn = getattr( self.table, method, None )
+            if fn is not None:  # no has_key in python3
+                setattr( self, method, fn )
 
         # For CPython versions 3.1 or earlier, explicitly shut down daemon
         # threads at exit, because otherwise they keep running even as the
@@ -888,7 +901,7 @@ class _vmomiCollect( object ):
     def create_list_view( self, objs ):
         if type( objs ) is not vim.ManagedObject.Array:
             try:
-                objs = map( lambda o: o.obj, objs )
+                objs = [ o.obj for o in objs ]
             except AttributeError:
                 pass
         return self.si_content.viewManager.CreateListView( obj=objs )
@@ -1058,7 +1071,7 @@ class _vmomiCollect( object ):
         """
         if not attrs:
             exclude = ['dynamicProperty', 'dynamicType']
-            attrs = filter( lambda s: s not in exclude, obj.__dict__ )
+            attrs = [ s for s in obj.__dict__ if s not in exclude ]
         new = type( obj )()
         for attr in attrs:
             if hasattr( obj, attr ):
@@ -1127,7 +1140,7 @@ class _vmomiFind( object ):
 
         if name:
             if isinstance( root, vim.ManagedObject.Array ):
-                found = filter( lambda o: o.name == name, root )
+                found = [ o for o in root if o.name == name ]
             else:
                 try:
                     found = self.name_to_mo_map( mot, root )[ name ]
@@ -1155,7 +1168,8 @@ class _vmomiFind( object ):
                 if mot[ 0 ] is vim.ResourcePool and len( mot ) == 1:
                     # "Resources" pools are children of (cluster)ComputeResource objects.
                     # If there is just one other resource pool other than those kind, return that.
-                    childpools = filter( lambda elt: isinstance( elt.parent, vim.ResourcePool ), found )
+                    childpools = [ elt for elt in found
+                                   if isinstance( elt.parent, vim.ResourcePool ) ]
                     if childpools and len( childpools ) == 1:
                         return childpools[0]
 
@@ -1320,7 +1334,7 @@ class _vmomiFolderMap( object ):
         for obj in mtbl:
             name = []
             start_obj = obj
-            while mtbl.has_key( obj ):
+            while obj in mtbl:
                 node = mtbl[ obj ]
                 name.insert( 0, node[ 0 ] )
                 obj = node[ 1 ]
@@ -1447,8 +1461,8 @@ class _vmomiChangeSpec( object ):
             connect             = None,
             start_connected     = None,
             allow_guest_control = None ):
-        dev = filter( lambda elt: elt.deviceInfo.label == label,
-                      vm.config.hardware.device )
+        dev = [ elt for elt in vm.config.hardware.device
+                if elt.deviceInfo.label == label ]
         if not dev:
             raise NameNotFoundError(
                 '{}: "{}" device not found'.format( vm.name, label ))
@@ -1494,9 +1508,9 @@ class _vmomiChangeSpec( object ):
         except ValueError:
             disklabel = disknum
 
-        disk = filter( lambda n: n.deviceInfo.label == disklabel,
-                       get_seq_type( vm.config.hardware.device,
-                                     vim.vm.device.VirtualDisk ))
+        disk = [ n for n in get_seq_type( vm.config.hardware.device,
+                                          vim.vm.device.VirtualDisk )
+                 if n.deviceInfo.label == disklabel ]
         if not disk:
             raise NameNotFoundError(
                 '{}: "{}" disk not found'.format( vm.name, disklabel ))
@@ -1645,8 +1659,8 @@ class _vmomiGuestInfo( object ):
                      'macAddress' : nic.macAddress,
                      'backing'    : nic.backing, }
             if vm.summary.runtime.powerState == pst.poweredOn:
-                gnic = filter( lambda g: g.macAddress.lower() == nic.macAddress.lower(),
-                               vm.guest.net )
+                gnic = [ g for g in vm.guest.net
+                         if g.macAddress.lower() == nic.macAddress.lower() ]
                 if gnic:
                     prop[ 'ip' ] = self.vmnic_cidrs( gnic[0] )
             nics.append( prop )
@@ -2406,7 +2420,7 @@ class _vmomiVmGuestOperation_Registry( object ):
     @tidy_vimfaults
     def reg_value_set( self, path, name, value, type=None, wow=None ):
         def guess_type():
-            t = __builtin__.type( value )
+            t = builtins.type( value )
             # n.b. I don't know how to infer REG_EXPAND_SZ
             if t is int:                return self.REG_DWORD
             if t is long:               return self.REG_QWORD
@@ -2750,8 +2764,7 @@ def _isinstance( obj, typeref ):
 
 
 def get_seq_type( obj, typeref ):
-    return filter( lambda elt: _isinstance( elt , typeref ), obj )
-
+    return [ elt for elt in obj if _isinstance( elt, typeref ) ]
 
 def attr_get( obj, name ):
     for elt in obj:
@@ -2978,7 +2991,7 @@ def printmsg( *args, **kwargs ):
     prefix = []
     if timestring_format:
         prefix.append( timestring() )
-    if kwargs.has_key( 'progname' ):
+    if 'progname' in kwargs:
         if kwargs[ 'progname' ] is not None:
             prefix.append( kwargs[ 'progname' ] + ':' )
         del kwargs[ 'progname' ]

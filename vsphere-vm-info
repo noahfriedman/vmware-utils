@@ -16,6 +16,12 @@ from   pyVmomi    import vim
 import vspherelib     as vsl
 import sys
 
+try:
+    long
+except NameError:  # python3
+    long    = int
+    unicode = str
+
 #import httplib
 #httplib.HTTPConnection.debuglevel = 1
 
