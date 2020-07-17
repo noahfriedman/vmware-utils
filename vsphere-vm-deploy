@@ -24,6 +24,53 @@
 #	  informative diagnostics when something goes wrong.
 #	* support loading of deployment defaults from $VSPHERELIBRC
 
+# API notes:
+#
+# cimType is one of the attributes of the FileItem objects returned
+# from CreateImportSpec.  As best I can discern these correspond to
+# CIM_ResourcePool.ResourceType from the DMTF CIM Schema.
+# The type list (taken from version 2.53.0 of the schema).
+#
+#	 1	Other
+#	 2	Computer System
+#	 3	Processor
+#	 4	Memory
+#	 5	IDE Controller
+#	 6	Parallel SCSI HBA
+#	 7	FC HBA
+#	 8	iSCSI HBA
+#	 9	IB HCA
+#	10	Ethernet Adapter
+#	11	Other Network Adapter
+#	12	I/O Slot
+#	13	I/O Device
+#	14	Floppy Drive
+#	15	CD Drive
+#	16	DVD drive
+#	17	Disk Drive
+#	18	Tape Drive
+#	19	Storage Extent
+#	20	Other storage device
+#	21	Serial port
+#	22	Parallel port
+#	23	USB Controller
+#	24	Graphics controller
+#	25	IEEE 1394 Controller
+#	26	Partitionable Unit
+#	27	Base Partitionable Unit
+#	28	Power
+#	29	Cooling Capacity
+#	30	Ethernet Switch Port
+#	31	Logical Disk
+#	32	Storage Volume
+#	33	Ethernet Connection
+#	34	Multi-Mode Memory
+#	35	Non-Volatile Memory
+#	..	DMTF reserved
+#	0x8000..0xFFFF 	Vendor reserved
+#
+# Typically what we upload are disk drives (17) or cd/dvd images.
+
 # Code:
 
 from   __future__ import print_function
@@ -41,6 +88,9 @@ import six.moves.urllib.request as request
 from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
 
+# I don't want to see all those DynamicBlah props when debugging.
+#vim.DynamicData._propList=[]
+
 
 class OvfHandlerBase( vsl._super, vsl._with ):
     required_kwargs = [ 'vm_name', 'host', 'vsi', 'pool', 'ds', 'disk_format', 'network', 'folder' ]
@@ -48,6 +98,8 @@ class OvfHandlerBase( vsl._super, vsl._with ):
 
 
     def __init__( self, **kwargs ):
+        self.sleep_interval = 5  # refresh lease every 5s by default
+
         missing = { name : None for name in self.required_kwargs }
         for arg in kwargs:
             setattr( self, arg, kwargs[ arg ] )
@@ -58,32 +110,32 @@ class OvfHandlerBase( vsl._super, vsl._with ):
             msg = fmt.format( ', '.join( missing.keys() ))
             raise vsl.ApiError( msg )
 
-
     def ovfd_readin( self, fh ):
-        # Change the name of the vm in the ovf descriptor from whatever
-        # it has currently to that of the one named on the command line.
-        #
-        # This is absolutely not the right way to (not) traverse xml
-        # paths and modify them.  But do YOU want to pull in a full
-        # parser for this one trivial change?
-        self.ovfd = re.sub(
-            '<(Name|vssd:VirtualSystemIdentifier)>.*?</\\1>',
-            str.format( '<\\1>{}</\\1>', self.vm_name ),
-            fh.read() )
-
+        self.ovfd = fh.read()
 
     @vsl.tidy_vimfaults
     def init_spec( self ):
-        vimOvfM = vim.OvfManager
-        natmap  = vimOvfM.NetworkMapping( name='nat', network=self.network )
-        param   = vimOvfM.CreateImportSpecParams()
-        param.networkMapping.append( natmap )
+        ovfMv  = vim.OvfManager
+        ovfMs  = self.vsi.si.content.ovfManager
 
-        OvfMgr = self.vsi.si.content.ovfManager
+        param  = ovfMv.CreateImportSpecParams(
+            entityName       = self.vm_name,
+            diskProvisioning = self.disk_format or self.default_disk_format, )
+
+        # Provide a mapping to substitute the label in ovf with the network
+        # object provided via command line.
+        # TODO: handle more than one nic
+        pdp    = ovfMv.ParseDescriptorParams()
+        parsed = ovfMs.ParseDescriptor( ovfDescriptor=self.ovfd, pdp=pdp )
+        if parsed and parsed.network:
+            netmap = ovfMv.NetworkMapping( name    = parsed.network[0].name,
+                                           network = self.network )
+            param.networkMapping.append( netmap )
+
         # If anything is wrong this will raise an exception in some
         # circumstances (e.g. permission error), or just return error
         # messages in others (missing or incomplete items, etc)
-        self.spec = OvfMgr.CreateImportSpec( self.ovfd, self.pool, self.ds, param )
+        self.spec = ovfMs.CreateImportSpec( self.ovfd, self.pool, self.ds, param )
         if not self.spec.importSpec:
             summary = "Could not create import spec:"
             if len( self.spec.error ) == 1:
@@ -94,11 +146,20 @@ class OvfHandlerBase( vsl._super, vsl._with ):
                     diag.append( '\t' + error.msg )
             raise vsl.cliGeneralError( diag )
 
-        vd = vim.vm.device.VirtualDisk
-        for disk in filter( lambda elt: isinstance( elt.device, vd ),
-                            self.spec.importSpec.configSpec.deviceChange ):
-            disk.device.backing = self.disk_backing_spec()
+        configSpec = self.spec.importSpec.configSpec
 
+        vvc = vim.vm.device.VirtualVideoCard
+        for vcard in [ elt for elt in configSpec.deviceChange
+                       if isinstance( elt.device, vvc ) ]:
+            # FIXME: I've run into cases where setting non-autodetect
+            # values for these would make provisioning fail.  Rather than
+            # just force this selection we should probably consult the
+            # compute resource capabilities or query config options
+            # (obj.environmentBrowser.capabilities/QueryConfigOptionEx())
+            # to see what things we can request.
+            vcard.device.videoRamSizeInKB = None
+            vcard.device.graphicsMemorySizeInKB = None
+            vcard.device.useAutoDetect = True
 
 
     def disk_backing_spec( self ):
@@ -150,6 +211,7 @@ class OvfHandlerBase( vsl._super, vsl._with ):
         try:
             self.start_timer()
             for elt in self.spec.fileItem:
+                self.current_completed_offset = 0
                 self.upload_fileItem( elt )
             lease.Complete()
             self.print_status( "Finished.\n" )
@@ -183,9 +245,16 @@ class OvfHandlerBase( vsl._super, vsl._with ):
     def print_upload_status( self, end='' ):
         item = self.current_fileItem
         size = item.size
-        pos  = '{0:>{1},d} / {2:<,d}'.format( item.tell(), len( str( size )), size )
+
+        ippos = self.current_completed_offset
+        ipos  = item.tell()
+        self.current_completed_offset = ipos
+        frate = ( ipos - ippos ) / float( self.sleep_interval )
+
+        pos  = '{0:>{1},d} / {2:<,d}'.format( ipos, len( str( size )), size )
         pcts = '... {:.2f}%'.format( self.progress() )
-        self.print_status( 'Uploading', item.name, pos, pcts, end=end )
+        rate = '   ({}/s)'.format( vsl.scale_size( frate ))
+        self.print_status( 'Uploading', item.name, pos, pcts, rate, end=end )
 
 
     def print_status( self, *args, **kwargs ):
@@ -204,8 +273,8 @@ class OvfHandlerBase( vsl._super, vsl._with ):
             file.flush()
 
 
-    def start_timer(self):
-        threading.Timer( 1, lambda: self.timer() ).start()
+    def start_timer( self ):
+        threading.Timer( self.sleep_interval, lambda: self.timer() ).start()
 
 
     def timer( self ):
@@ -267,7 +336,14 @@ class OvfHandler( OvfHandlerBase ):
         return self.DiskFile( self.dirname + item.path, 'rb' )
 
 
-formats = [ 'sesparse', 'thin', 'zeroedthick', 'eagerzeroedthick' ]
+formats = { 'sesparse'         : 'seSparse',
+            'thin'             : 'thin',
+            'thick'            : 'thick',
+            'zeroedthick'      : 'thick',
+            'eagerzeroedthick' : 'eagerZeriedThick',
+            None               : None,
+           }
+
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
@@ -278,7 +354,7 @@ def get_args():
     p.add( '-d', '--datastore',                    help='Name of datastore for vm storage' )
     p.add( '-c', '--cluster',                      help='Name of the cluster or hypervisor host for new vm' )
     p.add( '-n', '--network',                      help='Network label for first virtual nic' )
-    p.add( '-F', '--disk-format', choices=formats, help='Format for VM disks' )
+    p.add( '-F', '--disk-format', choices=formats.keys(), help='Format for VM disks' )
     p.add_bool( '-E', '--allow-extraconfig',       help='Include any ExtraConfig settings (usually disallowed)')
     p.add( 'ova',  nargs=1,                        help='ova or ovf file' )
     return p.parse()
@@ -307,7 +383,7 @@ def main():
                            vsi = vsi,
                           pool = pool,
                             ds = ds,
-                   disk_format = args.disk_format,
+                   disk_format = formats[ args.disk_format ],
                        network = network,
                         folder = folder )
 
