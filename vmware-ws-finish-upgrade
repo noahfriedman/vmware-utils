@@ -14,6 +14,7 @@ main()
         * ) exec sudo "$0" "$@" || exit $? ;;
     esac
 
+    systemctl daemon-reload
     vmware-ws-ctl system stop
 
     svcs='vmware
@@ -37,7 +38,10 @@ main()
                          vmware/vmnet8/nat.mac
     )
 
-    sed -i.bak -e '/^accept.*EULA/s/none/yes/' /etc/vmware/config
+    sed -i.bak \
+        -e '/^accept.*EULA/s/none/yes/' \
+        -e '/^installerDefaults.*initialized/s/none/yes/' \
+        /etc/vmware/config
 }
 
 main "$@"
