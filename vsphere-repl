@@ -45,13 +45,10 @@ def _overrideGetPropertyList( orig, traceback=traceback ):
 
         callstack = [ frame[ 2 ] for frame in traceback.extract_stack( None, 2 ) ]
         if callstack[ 0 ] == 'FormatObject':
-            try:
-                for elt in res[:]:  # work on slice since we're modifying list
-                    if elt.name in FormatObject_elide:
-                        res.remove( elt )
-                res.sort( key=lambda elt: elt.name )
-            except:
-                raise
+            for elt in res[:]:  # work on slice since we're modifying list
+                if elt.name in FormatObject_elide:
+                    res.remove( elt )
+            res.sort( key=lambda elt: elt.name )
         return res
 
     orig._GetPropertyList = classmethod( _GetPropertyList )
@@ -83,8 +80,8 @@ def pp( *args, **kwargs ):
     for arg in args:
         repl_pp.pprint( arg, **kwargs )
 
-def bt( cmd ):
-    return subprocess.check_output( [cmd] ).rstrip( ' \t\r\n' )
+def bt( *cmd ):
+    return subprocess.check_output( cmd ).decode( sys.stdout.encoding ).rstrip( ' \t\r\n' )
 
 def load( filename ):
     with open( filename, 'r' ) as f:
@@ -96,13 +93,16 @@ if __name__ == '__main__':
     args = vsl.ArgumentParser( loadrc=True ).parse()
     vsi  = vsl.vmomiConnect( args )
 
+    banner = '{} {} | {}'.format(
+        vsi.si.content.about.apiType,
+        vsi.si.content.about.apiVersion,
+        vsi.si.content.about.fullName )
+
     # Don't display 'None' if there is nothing to display.
     sys.displayhook = lambda arg: (arg is None) or pp( arg )
-    code.interact(
-        banner = '{} {} | {}'.format(
-            vsi.si.content.about.apiType,
-            vsi.si.content.about.apiVersion,
-            vsi.si.content.about.fullName ),
-        local = locals() )
+    try:
+        code.interact( banner=banner, local=locals(), exitmsg='' )
+    except TypeError:
+        code.interact( banner=banner, local=locals(), )  # python2.7
 
 # vsphere-repl ends here
