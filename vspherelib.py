@@ -562,13 +562,26 @@ class Timer( object ):
 
     def __init__( self, label ):
         self.label = label
-        self.beg_cl = time.clock()
-        self.beg_tm = time.time()
+        self.beg_cl = self.process_time()
+        self.beg_tm = self.perf_counter()
+
+    # n.b. python 3.8 removes time.clock entirely.
+    def process_time( self ):
+        try:
+            return time.process_time()
+        except AttributeError:
+            return time.clock()  # pre-3.3
+
+    def perf_counter( self ):
+        try:
+            return time.perf_counter()
+        except AttributeError:
+            return time.time()   # pre-3.3
 
     def report( self ):
         if not self.enabled: return
-        tot_tm = time.time()  - self.beg_tm
-        tot_cl = time.clock() - self.beg_cl
+        tot_tm = self.perf_counter() - self.beg_tm
+        tot_cl = self.process_time() - self.beg_cl
         self.__class__.acc_tm += tot_tm
         self.__class__.acc_cl += tot_cl
 
@@ -1346,7 +1359,7 @@ class _vmomiFolderMap( object ):
                 except KeyError:
                     pass
             if name:
-                if name[0][0] is not '/':
+                if name[0][0] != '/':
                     name.insert( 0, '' )
                 name = str.join( '/', name )
                 p2f[ name ]      = start_obj
