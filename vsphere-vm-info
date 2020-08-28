@@ -716,7 +716,7 @@ class DisplayVM( object ):
 
 class DisplayVMs_1line( object ):
     def __init__( self, vmlist, verbose ):
-        self.verbose = verbose
+        self.verbose = verbose or 0
 
         fields = [
             [ 'P',          '_powerstate',            '',     ' ' ],
