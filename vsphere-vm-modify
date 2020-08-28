@@ -286,7 +286,7 @@ class mVM():
     def clone_obj( obj, *attrs ):
         if not attrs:
             exclude = ['dynamicProperty', 'dynamicType']
-            attrs = filter( lambda s: s not in exclude, obj.__dict__ )
+            attrs = [ elt for elt in obj.__dict__ if elt not in exclude ]
         new = type( obj )()
         for attr in attrs:
             if hasattr( obj, attr ):
@@ -338,8 +338,8 @@ class mVM():
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
 
         devlabel = self.args.label[0]
-        dev = filter( lambda n: n.deviceInfo.label == devlabel,
-                      vm.config.hardware.device )
+        dev = [ elt for elt in vm.config.hardware.device
+                if elt.deviceInfo.label == devlabel ]
         if not dev:
             raise vsl.NameNotFoundError(
                 '{}: "{}" device not found'.format( vm_name, devlabel ))
@@ -388,9 +388,9 @@ class mVM():
             disklabel = 'Hard disk {}'.format( disknum )
         except ValueError:
             disklabel = self.args.disknum
-        disk = filter( lambda n: n.deviceInfo.label == disklabel,
-                      vsl.get_seq_type( vm.config.hardware.device,
-                                        vim.vm.device.VirtualDisk ))
+        disk = [ elt for elt in vm.config.hardware.device
+                 if (isinstance( elt, vim.vm.device.VirtualDisk )
+                     and elt.deviceInfo.label == disklabel) ]
         if not disk:
             raise vsl.NameNotFoundError(
                 '{}: "{}" disk not found'.format( vm_name, disklabel ))
@@ -526,7 +526,7 @@ class mVM():
                     return pg.switchUuid
 
         def make_backing( netlabel ):
-            if isinstance( netlabel, vim.vm.device.VirtualEthernetCard ):
+            if isinstance( netlabel, ethernet ):
                 nic = netlabel
                 backing = type( nic.backing )()
                 try:
@@ -563,8 +563,9 @@ class mVM():
         except ValueError:
             niclabel = self.args.nicnum
 
-        nic = filter( lambda n: n.deviceInfo.label == niclabel,
-                      vsl.get_seq_type( vm.config.hardware.device, ethernet ))
+        nic = [ elt for elt in vm.config.hardware.device
+                if (isinstance( elt, ethernet )
+                    and elt.deviceInfo.label == niclabel) ]
         if not nic:
             if niclabel == 'new':
                 if not self.args.netlabel:
