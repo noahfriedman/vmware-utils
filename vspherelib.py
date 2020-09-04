@@ -3044,7 +3044,14 @@ def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
     try:
         while True:
             print( prompt, end='' )
-            ans = raw_input().lower()
+            try:
+                # Try this first, because `input' in python 2.x evals the result.
+                # In python 3.x, it replaces `raw_input' without evaling.
+                # It's easier to try raw_input than try to figure out what
+                # the semantics of `input' are directly.
+                ans = raw_input().lower()
+            except NameError:
+                ans = input().lower()
             if ans in response:
                 return response[ans]
             elif ans == '' and default is not None:
