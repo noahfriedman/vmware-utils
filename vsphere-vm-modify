@@ -230,12 +230,11 @@ class mVM():
 
     def doit( self ):
         try:
-            targets = self.args.vm
+            targets = [ x.name for x in self.vsi.find_vm( self.args.vm ) ]
         except AttributeError:
             targets = self.args.vmx
-        vmlist = [ x.name for x in self.vsi.find_vm( targets ) ]
 
-        for arg in vmlist:
+        for arg in targets:
             try:
                 task = self.method( arg )
                 if task:
