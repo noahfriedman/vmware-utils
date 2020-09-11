@@ -1,0 +1,14 @@
+#!/bin/sh
+
+# Rewrite /proc/version after kernel 5.8.0 so that Workstation 15's
+# vmware-modconfig doesn't shit its tiny little mind.
+# Failure to parse the change is one thing. But segfaulting over it?!?
+
+if ! grep -q /proc/version /proc/mounts; then
+    sed -e 's/gcc (GCC)/gcc version/' \
+        -e 's/\(, GNU ld\)/ (GCC)\1/' /proc/version > /run/version
+
+    mount -o bind,overlay /run/version /proc/version
+fi
+
+# eof
