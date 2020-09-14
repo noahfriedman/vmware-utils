@@ -83,10 +83,10 @@ def main():
                         vsl.scale_size( size ).split( ' ' ),
 
                         vsl.scale_size( free ).split( ' ' ),
-                        100 * free / size,
+                        int( 100 * free / size ),
 
                         vsl.scale_size( ucom ).split( ' '),
-                        100 * ucom / size )
+                        int( 100 * ucom / size ))
         print( s )
 
 
