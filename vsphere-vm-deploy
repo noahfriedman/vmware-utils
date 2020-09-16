@@ -76,6 +76,7 @@
 from   __future__ import print_function
 
 
+import io
 import os
 import re
 import sys
@@ -111,7 +112,7 @@ class OvfHandlerBase( vsl._super, vsl._with ):
             raise vsl.ApiError( msg )
 
     def ovfd_readin( self, fh ):
-        self.ovfd = fh.read()
+        self.ovfd = fh.read().decode( 'iso8859-1' ) # Any 8bit will do
 
     @vsl.tidy_vimfaults
     def init_spec( self ):
@@ -222,6 +223,7 @@ class OvfHandlerBase( vsl._super, vsl._with ):
 
 
     def upload_fileItem( self, name ):
+        self.current_fileName = name.path
         item = self.current_fileItem = self.get_fileItem( name )
         size = item.size
         url  = self.device_url( name ).url.replace( '*', self.host )
@@ -244,6 +246,7 @@ class OvfHandlerBase( vsl._super, vsl._with ):
 
     def print_upload_status( self, end='' ):
         item = self.current_fileItem
+        name = self.current_fileName
         size = item.size
 
         ippos = self.current_completed_offset
@@ -254,7 +257,7 @@ class OvfHandlerBase( vsl._super, vsl._with ):
         pos  = '{0:>{1},d} / {2:<,d}'.format( ipos, len( str( size )), size )
         pcts = '... {:.2f}%'.format( self.progress() )
         rate = '   ({}/s)'.format( vsl.scale_size( frate ))
-        self.print_status( 'Uploading', item.name, pos, pcts, rate, end=end )
+        self.print_status( 'Uploading', name, pos, pcts, rate, end=end )
 
 
     def print_status( self, *args, **kwargs ):
@@ -298,17 +301,19 @@ class OvaHandler( OvfHandlerBase ):
 
 
     def get_fileItem( self, item ):
-        members = self.tar.getnames()
+        members = self.tar.getmembers()
         if callable( item ):
-            res = filter( item, members )
+            res = [ p for p in members if item( p.path ) ]
         else:
-            res = filter( lambda p: p == item.path, members )
+            res = [ p for p in members if p.path == item.path ]
         if res:
-            return self.tar.extractfile( res[0] )
+            obj = self.tar.extractfile( res[0] )
+            obj.size = res[0].size
+            return obj
 
 
 class OvfHandler( OvfHandlerBase ):
-    class DiskFile( file ):
+    class DiskFile( io.FileIO ):
         # Provides one additional property over base file class, which
         # cannot itself be modified with arbitrary instance attributes.
         size = property( lambda self: self._size() )
@@ -327,7 +332,7 @@ class OvfHandler( OvfHandlerBase ):
         if self.dirname == ovf:
             self.dirname = ''
 
-        with open( ovf, 'r' ) as f:
+        with open( ovf, 'rb' ) as f:
             self.ovfd_readin( f )
         self.init_spec()
 
