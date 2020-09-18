@@ -5,8 +5,6 @@
 # Created: 2019-05-21
 # Public domain
 
-# $Id: vsphere-vm-grep,v 1.3 2019/08/23 22:57:32 friedman Exp $
-
 # Commentary:
 # Code:
 
@@ -16,8 +14,6 @@ from   pyVmomi    import vim, vmodl
 import vspherelib     as vsl
 import sys
 import re
-import functools
-
 
 
 def get_args():
@@ -156,8 +152,7 @@ def main():
         actual_proplist.remove( 'name' )
         iter_proplist = actual_proplist
 
-    keyfn = functools.cmp_to_key( lambda a, b: cmp( a[ 'name' ], b[ 'name' ] ))
-    vmlist.sort( key=keyfn )
+    vmlist.sort( key=lambda elt: elt[ 'name' ] )
     for vm in vmlist:
         firstmatch = True
         for prop in iter_proplist:
