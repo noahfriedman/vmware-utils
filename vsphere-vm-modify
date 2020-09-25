@@ -29,7 +29,7 @@ class NotSupportedError( vsl.vmomiError ): pass
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
-    p_sub = p.add_subparsers( dest='cmd' )
+    p_sub = p.add_subparsers( dest='cmd', required=True )
 
     p_com_vm = vsl.ArgumentParser( add_help=False )
     p_com_vm.add( 'vm', nargs='+', help='Virtual machines' )
