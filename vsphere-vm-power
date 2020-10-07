@@ -73,6 +73,8 @@ class powerOnCallback( object ):
 
         if state in [vim.TaskInfo.State.success, vim.TaskInfo.State.error]:
             if state == vim.TaskInfo.State.error:
+                val = change.val
+                vsl.printerr( val.entityName, val.descriptionId, val.error.msg )
                 self.error = 1
 
             for elt in self.att:
@@ -136,8 +138,7 @@ def obj_datacenter( obj ):
 # For data centers, VMware recommends using this interface as of api 5.1
 # rather than powering on VMs directly one at a time, because the latter
 # method doesn't provide manual DRS recommendations.  This method also
-# involves fewer round trips with the server to launch each task.  (The
-# multi-vm method is available with standalone hosts as well.)
+# involves fewer round trips with the server to launch each task.
 def power_on( vsi, vmlist ):
     dc = obj_datacenter( vmlist[0] )
     dc.recentTask # raise exception if we cannot inspect DC tasks
@@ -160,8 +161,11 @@ def main():
     if not vmlist:
         return
 
-    # esxi4.x doesn't handle PowerOnMultiVM_Task
+    # Standalone hosts can't use the datacenter-based poweron method when
+    # they aren't managed, or are detached.  Very old servers don't even
+    # define the method.
     if ( args.cmd in ['on', 'resume']
+         and vsi.si.content.about.productLineId == 'vpx'
          and vsi.si.content.about.apiVersion >= '5.5' ):
         try:
             return power_on( vsi, vmlist )
