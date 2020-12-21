@@ -731,7 +731,7 @@ class mVM():
         vm, cfgspec = self._vm_reconfig_prep( vm_name )
         try:
             version = 'vmx-{:02d}'.format( self.args.version )
-        except ValueError:
+        except (TypeError, ValueError):
             version = None
         pst = vim.VirtualMachine.PowerState
         if vm.runtime.powerState == pst.poweredOn:
