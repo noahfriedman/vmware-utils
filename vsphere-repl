@@ -5,19 +5,46 @@
 # Created: 2018-09-05
 # Public domain
 
-# $Id: vsphere-repl,v 1.3 2018/09/29 02:51:57 friedman Exp $
-
 # Commentary:
 # Code:
 
 from   __future__ import print_function
 
-import sys
+import atexit
 import code
-import subprocess
+import os
 import pprint
+import readline
+import rlcompleter
+import subprocess
+import sys
+
 import vspherelib     as vsl
 from   pyVmomi    import vim, vmodl
+
+
+# Provide saved history and tab completion on python symbols
+# Shamelessly stolen from Python library manual
+class Repl( code.InteractiveConsole ):
+    def __init__( self, locals=None, histfile=None ):
+        code.InteractiveConsole.__init__( self, locals )
+
+        if histfile is None:
+            histdir  = os.getenv( 'XDG_CACHE_HOME' ) or os.getenv( 'HOME' )
+            histfile = os.path.join( histdir, ".vspherelib_history" )
+        self.init_history( histfile )
+
+    def init_history(self, histfile):
+        readline.parse_and_bind( 'tab: complete')
+        try:
+            readline.read_history_file( histfile )
+        except FileNotFoundError:
+            pass
+        atexit.register( self.save_history, histfile )
+
+    def save_history( self, histfile ):
+        readline.set_history_length( 1024 )
+        readline.write_history_file( histfile )
 
 
 # This is a hideous hack.
@@ -100,9 +127,10 @@ if __name__ == '__main__':
 
     # Don't display 'None' if there is nothing to display.
     sys.displayhook = lambda arg: (arg is None) or pp( arg )
+    repl = Repl( locals=locals() )
     try:
-        code.interact( banner=banner, local=locals(), exitmsg='' )
+        repl.interact( banner=banner, exitmsg='' )
     except TypeError:
-        code.interact( banner=banner, local=locals(), )  # python2.7
+        repl.interact( banner=banner )  # python2.7
 
 # vsphere-repl ends here
