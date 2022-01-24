@@ -22,6 +22,11 @@ import sys
 import vspherelib     as vsl
 from   pyVmomi    import vim, vmodl
 
+try:
+    reload
+except NameError:
+    from importlib import reload   # python3
+
 
 # Provide saved history and tab completion on python symbols
 # Shamelessly stolen from Python library manual
