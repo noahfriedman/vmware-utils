@@ -1,0 +1,126 @@
+#!/bin/sh
+
+test ":${1:-start}" = :start || exit 0
+
+touch /var/lock/subsys/local
+
+######
+##
+######
+
+true && # change to `true' to enable, `false' to disable
+case ${HOSTNAME-`hostname`} in
+    *-template.* | *-template )
+        {
+            echo Removing any previously generated ssh host keys.
+            echo To prevent this, remove '"template"' from the hostname
+            echo Or edit $0 to remove this check.
+        } 1>&2
+
+        if systemctl -q is-active sshd.service; then
+	    systemctl stop  sshd.service
+            rm -f /etc/ssh/ssh_host_*_key*
+	    systemctl start sshd.service
+	fi ;;
+esac
+
+######
+##
+######
+
+dmi=/sys/class/dmi/id
+read platform < $dmi/product_name
+read model    < $dmi/product_version
+
+false && # change to `true' to enable, `false' to disable
+case $platform:$model in
+    "VMware Virtual Platform":* )
+        if modinfo -F parm vmwgfx | grep -q enable_fbdev ; then
+            vmwgfx_options='enable_fbdev=1'
+        fi
+        modprobe vmwgfx $vmwgfx_options
+        fbset -xres 1024 -yres 768 -depth 32
+        setfont ter-v12n ;;
+esac
+
+######
+##
+######
+
+# Disable TCP segment offload and other data offload (other than
+# checksumming) on vmxnet3 interfaces.  These tend to hurt interactive
+# traffic e.g. vnc, and IP forwarding.
+
+false && # change to `true' to enable, `false' to disable
+for dev in /sys/class/net/* ; do
+    iface=${dev##*/}
+    case $iface in lo ) continue ;; esac
+
+    case `ethtool -i $iface 2>&1` in
+        *'driver: vmxnet3'* )
+            ethtool -K $iface tso off  gso off  gro off  lro off ;;
+    esac
+done
+
+######
+##
+######
+
+# Instead of disabling TSO, LRO, etc. try increasing the RX ring buffers.
+# The rx-jumbo ring is used by LRO, so increase that even if not using
+# jumbo MTU.
+
+false && # change to `true' to enable, `false' to disable
+for dev in /sys/class/net/* ; do
+    iface=${dev##*/}
+    case $iface in lo ) continue ;; esac
+
+    case `ethtool -i $iface 2>&1` in
+        *'driver: vmxnet3'* )
+            # Defaults:        rx 1024  rx-mini   0  rx-jumbo  256  tx  512
+            ethtool -G $iface  rx 2048  rx-mini 128  rx-jumbo  512  tx 1024
+            ;;
+    esac
+done
+
+######
+##
+######
+
+fbcon=/sys/class/graphics/fbcon
+if [ -f $fbcon/cursor_blink ]; then
+    echo 0 > $fbcon/cursor_blink
+fi
+
+######
+##
+######
+
+{
+    # systemd doesn't set TERM, and doesn't run connected to /dev/console.
+    # These commands require it or misbehaves on some platforms.
+
+    TERM=linux setterm -blank 30 -powerdown 30 -msg off
+    TERM=linux setterm -powersave powerdown
+
+    # Don't spam vtys with kernel messages
+    dmesg --console-off
+
+    #modprobe pcspkr
+    kbdrate -r 30
+} < /dev/console
+
+dmesg -Tx --time-format iso > /var/log/boot-dmesg.log
+
+######
+##
+######
+
+for rc in /etc/rc.d/rc.host /etc/rc.host ; do
+    if [ -x $rc ]; then
+        $rc "$@"
+        break
+    fi
+done
+
+: eof
