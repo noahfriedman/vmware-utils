@@ -2949,12 +2949,15 @@ def scale_size( size, si=False, forceunit=None, roundp=False, fp=2, minimize=Fal
     fmtsize = 1000 if si else 1024
     suffix  = ('B', 'K', 'M', 'G', 'T', 'P', 'E')
     idx     = 0
-    size    = float( size )
+    isneg   = size < 0
+    size    = abs( float( size ) )
 
     if forceunit in suffix:
         while suffix[ idx ] != forceunit:
             size /= fmtsize
             idx  += 1
+    elif size < fmtsize:
+        pass
     else:
         while size >= fmtsize:
             size /= fmtsize
@@ -2963,17 +2966,19 @@ def scale_size( size, si=False, forceunit=None, roundp=False, fp=2, minimize=Fal
         if size < 10 and not minimize: # Prefer 4096M to 4G
             size *= fmtsize
             idx  -= 1
+    if isneg:
+        size = -size
 
     if roundp:              size = round( size )
     if size == int( size ): size = int( size )
 
     if  forceunit: unit = ''
-    elif idx == 0: unit = ''
+    elif idx == 0: unit = suffix[ idx ]
     elif       si: unit = suffix[ idx ] +  'B'
     else:          unit = suffix[ idx ] + 'iB'
 
     fmtstr = '{{:.{}f}} {{}}'.format( fp ) if type( size ) is float else '{} {}'
-    return fmtstr.format( size, unit )
+    return fmtstr.format( size, unit ).strip()
 
 
 def timestring( spec=None ):
