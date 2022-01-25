@@ -2981,6 +2981,70 @@ def scale_size( size, si=False, forceunit=None, roundp=False, fp=2, minimize=Fal
     return fmtstr.format( size, unit ).strip()
 
 
+def mkrowfmt( data, sep='  ', fill={} ):
+    '''Make column-aligned format string for tabular data.
+
+       Elements of 'fill' are keyed by column index.
+       Key 'None' is a default for any unspecified columns.
+
+       Values are of the form '[padchar][!conv][<=>^][suffix]' where any
+       section is optional.  Suffix is appended to any computed width, and
+       can e.g. be of the form '.2f' for precision.
+
+       Alternatively, values can be a format string with the sequence '{}'
+       replaced with the computed width of the column.  Since this result
+       is used to generate another format string, you should also provide
+       quoted outer braces for the final substitution.  For example, to
+       show a percentage in parentheses, use '({{:>{}}}%)'.
+
+       The return value is a tuple consisting of the computed format
+       string and a list of widths of the columns.
+
+    '''
+
+    ncols = len( data[0] )
+    if None in fill:
+        fill = fill.copy() # don't modify caller's value
+        for n in range( ncols ):
+            fill[n] = fill[n] if n in fill else fill[None]
+        del fill[None]
+
+    width = [ 0 for _ in data[0] ]
+    for row in data:
+        for col in range( ncols ):
+            width[col] = max( width[col], len( str( row[col] )))
+    if (ncols - 1) not in fill: # Don't pad last column if no fill spec
+        width[ncols - 1] = ''
+    fmtv = [ "{{:<{}}}".format( n ) for n in width ]
+
+    for col in fill:
+        pad = fill[col]
+
+        if pad.count( '{' ) > 0 and pad.count( '}' ) > 0:
+            fmtv[col] = pad.format( width[col] )
+        else:
+            try:
+                i = pad.index( '!' )
+                conv = pad[ i : i+2 ]
+                pad = pad.replace( conv, '', 1 )
+                fmtv[col] = fmtv[col].replace( '{', '{' + conv, 1 )
+            except ValueError:
+                pass
+
+            for c in '>^=<': # search in order of most likely specified
+                if c in pad:
+                    pad = pad.partition( c )
+                    break
+            else:
+                pad = ( '', '<', '' )
+
+            fmtv[col] = fmtv[col].replace( '<', ''.join( pad[0:2] ), 1 )
+            if pad[2]:
+                fmtv[col] = fmtv[col][ : -1 ] + pad[2] + '}'
+
+    return (sep.join( fmtv ), width)
+
+
 def timestring( spec=None ):
     sec = time.time()
     spec = spec or timestring_format or '%c' # '%Y-%m-%dT%H:%M:%S%z'
