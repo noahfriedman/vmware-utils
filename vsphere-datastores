@@ -20,6 +20,15 @@ props = [ 'summary.name',
           'summary.freeSpace',
           'summary.uncommitted' ]
 
+# The empty string fields are removed later, but are included initially as
+# placeholders since the size and percent columns are joined together.
+column_labels = [ 'NAME',
+                  'SIZE',
+                  'PROVISIONED', '',
+                  'FREE',        '',
+                  'UNPROVISIONED']
+
+
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
     p.add_bool( '-H', '--header', help='Show column headers' )
@@ -46,6 +55,22 @@ def key_ds_name( elt ):
     return re_lt999.sub( lambda m: '{:04d}'.format( int( m.group( 1 ))), s )
 
 
+def show_header( width, sep='  ' ):
+    for _ in range( column_labels.count( '' ) ):
+        column_labels.remove( '' )
+
+    hwidth = [ max( len( a ), b )
+               for a, b in zip( column_labels,
+                                [     *width[0:2],
+                                  sum( width[2:4], 4 ),
+                                  sum( width[4:6], 4 ),
+                                      *width[6:],
+                                ])]
+    hfmt = (sep.join( [ '{{:>{}}}'.format( n ) for n in hwidth ] )
+               .replace( '>', '<', 1 ) )
+    print( hfmt.format( *column_labels ).rstrip() )
+
+
 def main():
     args = get_args()
     vsi  = vsl.vmomiConnect( args )
@@ -56,39 +81,50 @@ def main():
     if not ds:
         return
 
-    maxlen = max( map( lambda x: len( x['summary.name'] ), ds ) )
-    if args.header:
-        hfmt = ' '.join(('{0:%s}' % maxlen,
-                        '{1:>10}',
-                        '    {2:>16}',
-                        '    {3:>17}'))
-        s = hfmt.format( 'NAME', 'SIZE', 'FREE', 'UNCOMMITTED' )
-        print( s )
-
-    fmt = ' '.join(( '{0:%s}' % maxlen,
-                     '{1[0]:>6} {1[1]:>3}',
-                     '  {2[0]:>8} {2[1]:>3} ({3:2d}%)',
-                     '  {4[0]:>8} {4[1]:>3} ({5:3d}%)' ))
-
+    data = []
     for elt in sorted( ds, key=key_ds_name ):
-        name = elt['summary.name']
+        name =      elt['summary.name']
         size = int( elt['summary.capacity'] )
         free = int( elt['summary.freeSpace'] )
-        try: # Not sure why this can sometimes be unavailable
+        try: # may be unavailable if e.g. 'summary.accessible' is false
             ucom = int( elt['summary.uncommitted'] )
         except KeyError:
             ucom = 0
 
-        s = fmt.format( name,
-                        vsl.scale_size( size ).split( ' ' ),
+        used  = size - free
+        prov  = used + ucom            # provisioned
+        uprov = max( 0, size - prov )  # unprovisioned, or 0 if over
 
-                        vsl.scale_size( free ).split( ' ' ),
-                        int( 100 * free / size ),
+        data.append( [ name,
+                       vsl.scale_size( size ),
+                       vsl.scale_size( prov ), int( 100 * prov / size ),
+                       vsl.scale_size( free ), int( 100 * free / size ),
+                       vsl.scale_size( uprov ), ])
 
-                        vsl.scale_size( ucom ).split( ' '),
-                        int( 100 * ucom / size ))
-        print( s )
+    # Don't show the unprovisioned column at all if none of the datastores
+    # have any unprovisioned space.
+    if all( row[-1] == '0' for row in data ):
+        column_labels.pop()
+        for row in data: row.pop()
 
+    if args.header:
+        data.append( column_labels )
+
+    sep  = '    '
+    fill = { 0    : '<',
+             3    : '({{:>{}}}%)',
+             5    : '({{:>{}}}%)',
+             None : '>', }
+    fmt, width = vsl.mkrowfmt( data, sep=sep, fill=fill )
+    fmt = fmt.replace( sep + '(', ' (' )
+
+    if args.header:
+        data.pop()
+        show_header( width, sep=sep )
+
+    for row in data:
+        if row[-1] == '0': row[-1] = ''
+        print( fmt.format( *row ).rstrip() )
 
 ##########
 
