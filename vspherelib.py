@@ -692,6 +692,26 @@ class ArgumentParser( argparse.ArgumentParser, _super, _with ):
             return optname[ 2: ].replace( '-', '_' )
         return args[0][ 1: ]
 
+    def add_subparsers( self, *args, **kwargs ):
+        try:
+            return self.super.add_subparsers( *args, **kwargs )
+        except TypeError as err:
+            # python3 3.6 and earlier removed support for the `required'
+            # keyword which was available in python27.  It was restored in
+            # version 3.7. For earlier versions, we add the attribute manually.
+            if err.args[0].find( "argument 'required'" ) >= 0:
+                # we can only have one subparser, so remove whatever was added
+                # because it was broken by this exception.
+                self._subparsers = None
+
+                required = kwargs.pop( 'required', False )
+                subparser = self.super.add_subparsers( *args, **kwargs )
+                if required:
+                    subparser.required = required
+                return subparser
+            else:
+                raise
+
     def add_argument( self, *args, **kwargs ):
         if not self.is_subparser:
             # Inject any values from rc file into defaults
