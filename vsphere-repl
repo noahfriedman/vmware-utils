@@ -52,6 +52,37 @@ class Repl( code.InteractiveConsole ):
         readline.write_history_file( histfile )
 
 
+class ReplPrettyPrinter( pprint.PrettyPrinter ):
+
+    # This method override adds padding so that all keys in a dict are
+    # aligned to the same column. That is, they are all indented to the
+     # length of the longest key.
+    def _format_dict_items( self, items, stream, indent, allowance, context, level ):
+        items_repr = [ (self._repr( key, context, level), ent) for key, ent in items ]
+        max_keylen = max( len( elt[0] ) for elt in items_repr ) + 1
+
+        write      = stream.write
+        indent    += self._indent_per_level
+        delimnl    = ',\n' + ' ' * indent
+        last_index = len( items_repr ) - 1
+
+        for i, (rep, ent) in enumerate( items_repr ):
+            last = i == last_index
+            write( rep )
+            write( ' ' * (max_keylen - len( rep )))
+            write( ': ' )
+            self._format( ent,
+                          stream,
+                          indent + max_keylen + 2,
+                          allowance if last else 1,
+                          context,
+                          level )
+            if last:
+                write( delimnl[ 0 : -self._indent_per_level ])
+            else:
+                write( delimnl )
+
+
 # This is a hideous hack.
 #
 # I want attributes to be displayed in sorted order interactively,
@@ -107,7 +138,7 @@ def restart():
     global vp;  vp  = vsl.pseudoPropAttr
     global vpa; vpa = vsl.pseudoPropAttr.deep
 
-repl_pp = pprint.PrettyPrinter( indent=2, width=40 )
+repl_pp = ReplPrettyPrinter( indent=2, width=60 )
 def pp( *args, **kwargs ):
     for arg in args:
         repl_pp.pprint( arg, **kwargs )
