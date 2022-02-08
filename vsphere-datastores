@@ -32,6 +32,7 @@ column_labels = [ 'NAME',
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
     p.add_bool( '-H', '--header', help='Show column headers' )
+    p.add_bool( '-l', '--list',   help='Just list datastore names with no data' )
     p.add( 'pattern',  nargs='*', help='Datastore names or patterns' )
     return p.parse()
 
@@ -49,7 +50,7 @@ re_ds_cap = re.compile( '\d+[KMGTPE]i?B', flags=re.I )
 # wanted the ordering of <n> to matter, but not <cap>.
 def key_ds_name( elt ):
     # Strip out any volume sizes in name; we can see that in a separate column.
-    s = re_ds_cap.sub( '', elt[ 'summary.name' ] )
+    s = re_ds_cap.sub( '', elt.get( 'summary.name', elt.get( 'name' )))
     # Pad remaining numbers less than 4 digits wide with leading zeroes,
     # so that a lexicographic ordering will not put "10" before "2".
     return re_lt999.sub( lambda m: '{:04d}'.format( int( m.group( 1 ))), s )
@@ -79,6 +80,11 @@ def main():
                                    ) if args.pattern else None
     ds = vsi.get_obj_props( [vim.Datastore], props, root=container )
     if not ds:
+        return
+
+    if args.list:
+        for elt in sorted( ds, key=key_ds_name ):
+            print( elt[ 'summary.name' ] )
         return
 
     data = []
