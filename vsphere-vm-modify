@@ -778,7 +778,7 @@ class mVM():
                         'from vncpasswd import d3des', ]
         for expr in try_imports:
             try:
-                exec( expr )
+                exec( expr, globals() )
                 break
             except ImportError:
                 pass
@@ -786,7 +786,8 @@ class mVM():
             raise vsl.cliGeneralError( 'Cannot set vnc key without d3des module.' )
         import base64
         import struct
-        ek  = d3des.deskey( (plain + '\x00'*8)[ :8 ], False )
+        bplain = plain.encode( 'iso8859-1' )
+        ek  = d3des.deskey( (bplain + b'\x00'*8)[ :8 ], False )
         buf = struct.pack( '32I', *ek )
         return base64.standard_b64encode( buf )
 
