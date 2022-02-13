@@ -157,9 +157,9 @@ if __name__ == '__main__':
     vsi  = vsl.vmomiConnect( args )
 
     banner = '{} {} | {}'.format(
-        vsi.si.content.about.apiType,
-        vsi.si.content.about.apiVersion,
-        vsi.si.content.about.fullName )
+        vsi.si_content.about.apiType,
+        vsi.si_content.about.apiVersion,
+        vsi.si_content.about.fullName )
 
     # Don't display 'None' if there is nothing to display.
     sys.displayhook = lambda arg: (arg is None) or pp( arg )
