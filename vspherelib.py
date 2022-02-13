@@ -32,19 +32,11 @@ import requests
 requests.packages.urllib3.disable_warnings()
 
 try:
-    import builtins
-except ImportError:
-    import __builtin__ as builtins
-
-try:
     long
 except NameError:  # python3
     long    = int
     unicode = str
 
-
-# Get the id for a managed object type: Folder, Datacenter, Datastore, etc.
-vim.ManagedObject.id = property( lambda self: self._moId )
 
 progname = os.path.basename( sys.argv[0] )
 
@@ -52,8 +44,18 @@ progname = os.path.basename( sys.argv[0] )
 # e.g.  '[%H:%M:%S%f]' or  '[%Y-%m-%d %H:%M:%S %z]'
 timestring_format = None
 
-debug     = bool( os.getenv( 'VSPHERELIB_DEBUG' ) )
-debug_rpc = bool( os.getenv( 'VSPHERELIB_DEBUG_RPC' ) )
+
+def _enablep( arg=None ):
+    # n.b. '' returns True because an ennvar set but empty means enable.
+    # Either the variable should not in the environment at all, or it
+    # should be set to one of these negative values, to keep disabled.
+    No = (None, False, 0, '0', 'no', 'off', 'false', 'disable')
+    if hasattr( arg, 'lower' ): arg = arg.lower()
+    return arg not in No
+
+debug     = _enablep( os.getenv( 'VSPHERELIB_DEBUG'     ) )
+debug_rpc = _enablep( os.getenv( 'VSPHERELIB_DEBUG_RPC' ) )
+
 
 
 POSIX = object()  # posix system, e.g. unix or osx
@@ -62,6 +64,9 @@ Undef = object()  # distinct default from None since None is hashable
 
 # WOW32, WOW64, WOWNative; methods use Native by default
 wowBitness = vim.vm.guest.WindowsRegistryManager.RegistryKeyName.RegistryKeyWowBitness
+
+# Get the id for a managed object type: Folder, Datacenter, Datastore, etc.
+vim.ManagedObject.id = property( lambda self: self._moId )
 
 
 def with_conditional_stacktrace( *exceptions ):
@@ -554,7 +559,7 @@ class pseudoPropAttr( dict, _super ):
 
 
 class Timer( object ):
-    enabled  = bool( os.getenv( 'VSPHERELIB_TIMER' ))
+    enabled  = _enablep( os.getenv( 'VSPHERELIB_TIMER' ))
     acc_tm   = 0
     acc_cl   = 0
     fmt      = '{0:<40}: {1: > 8.4f}s / {2:> 8.4f}s'
@@ -849,11 +854,11 @@ class Cache( object ):
         # exceptions in the threading module after the program has
         # otherwise terminated.  In 3.2 and later, daemon threads are
         # frozen at interpreter shutdown time.
-        if ( sys.version_info.major < 3
-             or ( sys.version_info.major == 3
-                  and sys.version_info.minor < 2 )):
-            weak = weakref.ref( self )
-            atexit.register( lambda: weak() and weak().thread_cleanup() )
+        if sys.implementation.name == 'cpython':
+            ver = sys.version_info
+            if ver.major < 3 or (ver.major == 3 and ver.minor < 2):
+                weak = weakref.ref( self )
+                atexit.register( lambda: weak() and weak().thread_cleanup() )
 
     def thread_cleanup( self ):
         for thr in self.timer.values():
@@ -1553,7 +1558,7 @@ class _vmomiChangeSpec( object ):
         devspec.device    = disk[0]
         #if mode:
         #    devspec.device.backing.diskMode = mode
-        devspec.device.capacityInBytes = str_to_bytes( size )
+        devspec.device.capacityInBytes = size_string_to_byte_count( size )
         return devspec
 
     def make_nic_changespec( self, vm, label, index=0, root=None ):
@@ -1875,7 +1880,7 @@ class vmomiConnect( _vmomiCollect,
             try:
                 # si.content is a property which refetches this object across
                 # the wire every time it's referenced.  For performance
-                # reasons, we fetch it once and uses that cached value throughout.
+                # reasons, we fetch it once and use that cached value throughout.
                 self.si_content = self.si.content
             except (vmodl.fault.MethodNotFound, vmodl.fault.SystemError) as e:
                 # SmartStubAdapter doesn't seem to work with ESXi 4.1 (or earlier?)
@@ -1969,12 +1974,12 @@ class vmomiMKS( object ):
         param[ 'html_path' ]   = getattr( self, 'html_path', '/ui/webconsole.html' )
         param[ 'html_port' ]   = getattr( self, 'html_port', 9443 )
         uri = ( 'https://{html_host}:{html_port}{html_path}'
-                +          '?vmId={vm_id}'
-                +        '&vmName={vm_name}'
-                +    '&serverGuid={serverGUID}'
-                +          '&host={fqdn}'
-                + '&sessionTicket={session}'
-                +    '&thumbprint={fingerprint}' )
+                         '?vmId={vm_id}'
+                       '&vmName={vm_name}'
+                   '&serverGuid={serverGUID}'
+                         '&host={fqdn}'
+                '&sessionTicket={session}'
+                   '&thumbprint={fingerprint}' )
         return uri.format( **param )
 
 # end class vomiMKS
@@ -2453,7 +2458,7 @@ class _vmomiVmGuestOperation_Registry( object ):
     @tidy_vimfaults
     def reg_value_set( self, path, name, value, type=None, wow=None ):
         def guess_type():
-            t = builtins.type( value )
+            t = __builtins__.type( value )
             # n.b. I don't know how to infer REG_EXPAND_SZ
             if t is int:                return self.REG_DWORD
             if t is long:               return self.REG_QWORD
@@ -2939,7 +2944,7 @@ def fold_text( text, maxlen=75, indent=0 ):
     return text
 
 
-def str_to_bytes( str_val ):
+def size_string_to_byte_count( str_val ):
     unit = { 'b'   : 512,
 
              'k'   : 1024,         't'   : 1024 ** 4,
@@ -3107,6 +3112,7 @@ def printmsg( *args, **kwargs ):
 
 
 def printerr( *args, **kwargs ):
+    '''Writes to stderr.  The message isn't necessarily an actual error.'''
     kwargs.setdefault( 'file', sys.stderr )
     printmsg( *args, **kwargs )
 
@@ -3149,7 +3155,7 @@ def y_or_n_p( prompt, yes='y', no='n', response=None, default=None ):
     except KeyboardInterrupt:
         print( '\n\x57\x65\x6c\x6c\x20\x66\x75\x63\x6b',
                '\x79\x6f\x75\x20\x74\x68\x65\x6e\x2e\n' )
-        sys.exit( 130 ) # WIFSIGNALED(128) + SIGINT(2)
+        exit( 130 ) # WIFSIGNALED(128) + SIGINT(2)
 
 def yes_or_no_p( prompt, default=None ):
     return y_or_n_p( prompt,
@@ -3166,7 +3172,7 @@ def __vspherelib_debug_Deserialize( self, *args, **kwargs ):
     res = self.__vspherelib_orig_Deserialize( *args, **kwargs )
     if debug_rpc:
         msg = str( res ).replace( '\n', '\nresult: ' )
-        print( 'result:', msg )
+        print( 'result:', msg, file=sys.stderr  )
     return res
 
 def __set_debug_rpc( toggle=None ):
