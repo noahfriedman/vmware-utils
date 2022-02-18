@@ -50,6 +50,9 @@ esac
 # Disable TCP segment offload and other data offload (other than
 # checksumming) on vmxnet3 interfaces.  These tend to hurt interactive
 # traffic e.g. vnc, and IP forwarding.
+#
+# Note: this observation was based on early 1.0.x drivers.
+# It doesn't seem to be a problem anymore.
 
 false && # change to `true' to enable, `false' to disable
 for dev in /sys/class/net/* ; do
@@ -97,16 +100,8 @@ fi
 ######
 
 {
-    # systemd doesn't set TERM, and doesn't run connected to /dev/console.
-    # These commands require it or misbehaves on some platforms.
-
-    TERM=linux setterm -blank 30 -powerdown 30 -msg off
-    TERM=linux setterm -powersave powerdown
-
     # Don't spam vtys with kernel messages
     dmesg --console-off
-
-    #modprobe pcspkr
     kbdrate -r 30
 } < /dev/console
 
