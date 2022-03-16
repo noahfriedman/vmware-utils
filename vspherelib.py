@@ -14,6 +14,7 @@ import getpass
 import os
 import sys
 import OpenSSL
+import socket
 import ssl
 import re
 import time
@@ -1016,7 +1017,7 @@ class _vmomiCollect( object ):
         props   = propList( props )
         filters = props.filters()
         if filters:
-            filterprops = filters.keys()
+            filterprops = tuple( filters.keys() )
             # Don't skip invalid properties here even if requested since
             # these particular ones have match conditions attached.
             res = self._get_obj_props_nofilter( vimtype, filterprops, root, recursive )
@@ -1273,14 +1274,31 @@ class _vmomiFind( object ):
             except KeyError:
                 pass
 
+        def find_by_dns( name ):
+            # Avoid calling find_vm recursively
+            if kwargs.get( 'noresolv', False ):
+                return
+            ans = dns_lookup( name )
+            if not ans:
+                return
+            res = []
+            for k in ('name', 'inet', 'inet6'):
+                if k in ans:
+                    res.extend( ans[k] )
+            if res:
+                return set( self.find_vm( res, noresolv=True, showerrors=False ))
+
         idx = self.si_content.searchIndex
         searchfns = [
             lambda pat: idx.FindAllByUuid(    vmSearch=True,    uuid=pat, instanceUuid=True ),
             lambda pat: idx.FindAllByUuid(    vmSearch=True,    uuid=pat ),
             lambda pat: idx.FindAllByIp(      vmSearch=True,      ip=pat ),
             lambda pat: find_by_name( pat ),
+            # n.b. FindAllByDnsName searches vm.guest.hostName, not dns lookup
             lambda pat: idx.FindAllByDnsName( vmSearch=True, dnsName=pat ),
-            lambda pat: self.search_by_name( pat ) ]
+            lambda pat: self.search_by_name( pat ),
+            lambda pat: find_by_dns( pat ),
+        ]
 
         found    = []
         notfound = []
@@ -2908,6 +2926,44 @@ def inverted_dict( d ):
 ######
 ## generic utility routines
 ######
+
+# Returns a dict of fqdn, inet, and inet6 strings.
+# if errors is true and a lookup fails, return 'error' in dict.
+def dns_lookup( arg, errors=False ):
+    ans = { 'name'  : [],
+            'inet'  : [],
+            'inet6' : [], }
+    try:
+        flags  = socket.AI_CANONNAME | socket.AI_ALL
+        proto  = socket.SOL_TCP
+        if re.match( '^(?:[0-9.]+|[0-9a-f:]+)$', arg, re.IGNORECASE ):
+            ai_res = socket.getnameinfo( (arg,0), flags )
+        else:
+            ai_res = socket.getaddrinfo( arg, None, proto=proto, flags=flags )
+    except socket.gaierror as err:
+        if errors:
+            ans[ 'error' ] = err
+            return ans
+        return
+
+    if isinstance( ai_res[0], str ):
+        ans[ 'name' ].append( ai_res[0] )
+        if arg.find( '.' ) >= 0:
+            ans[ 'inet' ].append( arg )
+        elif arg.find( ':' ) >= 0:
+            ans[ 'inet6' ].append( arg )
+        return ans
+
+    seen = set() # canonname will usually be duplicates
+    for res in ai_res:
+        family, _, _, canon, sockaddr = res
+        if canon and canon not in seen:
+            ans[ 'name' ].append( canon )
+        if family == socket.AF_INET:
+            ans[ 'inet' ].append( sockaddr[0] )
+        elif family == socket.AF_INET6:
+            ans[ 'inet6' ].append( sockaddr[0] )
+    return ans
 
 # This doesn't just use the textwrap class because we can do a few special
 # things here, such as avoiding filling command examples
