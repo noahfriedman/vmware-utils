@@ -1,0 +1,154 @@
+#!/usr/bin/env python
+# vsphere-vnc --- connect directly to guest vnc console via tcp port on hypervisor
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2022-03-15
+# Public domain
+
+# Commentary:
+# Code:
+
+from   __future__ import print_function
+
+from   pyVmomi    import vim
+import vspherelib     as vsl
+
+import os
+import sys
+import time
+
+proplist = [ 'name',
+             'config.extraConfig',
+             'guest.hostName',
+             'summary.runtime.host',
+             'summary.runtime.powerState', ]
+
+def get_args():
+    p = vsl.ArgumentParser( loadrc=True )
+    p.add_bool( '-P', '--print',        help='Just print host:port of connection; do not connect' )
+    p.add_bool( '-f', '--foreground',   help='Do not background viewer process' )
+    p.add( 'vmname',                    help='Virtual machine name or pattern' )
+    p.add( 'command',   nargs='*',      help='Command to run; host:port is appended last' )
+    return p.parse()
+
+
+def _exec( dest, command, foreground=False ):
+    if foreground:
+        exit = sys.exit
+    else:
+        exit = os._exit
+        sys.stdin.close()
+    args = list( command )  # make copy
+    args.append( dest )
+    try:
+        os.execlp( args[0], *args )
+    except FileNotFoundError:
+        pass  # First arg was not the client program itself
+    except OSError as err:
+        if vsl.debug:
+            raise
+        else:
+            vsl.printerr( args[0], err )
+            exit( 1 )
+    prog = os.getenv( 'VNC_PROGRAM', default='vncviewer' )
+    if prog:
+        args.insert( 0, prog )
+    try:
+        os.execlp( args[0], *args )
+    except OSError as err:
+        vsl.printerr( args[0], err )
+    exit( 1 ) # if we get here, quit
+
+
+def launch( dest, command, foreground=False ):
+    if foreground:
+        _exec( dest, command, foreground=foreground )
+
+    pid = os.fork()
+    if pid == 0:  # child
+        # Don't use sys.exit in child
+        _exec( dest, command, foreground=foreground )
+    else: # parent
+        # wait a bit, then see if process has already exited with an error.
+        time.sleep( 1 )
+        wpid, code = os.waitpid( pid, os.WNOHANG )
+        # wpid==0 means process is still running
+        if wpid in (pid, 0) and code == 0:
+            return True
+        elif os.WIFSIGNALED( code ):
+            # code will already be in the form 128+signal, so return it.
+            # If you return just the signal number, there's no way for the
+            # parent to tell if that's a signal or just a normal exit.
+            return code
+        elif os.WIFEXITED( code ):
+            return os.WEXITSTATUS( code )
+        else:
+            return code
+
+
+def main():
+    args = get_args()
+    vsi  = vsl.vmomiConnect( args )
+    mks  = vsi.mks( args )
+
+    success = True
+    matches = vsi.find_vm( args.vmname )
+    # For now only launch one viewer per invocation
+    if matches and len( matches ) > 1:
+        vsl.printerr( repr(args.vmname), 'More than one matching host found:' )
+        for m in matches:
+            print( '\t', m.name, sep='' )
+        success = False
+    elif matches:
+        result = vsi.get_obj_props( [vim.VirtualMachine], proplist, root=matches )
+        vmlist = { elt[ 'name' ] : elt for elt in result }
+
+        for name, prop in vmlist.items():
+            powerState  = prop[ 'summary.runtime.powerState' ]
+            if powerState != vim.VirtualMachine.PowerState.poweredOn:
+                vsl.printerr( name, 'vm is not currently powered on.' )
+                success = False
+                continue
+
+            extraConfig = vsl.attr_to_dict( prop[ 'config.extraConfig' ] )
+            enabled     = extraConfig.get( 'RemoteDisplay.vnc.enabled', None )
+            if enabled is None or enabled.lower() != 'true':
+                vsl.printerr( name, 'vnc is not enabled' )
+                success = False
+                continue
+
+            try:
+                host = prop[ 'summary.runtime.host' ].name
+            except AttributeError as err:
+                vsl.printerr( name, 'cannot access hypervisor', err )
+                success = False
+                continue
+
+            port = extraConfig.get( 'RemoteDisplay.vnc.port', None )
+            if not port:
+                vsl.printerr( name, 'No vnc port defined, cannot connect' )
+                success = False
+                continue
+
+            dest = ':'.join( (host, port) )
+            if args.print:
+                if len( vmlist ) > 1:
+                    print( name, dest, sep='\t' )
+                else:
+                    print( dest )
+            else:
+                del vsi # close connection
+                success = launch( dest, args.command, args.foreground )
+    else:
+        success = False
+
+    if isinstance( success, bool ):
+        sys.exit( success != True )
+    else:
+        sys.exit( success )
+
+
+if __name__ == '__main__':
+    main()
+
+# vsphere-vnc ends here
