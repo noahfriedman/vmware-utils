@@ -32,10 +32,11 @@ main()
     done
 
     (   cd /etc &&
-            hg-revert -v vmware/networking \
-                         vmware/vmnet8/dhcpd/dhcpd.conf \
-                         vmware/vmnet8/nat/nat.conf \
-                         vmware/vmnet8/nat.mac
+            git revert-file -v  \
+                vmware/networking \
+                vmware/vmnet8/dhcpd/dhcpd.conf \
+                vmware/vmnet8/nat/nat.conf \
+                vmware/vmnet8/nat.mac
     )
 
     sed -i.bak \
