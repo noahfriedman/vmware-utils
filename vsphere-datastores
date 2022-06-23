@@ -31,9 +31,10 @@ column_labels = [ 'NAME',
 
 def get_args():
     p = vsl.ArgumentParser( loadrc=True )
-    p.add_bool( '-H', '--header', help='Show column headers' )
-    p.add_bool( '-l', '--list',   help='Just list datastore names with no data' )
-    p.add( 'pattern',  nargs='*', help='Datastore names or patterns' )
+    p.add_bool( '-H', '--header',   help='Show column headers' )
+    p.add_bool( '-l', '--list',     help='Just list datastore names with no data' )
+    p.add_bool( '-f', '--max-free', help='Just list datastore with most unprovisioned or available space' )
+    p.add( 'pattern',  nargs='*',   help='Datastore names or patterns' )
     return p.parse()
 
 
@@ -101,11 +102,30 @@ def main():
         prov  = used + ucom            # provisioned
         uprov = max( 0, size - prov )  # unprovisioned, or 0 if over
 
-        data.append( [ name,
-                       vsl.scale_size( size ),
-                       vsl.scale_size( prov ), int( 100 * prov / size ),
-                       vsl.scale_size( free ), int( 100 * free / size ),
-                       vsl.scale_size( uprov ), ])
+        if args.max_free:
+            data.append( [name, free, uprov] )
+        else:
+            data.append( [name,
+                          vsl.scale_size( size ),
+                          vsl.scale_size( prov ), int( 100 * prov / size ),
+                          vsl.scale_size( free ), int( 100 * free / size ),
+                          vsl.scale_size( uprov ), ])
+
+
+    if args.max_free:
+        # Return the datastore with the greater of most unprovisioned
+        # space, or most actually unallocated space at present.
+        max_free  = max( row[ 1 ] for row in data )
+        max_uprov = max( row[ 2 ] for row in data )
+        if max_uprov >= max_free:
+            for row in data:
+                if row[ 2 ] == max_uprov: dstore = row[ 0 ]
+        else:
+            for row in data:
+                if row[ 1 ] == max_free:  dstore = row[ 0 ]
+        print( dstore )
+        return
+
 
     # Don't show the unprovisioned column at all if none of the datastores
     # have any unprovisioned space.
