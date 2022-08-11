@@ -1,11 +1,6 @@
 #!/bin/sh
-# $Id: vmware-finish-upgrade,v 1.3 2014/12/02 16:44:13 friedman Exp $
 
-docmd()
-{
-    echo + "$@" 1>&2
-    "$@"
-}
+docmd() { (set -x; "$@"); }
 
 main()
 {
@@ -17,27 +12,34 @@ main()
     systemctl daemon-reload
     vmware-ws-ctl system stop
 
-    svcs='vmware
-          vmamqpd
-          vmware-USBArbitrator
-          vmware-workstation-server
-          vmware-wsx-server
-         '
+    # If vmware.service file exists, do not use chkconfig.
+    # This is only to disable legacy sysv scripts.
+    if ! [ -f /etc/systemd/system/vmware.service ]; then
+        svcs='vmware
+              vmamqpd
+              vmware-USBArbitrator
+              vmware-workstation-server
+              vmware-wsx-server
+             '
 
-    for svc in $svcs ; do
-        test -f /etc/rc.d/init.d/$svc ||
-            test -f /etc/init.d/$svc  ||
-            continue
-        docmd chkconfig $svc off
-    done
+        for svc in $svcs ; do
+            test -f /etc/rc.d/init.d/$svc ||
+                test -f /etc/init.d/$svc  ||
+                continue
+            docmd chkconfig $svc off
+        done
+    fi
 
-    (   cd /etc &&
-            git revert-file -v  \
-                vmware/networking \
-                vmware/vmnet8/dhcpd/dhcpd.conf \
-                vmware/vmnet8/nat/nat.conf \
-                vmware/vmnet8/nat.mac
-    )
+    vcs_files='vmware/networking
+               vmware/vmnet8/dhcpd/dhcpd.conf
+               vmware/vmnet8/nat/nat.conf
+               vmware/vmnet8/nat.mac
+              '
+    if [ -d /etc/.git ]; then
+        git -C /etc revert-file -v $vcs_files
+    elif [ -d /etc/.hg ]; then
+        (cd /etc && hg-revert -v $vcs_files)
+    fi
 
     sed -i.bak \
         -e '/^accept.*EULA/s/none/yes/' \
