@@ -82,6 +82,9 @@ class powerOnCallback( object ):
 
             for elt in self.natt:
                 vsl.printerr( elt.vm.name, elt.fault.msg )
+                for err in elt.fault.error:
+                    vsl.printerr( elt.vm.name, err.msg )
+                    vsl.printerr( elt.vm.name, err.fault.msg )
 
             # This needs work.
             # Recommendations occur when DRS is enabled but set to manual
