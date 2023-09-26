@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# $Id: vsphere-vm-tags,v 1.10 2018/11/10 02:49:54 friedman Exp $
+# $Id$
 # This uses the vSphere Automation SDK for Python as well as pyVmomi.
 
 from __future__ import print_function
