@@ -1,5 +1,5 @@
 #!/bin/bash
-# $Id: vmware-ws-ctl,v 1.12 2019/03/20 22:28:58 friedman Exp $
+# $Id$
 
 apush() { eval "$1=(\"\${$1[@]}\" \"\${@:2}\")"; }
 
